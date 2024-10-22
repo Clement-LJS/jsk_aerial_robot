@@ -7,9 +7,10 @@ Panels:
         - /Global Options1
         - /Status1
         - /RobotModel1
+        - /RobotModel1/Status1
         - /TF1
       Splitter Ratio: 0.5
-    Tree Height: 579
+    Tree Height: 713
   - Class: rviz/Selection
     Name: Selection
   - Class: rviz/Tool Properties
@@ -63,9 +64,132 @@ Visualization Manager:
         Expand Link Details: false
         Expand Tree: false
         Link Tree Style: Links in Alphabetic Order
+        base_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        battery1:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        battery2:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        contact_point:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        dummy_arm:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        dummy_gripper:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        dummy_palm:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        fc:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        gimbal_link1:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        gimbal_link2:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        gimbal_link3:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        gimbal_link4:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        hand:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        hand_2:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        handbase:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        root:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        rotor_arm1:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        rotor_arm2:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        rotor_arm3:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        rotor_arm4:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        rotor_parent1:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        rotor_parent2:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        rotor_parent3:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        rotor_parent4:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        thrust1:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        thrust2:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        thrust3:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        thrust4:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
       Name: RobotModel
-      Robot Description: beetle/robot_description
-      TF Prefix: beetle
+      Robot Description: beetle1/robot_description
+      TF Prefix: beetle1
       Update Interval: 0
       Value: true
       Visual Enabled: true
@@ -76,51 +200,59 @@ Visualization Manager:
       Frame Timeout: 15
       Frames:
         All Enabled: true
-        beetle/base_link:
+        beetle1/base_link:
           Value: true
-        beetle/cog:
+        beetle1/battery1:
           Value: true
-        beetle/dummy_arm:
+        beetle1/battery2:
           Value: true
-        beetle/dummy_palm:
+        beetle1/cog:
           Value: true
-        beetle/dummy_gripper:
+        beetle1/contact_point:
           Value: true
-        beetle/fc:
+        beetle1/dummy_arm:
           Value: true
-        beetle/gimbal_link1:
+        beetle1/fc:
           Value: true
-        beetle/gimbal_link2:
+        beetle1/gimbal_link1:
           Value: true
-        beetle/gimbal_link3:
+        beetle1/gimbal_link2:
           Value: true
-        beetle/gimbal_link4:
+        beetle1/gimbal_link3:
           Value: true
-        beetle/root:
+        beetle1/gimbal_link4:
           Value: true
-        beetle/rotor_arm1:
+        beetle1/hand:
           Value: true
-        beetle/rotor_arm2:
+        beetle1/hand_2:
           Value: true
-        beetle/rotor_arm3:
+        beetle1/handbase:
           Value: true
-        beetle/rotor_arm4:
+        beetle1/root:
           Value: true
-        beetle/rotor_parent1:
+        beetle1/rotor_arm1:
           Value: true
-        beetle/rotor_parent2:
+        beetle1/rotor_arm2:
           Value: true
-        beetle/rotor_parent3:
+        beetle1/rotor_arm3:
           Value: true
-        beetle/rotor_parent4:
+        beetle1/rotor_arm4:
           Value: true
-        beetle/thrust1:
+        beetle1/rotor_parent1:
           Value: true
-        beetle/thrust2:
+        beetle1/rotor_parent2:
           Value: true
-        beetle/thrust3:
+        beetle1/rotor_parent3:
           Value: true
-        beetle/thrust4:
+        beetle1/rotor_parent4:
+          Value: true
+        beetle1/thrust1:
+          Value: true
+        beetle1/thrust2:
+          Value: true
+        beetle1/thrust3:
+          Value: true
+        beetle1/thrust4:
           Value: true
         world:
           Value: true
@@ -132,35 +264,43 @@ Visualization Manager:
       Show Names: true
       Tree:
         world:
-          beetle/root:
-            beetle/base_link:
-              beetle/dummy_arm:
-                beetle/dummy_palm:
-                  beetle/dummy_gripper:
-                    {}
-              beetle/fc:
+          beetle1/root:
+            beetle1/base_link:
+              beetle1/battery1:
                 {}
-              beetle/rotor_arm1:
-                beetle/gimbal_link1:
-                  beetle/rotor_parent1:
-                    beetle/thrust1:
+              beetle1/battery2:
+                {}
+              beetle1/fc:
+                {}
+              beetle1/handbase:
+                beetle1/hand:
+                  beetle1/dummy_arm:
+                    {}
+                beetle1/hand_2:
+                  {}
+              beetle1/rotor_arm1:
+                beetle1/gimbal_link1:
+                  beetle1/rotor_parent1:
+                    beetle1/thrust1:
                       {}
-              beetle/rotor_arm2:
-                beetle/gimbal_link2:
-                  beetle/rotor_parent2:
-                    beetle/thrust2:
+              beetle1/rotor_arm2:
+                beetle1/gimbal_link2:
+                  beetle1/rotor_parent2:
+                    beetle1/thrust2:
                       {}
-              beetle/rotor_arm3:
-                beetle/gimbal_link3:
-                  beetle/rotor_parent3:
-                    beetle/thrust3:
+              beetle1/rotor_arm3:
+                beetle1/gimbal_link3:
+                  beetle1/rotor_parent3:
+                    beetle1/thrust3:
                       {}
-              beetle/rotor_arm4:
-                beetle/gimbal_link4:
-                  beetle/rotor_parent4:
-                    beetle/thrust4:
+              beetle1/rotor_arm4:
+                beetle1/gimbal_link4:
+                  beetle1/rotor_parent4:
+                    beetle1/thrust4:
                       {}
-            beetle/cog:
+            beetle1/cog:
+              {}
+            beetle1/contact_point:
               {}
       Update Interval: 0
       Value: true
@@ -192,7 +332,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz/Orbit
-      Distance: 0.898408830165863
+      Distance: 0.835723876953125
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
@@ -208,17 +348,17 @@ Visualization Manager:
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 0.21539746224880219
+      Pitch: 0.9953974485397339
       Target Frame: <Fixed Frame>
-      Yaw: 4.933584690093994
+      Yaw: 4.738582611083984
     Saved: ~
 Window Geometry:
   Displays:
     collapsed: false
-  Height: 882
+  Height: 1016
   Hide Left Dock: false
   Hide Right Dock: false
-  QMainWindow State: 000000ff00000000fd000000040000000000000156000002cefc0200000008fb0000001200530065006c0065006300740069006f006e00000001e10000009b0000005c00fffffffb0000001e0054006f006f006c002000500072006f007000650072007400690065007302000001ed000001df00000185000000a3fb000000120056006900650077007300200054006f006f02000001df000002110000018500000122fb000000200054006f006f006c002000500072006f0070006500720074006900650073003203000002880000011d000002210000017afb000000100044006900730070006c006100790073010000003d000002ce000000c900fffffffb0000002000730065006c0065006300740069006f006e00200062007500660066006500720200000138000000aa0000023a00000294fb00000014005700690064006500530074006500720065006f02000000e6000000d2000003ee0000030bfb0000000c004b0069006e0065006300740200000186000001060000030c00000261000000010000010f000002cefc0200000003fb0000001e0054006f006f006c002000500072006f00700065007200740069006500730100000041000000780000000000000000fb0000000a00560069006500770073010000003d000002ce000000a400fffffffb0000001200530065006c0065006300740069006f006e010000025a000000b200000000000000000000000200000490000000a9fc0100000001fb0000000a00560069006500770073030000004e00000080000002e10000019700000003000004f300000044fc0100000002fb0000000800540069006d00650100000000000004f3000003bc00fffffffb0000000800540069006d0065010000000000000450000000000000000000000282000002ce00000004000000040000000800000008fc0000000100000002000000010000000a0054006f006f006c00730100000000ffffffff0000000000000000
+  QMainWindow State: 000000ff00000000fd00000004000000000000020b00000354fc0200000008fb0000001200530065006c0065006300740069006f006e00000001e10000009b0000005c00fffffffb0000001e0054006f006f006c002000500072006f007000650072007400690065007302000001ed000001df00000185000000a3fb000000120056006900650077007300200054006f006f02000001df000002110000018500000122fb000000200054006f006f006c002000500072006f0070006500720074006900650073003203000002880000011d000002210000017afb000000100044006900730070006c006100790073010000003d00000354000000c900fffffffb0000002000730065006c0065006300740069006f006e00200062007500660066006500720200000138000000aa0000023a00000294fb00000014005700690064006500530074006500720065006f02000000e6000000d2000003ee0000030bfb0000000c004b0069006e0065006300740200000186000001060000030c00000261000000010000010f00000354fc0200000003fb0000001e0054006f006f006c002000500072006f00700065007200740069006500730100000041000000780000000000000000fb0000000a00560069006500770073010000003d00000354000000a400fffffffb0000001200530065006c0065006300740069006f006e010000025a000000b200000000000000000000000200000490000000a9fc0100000001fb0000000a00560069006500770073030000004e00000080000002e100000197000000030000073800000044fc0100000002fb0000000800540069006d0065010000000000000738000003bc00fffffffb0000000800540069006d00650100000000000004500000000000000000000004120000035400000004000000040000000800000008fc0000000100000002000000010000000a0054006f006f006c00730100000000ffffffff0000000000000000
   Selection:
     collapsed: false
   Time:
@@ -227,6 +367,6 @@ Window Geometry:
     collapsed: false
   Views:
     collapsed: false
-  Width: 1267
-  X: 67
-  Y: 161
+  Width: 1848
+  X: 72
+  Y: 27
