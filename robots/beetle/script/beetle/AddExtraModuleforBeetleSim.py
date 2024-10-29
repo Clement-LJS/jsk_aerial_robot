@@ -156,7 +156,7 @@ def main():
         print("\033[1mEnter the module name: \033[0m")
 
         module_name = input().strip().lower()
-        model_path = f'/home/iida/ros/jsk_aerial_robot_ws/src/jsk_aerial_robot/robots/beetle/models/{module_name}_model.sdf'
+        model_path = f'/home/iida/ros/jsk_aerial_robot_ws/src/jsk_aerial_robot/robots/beetle/models/sim/{module_name}_model.sdf'
         if not os.path.exists(model_path):
             print(f"\033[1;91m[Warning] '{module_name}' model not found. Please enter a valid module name.\033[0m")
             continue
