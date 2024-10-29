@@ -63,7 +63,6 @@
     <dynamics damping="0.2" friction="0.02"/>
   </joint>
 
-
   <link name="dummy_gripper">
     <inertial>
       <mass value = "0.001" />

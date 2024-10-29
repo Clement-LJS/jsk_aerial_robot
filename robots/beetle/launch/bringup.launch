@@ -18,6 +18,9 @@
   <arg name="config_dir" default="$(find beetle)/config"/>
   <arg name="robot_id" default="1" />
   <arg name="robot_ns" value="beetle$(arg robot_id)" />
+  <arg name="shift_x" default="0.0"/> 
+  <arg name="shift_y" default="0.0"/>
+
 
   ###########  Parameters  ###########
   <group ns="$(arg robot_ns)">
@@ -102,6 +105,6 @@
     <arg name="mode" value="serial" />
     <arg name="serial_port" value="/dev/spinal_dynamixel" />
     <arg name="serial_baud" value="921600" />
-  </include>  
+  </include>
 
 </launch>
