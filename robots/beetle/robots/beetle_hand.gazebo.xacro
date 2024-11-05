@@ -11,11 +11,19 @@
 
   <!-- gazebo plugin for docking mech -->
   <gazebo>
-    <plugin name="gazebo_grasp_fix" filename="libgazebo_grasp_fix.so">
+    <plugin name="gazebo_grasp_fix_1" filename="libgazebo_grasp_fix.so">
       <arm>
-        <arm_name>docking_mech</arm_name>
-        <palm_link>dummy_palm</palm_link>
-        <gripper_link>dummy_gripper</gripper_link>
+        <arm_name>docking_mech_1</arm_name>
+        <palm_link>dummy_palm_1</palm_link>
+        <gripper_link>dummy_gripper_1</gripper_link>
+	<arm_name>docking_mech_2</arm_name>
+        <palm_link>dummy_palm_2</palm_link>
+        <gripper_link>dummy_gripper_2</gripper_link>
+      </arm>
+      <arm>
+	<arm_name>docking_mech_2</arm_name>
+        <palm_link>dummy_palm_2</palm_link>
+        <gripper_link>dummy_gripper_2</gripper_link>
       </arm>
       <forces_angle_tolerance>90</forces_angle_tolerance>
       <update_rate>50</update_rate>
@@ -25,7 +33,5 @@
       <disable_collisions_on_attach>false</disable_collisions_on_attach>
       <contact_topic>__default_topic__</contact_topic>
     </plugin>
-  </gazebo>
-  
-
+  </gazebo>  
 </robot>
