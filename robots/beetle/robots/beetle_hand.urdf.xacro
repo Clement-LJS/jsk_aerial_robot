@@ -17,7 +17,8 @@
   <joint name="base_dummy_arm_1_joint" type="fixed">
     <parent link="base_link"/>
     <child link="dummy_arm_1"/>
-    <origin xyz="0.22 0 0.1455" rpy="0 0 0"/>
+    <!-- <origin xyz="0.22 0 0.1455" rpy="0 0 0"/> -->
+    <origin xyz="0.272 0 0.153" rpy="0 0 0"/>
   </joint>
 
   <link name="dummy_arm_1">
@@ -92,7 +93,8 @@
   <joint name="base_dummy_arm_2_joint" type="fixed">
     <parent link="base_link"/>
     <child link="dummy_arm_2"/>
-    <origin xyz="-0.22 0 0.1455" rpy="0 0 ${pi}"/>
+    <!-- <origin xyz="-0.22 0 0.1455" rpy="0 0 ${pi}"/> -->
+    <origin xyz="-0.272 0 0.153" rpy="0 0 ${pi}"/>
   </joint>
 
   <link name="dummy_arm_2">
@@ -228,14 +230,18 @@
       <origin xyz="0.19178 0.000005 0.025771"/>
       <mass value="0.3900000"/>
       <inertia
-  	  ixx="0.000699" ixy="-0.000004" ixz="0.000769"
-  	  iyy="0.005953" iyz="-0.000005"
-  	  izz="0.00541"/>
+  	  ixx="0.000911" ixy="0.001204" ixz="0.000002"
+  	  iyy="0.009690" iyz="-0.000005"
+  	  izz="0.010438"/>
+      <!-- <inertia -->
+      <!-- 	  ixx="0.000699" ixy="-0.000004" ixz="0.000769" -->
+      <!-- 	  iyy="0.005953" iyz="-0.000005" -->
+      <!-- 	  izz="0.00541"/> -->
     </inertial>
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-    	<mesh filename="package://beetle/urdf/mesh/beetle_hand_handmech_all.dae"/>
+    	<mesh filename="package://beetle/urdf/mesh/hand9_handmech_all.dae" scale="0.1 0.1 0.1"/>
       </geometry>
     </visual>
     <collision>
@@ -251,14 +257,18 @@
       <origin xyz="0.19178 0.000005 0.025771"/>
       <mass value="0.3900000"/>
       <inertia
-  	  ixx="0.000699" ixy="-0.000004" ixz="0.000769"
-  	  iyy="0.005953" iyz="-0.000005"
-  	  izz="0.00541"/>
+  	  ixx="0.000911" ixy="0.001204" ixz="0.000002"
+  	  iyy="0.009690" iyz="-0.000005"
+  	  izz="0.010438"/>
+      <!-- <inertia -->
+      <!-- 	  ixx="0.000699" ixy="-0.000004" ixz="0.000769" -->
+      <!-- 	  iyy="0.005953" iyz="-0.000005" -->
+      <!-- 	  izz="0.00541"/> -->
     </inertial>
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-    	<mesh filename="package://beetle/urdf/mesh/beetle_hand_handmech_all.dae"/>
+    	<mesh filename="package://beetle/urdf/mesh/hand9_handmech_all.dae" scale="0.1 0.1 0.1"/>
       </geometry>
     </visual>
     <collision>

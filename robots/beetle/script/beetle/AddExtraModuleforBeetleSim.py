@@ -137,20 +137,20 @@ def main():
     rospy.init_node('add_module_client')
     rospy.sleep(1)
 
-    # while True:
-    #     print("\033[1mSelect parent link, plus or minus: \033[0m")
-    #     link = input().strip().lower()
-    #     if link == "plus":
-    #         link_name = "plusx_dummy_gripper"
-    #         break
-    #     elif link == "minus":
-    #         link_name = "minusx_dummy_palm"
-    #         break
-    #     else:
-    #         print(f"\033[1;91m[Warn] Wrong selection. Please select a valid link.\033[0m")
-    #         continue
+    while True:
+        print("\033[1mSelect parent link, plus or minus: \033[0m")
+        link = input().strip().lower()
+        if link == "plus":
+            link_name = "dummy_gripper_1"
+            break
+        elif link == "minus":
+            link_name = "dummy_gripper_2"
+            break
+        else:
+            print(f"\033[1;91m[Warn] Wrong selection. Please select a valid link.\033[0m")
+            continue
 
-    link_name = "dummy_gripper"
+    # link_name = "dummy_gripper"
 
     while True:
         print("\033[1mEnter the module name: \033[0m")
