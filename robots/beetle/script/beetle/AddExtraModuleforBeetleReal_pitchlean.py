@@ -103,7 +103,7 @@ def main():
     rospy.init_node('add_module_client')
     rospy.sleep(1)
 
-    link_name = "dummy_gripper_1"
+    link_name = "dummy_gripper"
 
     print("\033[1mEnter the module name: \033[0m")
     module_name = input().strip().lower()
