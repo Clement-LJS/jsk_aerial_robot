@@ -1,0 +1,22 @@
+tag_bundles:
+  - name: "tag_bundle"  # バンドルの名前
+    layout:
+      - id: 0          # tag_0 のID
+        size: 0.2      # tag_0 のサイズ（20cm）
+        x: 0.0         # tag_0 の中心 (基準タグなので原点)
+        y: 0.0
+        z: 0.0
+        qw: 1.0        # tag_0 の向き (回転なし)
+        qx: 0.0
+        qy: 0.0
+        qz: 0.0
+
+      - id: 1          # tag_1 のID
+        size: 0.025    # tag_1 のサイズ（2.5cm）
+        x: 0.0         # tag_1 の中心 (tag_0 の中心に一致)
+        y: 0.0
+        z: 0.0
+        qw: 1.0        # tag_1 の向き (tag_0 と同じ方向)
+        qx: 0.0
+        qy: 0.0
+        qz: 0.0
