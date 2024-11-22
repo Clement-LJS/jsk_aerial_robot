@@ -34,7 +34,7 @@
   <joint name="dummy_arm_1_palm_joint" type="revolute">
     <parent link="dummy_arm_1"/>
     <child link="dummy_palm_1"/>
-    <origin xyz="0.02 0 0" rpy="0 0 0"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
     <axis xyz="1 0 0"/>
     <limit lower="0" upper="0" effort="0" velocity="0"/>
     <dynamics damping="0.2" friction="0.02"/>
@@ -110,7 +110,7 @@
   <joint name="dummy_arm_2_palm_joint" type="revolute">
     <parent link="dummy_arm_2"/>
     <child link="dummy_palm_2"/>
-    <origin xyz="0.02 0 0" rpy="0 0 0"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
     <axis xyz="1 0 0"/>
     <limit lower="0" upper="0" effort="0" velocity="0"/>
     <dynamics damping="0.2" friction="0.02"/>

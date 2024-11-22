@@ -95,7 +95,7 @@ def send_openhand_command():
     rospy.sleep(0.5)
     cmd = ServoControlCmd()
     cmd.index = [1]
-    cmd.angles = [4500]
+    cmd.angles = [4000]
     pub.publish(cmd)
     print("\033[1;32m[Msg] Open hand command sent.\033[0m")
 
