@@ -1,0 +1,27 @@
+# # Daefinitions of tags to detect
+#
+# ## General remarks
+#
+# - All length in meters
+# - 'size' refers to the length of the shared border between solid black and solid white rectangle.
+#   See README.md or https://github.com/AprilRobotics/apriltag/wiki/AprilTag-User-Guide#pose-estimation for details.
+# - Ellipsis (...) signifies that the previous element can be repeated multiple times.
+#
+# ## Standalone tag definitions
+# ### Remarks
+#
+# - name is optional
+#
+# ### Syntax
+#
+# standalone_tags:
+#   [
+#     {id: ID, size: SIZE, name: NAME},
+#     ...
+#   ]
+standalone_tags:
+  [
+          {id: 0, size: 0.02, x: 0.0, y: 0.0, z: 0.0, qw: 1.0, qx: 0.0, qy: 0.0, qz: 0.0},
+          {id: 1, size: 0.15, x: 0.0, y: 0.0, z: 0.0, qw: 1.0, qx: 0.0, qy: 0.0, qz: 0.0}
+     
+  ]
