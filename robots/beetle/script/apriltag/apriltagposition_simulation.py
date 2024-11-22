@@ -28,12 +28,18 @@ class AprilPIDController:
         self.pre_err = np.array([0.0, 0.0, 0.0])
         self.TermCorrector = np.array([0.5, 1, 1])
 
-        # Positions and distances
-        self.targetDistance = np.array([0.0, 0.0, 0.0])
+        # Distances
+        self.targetPosition = np.array([0.0, 0.0, 0.0])
         self.currentDistance = np.array([0.0, 0.0, 0.0])
         self.lastDistance = np.array([0.0, 0.0, 0.0])
         self.currentEuler = np.array([0.0, 0.0, 0.0])
         self.lastEuler = np.array([0.0, 0.0, 0.0])
+
+        # Mocap Positions
+        self.currentMocapPosition = np.array([0.0, 0.0, 0.0])
+        self.lastMocapPosition = np.array([0.0, 0.0, 0.0])
+        self.currentMocapEuler = np.array([0.0, 0.0, 0.0])
+        self.lastMocapEuler = np.array([0.0, 0.0, 0.0])
 
         # Target positions
         self.bigtag_target_distance = np.array([0.5, 0, 0])
@@ -55,7 +61,7 @@ class AprilPIDController:
         self.nav_msg = FlightNav()
 
     def calculateError(self):
-        self.err = self.targetDistance - self.currentDistance
+        self.err = self.targetPosition - self.currentDistance
         self.err_i += self.err
         if np.all(self.pre_err == 0.0):
             self.pre_err = self.err
@@ -83,13 +89,13 @@ class AprilPIDController:
                 elif time.time() - self.id0_detected_start_time >= 3.0:
                     rospy.loginfo("\033[1;32m[Msg] Using id[0] for positioning.\033[0m")
                     self.set_target_distance(detected_positions, detected_orientations, 0)
-                    self.targetDistance = self.smalltag_target_distance
+                    self.targetPosition = self.smalltag_target_distance
                     return 
 
             if 1 in detected_ids:
                 rospy.loginfo("\033[1;32m[Msg] Using id[1] for positioning.\033[0m")
                 self.set_target_distance(detected_positions, detected_orientations, 1)
-                self.targetDistance = self.bigtag_target_distance
+                self.targetPosition = self.bigtag_target_distance
 
             if 0 not in detected_ids:
                 self.id0_detected_start_time = None
