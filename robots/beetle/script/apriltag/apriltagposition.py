@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 import rospy
 from apriltag_ros.msg import AprilTagDetectionArray
-from std_msgs.msg import Float64, Bool
+from std_msgs.msg import Float64, Float32, Bool
 from geometry_msgs.msg import Twist, PoseStamped
 from aerial_robot_msgs.msg import FlightNav
 import numpy as np
@@ -23,31 +23,48 @@ class AprilPIDController:
         self.p_term = np.array([0.0, 0.0, 0.0])
         self.i_term = np.array([0.0, 0.0, 0.0])
         self.d_term = np.array([0.0, 0.0, 0.0])
-        self.err_i = np.array([0.0, 0.0, 0.0])
+
+        self.yaw_p_term = np.array([0.0])
+        self.yaw_i_term = np.array([0.0])
+        self.yaw_d_term = np.array([0.0])
+
         self.err = np.array([0.0, 0.0, 0.0])
+        self.err_i = np.array([0.0, 0.0, 0.0])
         self.pre_err = np.array([0.0, 0.0, 0.0])
+
+        self.yaw_err = np.array([0.0])
+        self.yaw_err_i = np.array([0.0])
+        self.yaw_pre_err = np.array([0.0])
+
         self.TermCorrector = np.array([0.5, 1, 1])
 
-        # Positions and distances
-        self.targetDistance = np.array([0.0, 0.0, 0.0])
+        # Distances
+        self.targetPosition = np.array([0.0, 0.0, 0.0])
         self.currentDistance = np.array([0.0, 0.0, 0.0])
         self.lastDistance = np.array([0.0, 0.0, 0.0])
+
+        # Angles
         self.currentEuler = np.array([0.0, 0.0, 0.0])
         self.lastEuler = np.array([0.0, 0.0, 0.0])
+        
+        # Mocap Positions
+        self.currentMocapPosition = np.array([0.0, 0.0, 0.0])
+        self.lastMocapPosition = np.array([0.0, 0.0, 0.0])
+        self.currentMocapEuler = np.array([0.0, 0.0, 0.0])
+        self.lastMocapEuler = np.array([0.0, 0.0, 0.0])
 
         # Target positions
         self.bigtag_target_distance = np.array([0.5, 0, 0])
         self.smalltag_target_distance = np.array([0.1, 0, 0])
-
+               
         # Flags and states
         self.reached_target1 = False
         self.id0_detected_start_time = None
         self.tag_lost_flag = False
-        self.mocap_lost_flag = False
 
         # ROS Subscribers and Publishers
         self.sub = rospy.Subscriber('/tag_detections', AprilTagDetectionArray, self.callback1)
-        self.yaw_sub = rospy.Subscriber('/beetle1/mocap/pose', PoseStamped, self.callback2)
+        self.yaw_sub = rospy.Subscriber('/beetle1/mocap/pose', PoseStamped, self.callback1)
         self.pub = rospy.Publisher('/beetle1/uav/nav', FlightNav, queue_size=1)
 
         # ROS rate
@@ -57,13 +74,15 @@ class AprilPIDController:
         self.nav_msg = FlightNav()
 
     def calculateError(self):
-        self.err = self.targetDistance - self.currentDistance
+        self.err = self.targetPosition - self.currentDistance
         self.err_i += self.err
         if np.all(self.pre_err == 0.0):
             self.pre_err = self.err
 
-    def defineYaw(self):
-        self.yaw = self.lastEuler[2] - self.currentEuler[2]
+        self.yaw_err = self.lastEuler[2] - self.currentEuler[2]
+        self.yaw_err_i += self.yaw_err
+        if np.all(self.yaw_pre_err == 0.0):
+            self.yaw_pre_err = self.yaw_err
 
     def set_target_distance(self, detected_positions, detected_orientations, tag_id):
         position = detected_positions[tag_id]
@@ -73,62 +92,54 @@ class AprilPIDController:
             (orientation.x, orientation.y, orientation.z, orientation.w)
         )
 
-    def is_target_reached(self, target_distance, threshold=0.05):
-        distance = np.linalg.norm(np.array(self.currentDistance) - np.array(target_distance))
-        return distance < threshold
-
     def callback1(self, data):
         if data.detections:
             detected_ids = [detection.id[0] for detection in data.detections]
             detected_positions = {detection.id[0]: detection.pose.pose.pose.position for detection in data.detections}
             detected_orientations = {detection.id[0]: detection.pose.pose.pose.orientation for detection in data.detections}
 
-            if not self.reached_target1 and 1 in detected_ids:
-                self.set_target_distance(detected_positions, detected_orientations, 1)
-                rospy.loginfo("\033[1;32m[Msg] Using id[1] for positioning.\033[0m")
-                self.targetDistance = self.bigtag_target_distance
-
-                if self.is_target_reached(self.bigtag_target_distance):
-                    rospy.loginfo("\033[1;32m[Msg]Reached target position 1.\033[0m")
-                    self.reached_target1 = True
-
-            elif self.reached_target1 and 0 in detected_ids:
-                self.set_target_distance(detected_positions, detected_orientations, 0)
+            if 0 in detected_ids:
                 if self.id0_detected_start_time is None:
                     self.id0_detected_start_time = time.time()
-                elif time.time() - self.id0_detected_start_time >= 1.0:
+                elif time.time() - self.id0_detected_start_time >= 3.0:
                     rospy.loginfo("\033[1;32m[Msg] Using id[0] for positioning.\033[0m")
-                    self.targetDistance = self.smalltag_target_distance
-            else:
-                self.id0_detected_start_time = None
+                    self.set_target_distance(detected_positions, detected_orientations, 0)
+                    self.targetPosition = self.smalltag_target_distance
+                    return 
 
+            if 1 in detected_ids:
+                rospy.loginfo("\033[1;32m[Msg] Using id[1] for positioning.\033[0m")
+                self.set_target_distance(detected_positions, detected_orientations, 1)
+                self.targetPosition = self.bigtag_target_distance
+
+            if 0 not in detected_ids:
+                self.id0_detected_start_time = None
+            
             self.lastDistance = self.currentDistance
             self.lastEuler = self.currentEuler
             self.tag_lost_flag = False
+
         else:
             self.tag_lost_flag = True
-            rospy.logwarn("\033[1;91m[Warn] Tag lost.\033[0m")
+            rospy.loginfo("\033[1;91m[Warn] Tag lost.\033[0m")
             self.currentDistance = self.lastDistance
             self.currentEuler = self.lastEuler
 
-    def callback2(self, data):
-        if data.pose:
-            moc = data.pose.orientation
-            self.currentEuler = tf.transformations.euler_from_quaternion((moc.x, moc.y, moc.z, moc.w))
-            self.lastEuler = self.currentEuler
-            self.mocap_lost_flag = False
-        else:
-            self.mocap_lost_flag = True
-            rospy.logwarn(("\033[1;91m[Warn] Mocap lost.\033[0m"))
-
     def main(self):
         while not rospy.is_shutdown():
+
+            # Error calculating
             self.calculateError()
+            # rospy.loginfo(f"Current distance: {self.currentDistance}")
 
             # PID terms
             self.p_term = self.kp * self.err
             self.i_term = self.ki * self.err_i
             self.d_term = self.kd * (self.err - self.pre_err) / self.dt
+
+            self.yaw_p_term = self.kp * self.yaw_err
+            self.yaw_i_term = self.ki * self.yaw_err_i
+            self.yaw_d_term = self.kd * (self.yaw_err - self.yaw_pre_err) / self.dt
 
             if np.linalg.norm(self.currentDistance) <= 0.3:  # Weaken PID if close
                 self.p_term *= self.TermCorrector
@@ -137,6 +148,7 @@ class AprilPIDController:
 
             # Compute velocity
             self.vel = self.p_term + self.i_term + self.d_term
+            self.yaw = self.yaw_p_term + self.yaw_i_term + self.yaw_d_term
 
             # Publish navigation command
             self.nav_msg.control_frame = 1
@@ -146,10 +158,11 @@ class AprilPIDController:
             self.nav_msg.target_vel_y = self.vel[1]
             self.nav_msg.pos_z_nav_mode = 1
             self.nav_msg.target_vel_z = self.vel[2]
+            self.nav_msg.target_yaw = self.yaw
             self.pub.publish(self.nav_msg)
-
             self.rate.sleep()
 
+            print(f"{self.nav_msg}")
 
 if __name__ == "__main__":
     try:
