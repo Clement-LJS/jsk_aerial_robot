@@ -8,6 +8,7 @@
   <arg name="sim_estimate_mode"  default= "2" />
   <arg name="headless" default="True" />
   <arg name="worldtype" default="$(find aerial_robot_simulation)/gazebo_model/world/empty.world" />
+  <!-- <arg name="worldtype" default="$(find beetle)/gazebo_model/world/simple_april_tags.world" /> -->
   <arg name="launch_gazebo" default="True" />
   <arg name="direct_model" default="False" />
   <arg name="direct_model_name" />
@@ -28,30 +29,30 @@
     # EXPERIMENT_ESTIMATE = 1. for unstable mocap, use this mode
     # GROUND_TRUTH = 2
 
-    ###########  Basic Param  ###########
+  ###########  Basic Param  ###########
     <param name="estimation/mode" value= "$(arg sim_estimate_mode)" if="$(arg simulation)" />
     <param name="estimation/mode" value= "$(arg estimate_mode)" if="$(arg real_machine)"/>
     <param name = "robot_id" value="$(arg robot_id)"/>
-   ###########  Robot Model  ###########
+  ###########  Robot Model  ###########
    <rosparam file="$(arg config_dir)/RobotModel.yaml" command="load" />
 
-   ###########  Motor Config  ###########
+  ###########  Motor Config  ###########
    <rosparam file="$(arg config_dir)/MotorInfo.yaml" command="load" />
 
-   ###########  Servo Config  ###########
+  ###########  Servo Config  ###########
    <rosparam file="$(arg config_dir)/Servo.yaml" command="load"/>
 
-   ###########  Battery Config  ###########
+  ###########  Battery Config  ###########
    <rosparam file="$(arg config_dir)/Battery.yaml" command="load" />
 
-   ###########  Control  ###########
+  ###########  Control  ###########
    <rosparam file="$(arg config_dir)/BeetleControl.yaml" command="load" if="$(eval not simulation)"/>
    <rosparam file="$(arg config_dir)/BeetleControl_sim.yaml" command="load" if="$(eval simulation)"/>
-   ###########  Sensor Fusion  ###########
+  ###########  Sensor Fusion  ###########
    <rosparam file="$(arg config_dir)/StateEstimation.yaml" command="load" />
    <rosparam file="$(arg config_dir)/Simulation.yaml" command="load" if="$(eval arg('simulation') and not arg('real_machine'))"/>
 
-   ###########  Navigation  ###########
+  ###########  Navigation  ###########
    <param name="flight_navigation_plugin_name" value="aerial_robot_navigation/beetle_navigation" />
    <rosparam file="$(arg config_dir)/NavigationConfig.yaml" command="load" />
 
@@ -106,5 +107,14 @@
     <arg name="serial_port" value="/dev/spinal_dynamixel" />
     <arg name="serial_baud" value="921600" />
   </include>
+
+  <!-- ######## Apriltag Detection ############ -->
+  <!-- <group ns="$(arg robot_ns)"> -->
+  <!--   <include file="$(find apriltag_ros)/launch/continuous_detection.launch"> -->
+  <!--     <arg name="camera_name" value="downward_camera" /> -->
+  <!--     <arg name="image_topic" value="image_raw" /> -->
+  <!--   </include> -->
+  <!-- </group> -->
+  <!-- <rosparam command="load" file="$(find beetle)/config/apriltag/tags_bundle.yaml" ns="$(arg robot_ns)/apriltag_ros_continuous_node"/> -->
 
 </launch>
