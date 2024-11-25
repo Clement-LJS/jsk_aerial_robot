@@ -108,13 +108,13 @@
     <arg name="serial_baud" value="921600" />
   </include>
 
-  <!-- ######## Apriltag Detection ############ -->
-  <!-- <group ns="$(arg robot_ns)"> -->
-  <!--   <include file="$(find apriltag_ros)/launch/continuous_detection.launch"> -->
-  <!--     <arg name="camera_name" value="downward_camera" /> -->
-  <!--     <arg name="image_topic" value="image_raw" /> -->
-  <!--   </include> -->
-  <!-- </group> -->
-  <!-- <rosparam command="load" file="$(find beetle)/config/apriltag/tags_bundle.yaml" ns="$(arg robot_ns)/apriltag_ros_continuous_node"/> -->
+  ######## Apriltag Detection ############
+  <group ns="$(arg robot_ns)">
+    <include file="$(find apriltag_ros)/launch/continuous_detection.launch">
+      <arg name="camera_name" value="downward_camera" />
+      <arg name="image_topic" value="image_raw" />
+    </include>
+  </group>
+  <rosparam command="load" file="$(find beetle)/config/apriltag/tags_bundle.yaml" ns="$(arg robot_ns)/apriltag_ros_continuous_node"/>
 
 </launch>
