@@ -1,13 +1,10 @@
 #!/usr/bin/env python
-import rospy
+import rospy, tf, time
+import numpy as np
 from apriltag_ros.msg import AprilTagDetectionArray
 from std_msgs.msg import Float64, Float32, Bool
 from geometry_msgs.msg import Twist, PoseStamped
 from aerial_robot_msgs.msg import FlightNav
-import numpy as np
-import tf
-import time
-
 
 class AprilPIDController:
     def __init__(self):
@@ -64,7 +61,7 @@ class AprilPIDController:
 
         # ROS Subscribers and Publishers
         self.sub = rospy.Subscriber('/tag_detections', AprilTagDetectionArray, self.callback1)
-        self.yaw_sub = rospy.Subscriber('/beetle1/mocap/pose', PoseStamped, self.callback1)
+        self.yaw_sub = rospy.Subscriber('/beetle1/mocap/pose', PoseStamped, self.callback2)
         self.pub = rospy.Publisher('/beetle1/uav/nav', FlightNav, queue_size=1)
 
         # ROS rate
@@ -76,21 +73,22 @@ class AprilPIDController:
     def calculateError(self):
         self.err = self.targetPosition - self.currentDistance
         self.err_i += self.err
-        if np.all(self.pre_err == 0.0):
-            self.pre_err = self.err
+        self.pre_err = self.err
 
-        self.yaw_err = self.lastEuler[2] - self.currentEuler[2]
+        self.yaw_err = self.currentEuler[2]
         self.yaw_err_i += self.yaw_err
-        if np.all(self.yaw_pre_err == 0.0):
-            self.yaw_pre_err = self.yaw_err
+        self.yaw_pre_err = self.yaw_err
 
     def set_target_distance(self, detected_positions, detected_orientations, tag_id):
         position = detected_positions[tag_id]
         orientation = detected_orientations[tag_id]
         self.currentDistance = [position.z, -position.x, -position.y]
-        temp_currentEuler = tf.transformations.euler_from_quaternion(
-            (orientation.x, orientation.y, orientation.z, orientation.w)
-        )
+        temp_currentEuler = tf.transformations.euler_from_quaternion((orientation.x, orientation.y, orientation.z, orientation.w))
+
+        if temp_currentEuler[0] >= 0.0:
+            self.currentEuler = np.array([temp_currentEuler[2], np.pi - temp_currentEuler[0], -temp_currentEuler[1]])
+        else:
+            self.currentEuler = np.array([temp_currentEuler[2], -np.pi - temp_currentEuler[0], -temp_currentEuler[1]])
 
         if twist_currentEuler[0] >= 0.0:
             self.currentEuler = np.array([temp_currentEuler[2], np.pi - temp.currentEuler[0], -temp.currentEuler[1]])
@@ -110,7 +108,7 @@ class AprilPIDController:
                     rospy.loginfo("\033[1;32m[Msg] Using id[0] for positioning.\033[0m")
                     self.set_target_distance(detected_positions, detected_orientations, 0)
                     self.targetPosition = self.smalltag_target_distance
-                    return 
+                    return
 
             if 1 in detected_ids:
                 rospy.loginfo("\033[1;32m[Msg] Using id[1] for positioning.\033[0m")
@@ -130,13 +128,23 @@ class AprilPIDController:
             self.currentDistance = self.lastDistance
             self.currentEuler = self.lastEuler
 
+    def callback2(self, data):
+        if data.pose:
+            moc = data.pose.orientation
+            self.current_mocap_Euler = tf.transformations.euler_from_quaternion((moc.x, moc.y, moc.z, moc.w))
+            self.lastmocapEuler = self.currentmocapEuler
+            self.mocap_lost_flag = False
+
+        else:
+            self.mocap_lost_flag = True
+            self.currentmocapEuler = self.lastmocapEuler
+
     def main(self):
         while not rospy.is_shutdown():
 
             # Error calculating
             self.calculateError()
-            # rospy.loginfo(f"Current distance: {self.currentDistance}")
-
+            
             # PID terms
             self.p_term = self.kp * self.err
             self.i_term = self.ki * self.err_i

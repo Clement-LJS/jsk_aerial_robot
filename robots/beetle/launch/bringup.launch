@@ -128,3 +128,4 @@
   <rosparam command="load" file="$(find beetle)/config/apriltag/tags_single.yaml" ns="$(arg robot_ns)/apriltag_ros_continuous_node" />
 
 </launch>
+
