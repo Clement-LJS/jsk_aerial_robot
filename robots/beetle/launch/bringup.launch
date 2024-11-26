@@ -117,4 +117,27 @@
   </group>
   <rosparam command="load" file="$(find beetle)/config/apriltag/tags_bundle.yaml" ns="$(arg robot_ns)/apriltag_ros_continuous_node"/>
 
+  ########### USB Camera and Apriltag ###########
+  <group ns="$(arg robot_ns)/head_camera">
+    <!-- USB Camera Node -->
+    <node pkg="usb_cam" type="usb_cam_node" name="usb_cam">
+      <param name="camera_info_url" value="file://$(find beetle)/config/head_camera.yaml"/>
+      <param name="video_device" value="/dev/video4"/>
+      <param name="image_width" value="640" />
+      <param name="image_height" value="480" />
+      <param name="framerate" value="30.0" />
+      <param name="pixel_format" value="yuyv" />
+      <param name="color_format" value="yuv422p" />
+    </node>
+
+    <!-- Apriltag ROS Node -->
+    <rosparam command="load" file="$(find apriltag_ros)/config/settings.yaml" />
+    <rosparam command="load" file="$(find beetle)/config/apriltag/tags_single.yaml" />
+    <node pkg="apriltag_ros" type="apriltag_ros_continuous_node" name="apriltag_ros_continuous_node" clear_params="true">
+      <remap from="image_rect" to="usb_cam/image_raw" />
+      <remap from="camera_info" to="usb_cam/camera_info" />
+      <param name="publish_tag_detections_image" type="bool" value="true" />
+    </node>
+  </group>
+
 </launch>
