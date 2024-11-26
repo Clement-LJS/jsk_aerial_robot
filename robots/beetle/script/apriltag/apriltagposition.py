@@ -88,9 +88,14 @@ class AprilPIDController:
         position = detected_positions[tag_id]
         orientation = detected_orientations[tag_id]
         self.currentDistance = [position.z, -position.x, -position.y]
-        self.currentEuler = tf.transformations.euler_from_quaternion(
+        temp_currentEuler = tf.transformations.euler_from_quaternion(
             (orientation.x, orientation.y, orientation.z, orientation.w)
         )
+
+        if twist_currentEuler[0] >= 0.0:
+            self.currentEuler = np.array([temp_currentEuler[2], np.pi - temp.currentEuler[0], -temp.currentEuler[1]])
+        else:
+            self.currentEuler = np.array([temp_currentEuler[2], -np.pi - temp.currentEuler[0], -temp.currentEuler[1]])
 
     def callback1(self, data):
         if data.detections:
