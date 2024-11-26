@@ -10,7 +10,7 @@ class AprilPIDController:
 
         # Variables to store the current position and orientation
         self.current_distance = np.array([0.0, 0.0, 0.0])
-        self.current_euler = np.array([0.0, 0.0, 0.0])
+        self.twist_current_euler = np.array([0.0, 0.0, 0.0])
 
         # Subscriber to the /beetle1/tag_detections_image topic
         self.sub = rospy.Subscriber('/beetle1/tag_detections', AprilTagDetectionArray, self.callback)
@@ -37,14 +37,19 @@ class AprilPIDController:
                 orientation = detected_orientations[1]
 
                 # Update current distance and orientation
-                self.current_distance = np.array([position.x, position.y, position.z])
-                self.current_euler = self.euler_from_quaternion(orientation)
+                self.current_distance = np.array([position.z, -position.x, -position.y])
+                current_euler = self.euler_from_quaternion(orientation)
+                
+                if current_euler[0] >= 0.0:
+                    self.twist_current_euler = np.array([current_euler[2], np.pi - current_euler[0], -current_euler[1]])
+                else:
+                    self.twist_current_euler = np.array([current_euler[2], -np.pi - current_euler[0], -current_euler[1]])
 
                 # Print current distance and orientation
                 rospy.loginfo(f"Tag ID 1: Distance - x: {self.current_distance[0]:.2f}, "
                               f"y: {self.current_distance[1]:.2f}, z: {self.current_distance[2]:.2f}")
-                rospy.loginfo(f"Tag ID 1: Orientation (Euler) - roll: {self.current_euler[0]:.2f}, "
-                              f"pitch: {self.current_euler[1]:.2f}, yaw: {self.current_euler[2]:.2f}")
+                rospy.loginfo(f"Tag ID 1: Orientation (Euler) - roll: {self.twist_current_euler[0]:.2f}, "
+                              f"pitch: {self.twist_current_euler[1]:.2f}, yaw: {self.twist_current_euler[2]:.2f}")
             else:
                 rospy.loginfo("Tag ID 1 not detected.")
         else:

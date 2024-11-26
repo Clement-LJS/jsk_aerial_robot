@@ -122,7 +122,7 @@
     <!-- USB Camera Node -->
     <node pkg="usb_cam" type="usb_cam_node" name="usb_cam">
       <param name="camera_info_url" value="file://$(find beetle)/config/head_camera.yaml"/>
-      <param name="video_device" value="/dev/video4"/>
+      <param name="video_device" value="/dev/video0"/>
       <param name="image_width" value="640" />
       <param name="image_height" value="480" />
       <param name="framerate" value="30.0" />
