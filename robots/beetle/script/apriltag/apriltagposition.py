@@ -99,6 +99,11 @@ class AprilPIDController:
         else:
             self.currentEuler = np.array([temp_currentEuler[2], -np.pi - temp_currentEuler[0], -temp_currentEuler[1]])
 
+        if twist_currentEuler[0] >= 0.0:
+            self.currentEuler = np.array([temp_currentEuler[2], np.pi - temp.currentEuler[0], -temp.currentEuler[1]])
+        else:
+            self.currentEuler = np.array([temp_currentEuler[2], -np.pi - temp.currentEuler[0], -temp.currentEuler[1]])
+
     def callback1(self, data):
         if data.detections:
             detected_ids = [detection.id[0] for detection in data.detections]
