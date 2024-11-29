@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-import rospy, tf, time
+import rospy, tf, time, math
 import numpy as np
 from apriltag_ros.msg import AprilTagDetectionArray
 from std_msgs.msg import Float64, Float32, Bool
@@ -11,7 +11,7 @@ class AprilPIDController:
         rospy.init_node("aprilpidVel")
 
         # PID control parameters
-        self.kp = -0.2
+        self.kp = -0.3
         self.ki = -0.0002
         self.kd = -0.01
         self.dt = 0.025  # time interval
@@ -37,7 +37,7 @@ class AprilPIDController:
 
         # Distances
         self.targetPosition = np.array([0.0, 0.0, 0.0])
-        self.currentDistance = np.array([0.0, 0.0, 0.0])
+        self.currentDistance = np.array([0.00001, 0.00001, 0.00001])
         self.lastDistance = np.array([0.0, 0.0, 0.0])
 
         # Angles
@@ -51,8 +51,8 @@ class AprilPIDController:
         self.lastMocapEuler = np.array([0.0, 0.0, 0.0])
 
         # Target positions
-        self.bigtag_target_distance = np.array([0.5, 0, 0])
-        self.smalltag_target_distance = np.array([0.1, 0, 0])
+        self.bigtag_target_distance = np.array([0.6, 0, -0.3])
+        self.smalltag_target_distance = np.array([0.2, 0, -0.3])
                
         # Flags and states
         self.reached_target1 = False
@@ -60,7 +60,7 @@ class AprilPIDController:
         self.tag_lost_flag = False
 
         # ROS Subscribers and Publishers
-        self.sub = rospy.Subscriber('/tag_detections', AprilTagDetectionArray, self.callback1)
+        self.sub = rospy.Subscriber('/beetle1/tag_detections', AprilTagDetectionArray, self.callback1)
         self.yaw_sub = rospy.Subscriber('/beetle1/mocap/pose', PoseStamped, self.callback2)
         self.pub = rospy.Publisher('/beetle1/uav/nav', FlightNav, queue_size=1)
 
@@ -75,7 +75,16 @@ class AprilPIDController:
         self.err_i += self.err
         self.pre_err = self.err
 
-        self.yaw_err = self.currentEuler[2]
+        # if self.currentDistance[1] != 0:
+        #     self.yawchecker = self.currentDistance[0] / self.currentDistance[1]
+        # else:
+        #     self.yawchecker = 0.01
+            
+        # if self.yawchecker >= 0:
+        #     self.yaw_err = self.currentMocapEuler[2] + (math.pi/2 - math.atan(self.yawchecker))
+        # else:
+        #     self.yaw_err = self.currentMocapEuler[2] + (-math.pi/2 - math.atan(self.yawchecker))
+        self.yaw_err = -self.currentEuler[2]
         self.yaw_err_i += self.yaw_err
         self.yaw_pre_err = self.yaw_err
 
@@ -96,17 +105,19 @@ class AprilPIDController:
             detected_positions = {detection.id[0]: detection.pose.pose.pose.position for detection in data.detections}
             detected_orientations = {detection.id[0]: detection.pose.pose.pose.orientation for detection in data.detections}
 
+            print(f"{detected_ids}")
+
             if 0 in detected_ids:
                 if self.id0_detected_start_time is None:
                     self.id0_detected_start_time = time.time()
                 elif time.time() - self.id0_detected_start_time >= 3.0:
-                    rospy.loginfo("\033[1;32m[Msg] Using id[0] for positioning.\033[0m")
+                    # rospy.loginfo("\033[1;32m[Msg] Using id[0] for positioning.\033[0m")
                     self.set_target_distance(detected_positions, detected_orientations, 0)
                     self.targetPosition = self.smalltag_target_distance
                     return
 
             if 1 in detected_ids:
-                rospy.loginfo("\033[1;32m[Msg] Using id[1] for positioning.\033[0m")
+                # rospy.loginfo("\033[1;32m[Msg] Using id[1] for positioning.\033[0m")
                 self.set_target_distance(detected_positions, detected_orientations, 1)
                 self.targetPosition = self.bigtag_target_distance
 
@@ -126,19 +137,21 @@ class AprilPIDController:
     def callback2(self, data):
         if data.pose:
             moc = data.pose.orientation
-            self.current_mocap_Euler = tf.transformations.euler_from_quaternion((moc.x, moc.y, moc.z, moc.w))
-            self.lastmocapEuler = self.currentmocapEuler
+            self.currentMocapEuler = tf.transformations.euler_from_quaternion((moc.x, moc.y, moc.z, moc.w))
+            self.lastMocapEuler = self.currentMocapEuler
             self.mocap_lost_flag = False
 
         else:
             self.mocap_lost_flag = True
-            self.currentmocapEuler = self.lastmocapEuler
+            self.currentMocapEuler = self.lastMocapEuler
 
     def main(self):
         while not rospy.is_shutdown():
 
             # Error calculating
             self.calculateError()
+
+            # print(f"{self.targetPosition}")
             
             # PID terms
             self.p_term = self.kp * self.err
@@ -149,10 +162,10 @@ class AprilPIDController:
             self.yaw_i_term = self.ki * self.yaw_err_i
             self.yaw_d_term = self.kd * (self.yaw_err - self.yaw_pre_err) / self.dt
 
-            if np.linalg.norm(self.currentDistance) <= 0.3:  # Weaken PID if close
-                self.p_term *= self.TermCorrector
-                self.i_term *= self.TermCorrector
-                self.d_term *= self.TermCorrector
+            # if np.linalg.norm(self.currentDistance) <= 0.3:  # Weaken PID if close
+            #     self.p_term *= self.TermCorrector
+            #     self.i_term *= self.TermCorrector
+            #     self.d_term *= self.TermCorrector
 
             # Compute velocity
             self.vel = self.p_term + self.i_term + self.d_term
@@ -166,11 +179,17 @@ class AprilPIDController:
             self.nav_msg.target_vel_y = self.vel[1]
             self.nav_msg.pos_z_nav_mode = 1
             self.nav_msg.target_vel_z = self.vel[2]
+            self.nav_msg.yaw_nav_mode = 2
             self.nav_msg.target_yaw = self.yaw
             self.pub.publish(self.nav_msg)
             self.rate.sleep()
 
-            print(f"{self.nav_msg}")
+            # print(f"{math.degrees(self.currentMocapEuler[2])}")
+            # if self.yawchecker >= 0:
+            #     print(f"{math.degrees(math.pi/2 - math.atan(self.yawchecker))}")
+            # else:
+            #     print(f"{math.degrees(-math.pi/2 - math.atan(self.yawchecker))}")
+            # print(f"{math.degrees(self.yaw)}")
 
 if __name__ == "__main__":
     try:

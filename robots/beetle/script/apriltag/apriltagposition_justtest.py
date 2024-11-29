@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-import rospy, tf
+import rospy, tf, math
 import numpy as np
 from apriltag_ros.msg import AprilTagDetectionArray
 from geometry_msgs.msg import Pose
@@ -46,10 +46,16 @@ class AprilPIDController:
                     self.twist_current_euler = np.array([current_euler[2], -np.pi - current_euler[0], -current_euler[1]])
 
                 # Print current distance and orientation
-                rospy.loginfo(f"Tag ID 1: Distance - x: {self.current_distance[0]:.2f}, "
-                              f"y: {self.current_distance[1]:.2f}, z: {self.current_distance[2]:.2f}")
-                rospy.loginfo(f"Tag ID 1: Orientation (Euler) - roll: {self.twist_current_euler[0]:.2f}, "
-                              f"pitch: {self.twist_current_euler[1]:.2f}, yaw: {self.twist_current_euler[2]:.2f}")
+                yawchecker = self.current_distance[0] / self.current_distance[1]
+
+                if yawchecker >= 0:
+                    self.yaw = math.degrees(math.pi/2 - math.atan(yawchecker))
+                else:
+                    self.yaw = math.degrees(-math.pi/2 - math.atan(yawchecker))
+                    
+                print(f"{self.current_distance[1]}")
+                print(f"{self.yaw}")
+                
             else:
                 rospy.loginfo("Tag ID 1 not detected.")
         else:
