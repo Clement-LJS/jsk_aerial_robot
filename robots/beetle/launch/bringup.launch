@@ -110,7 +110,7 @@
 
   ########## Camera Configuration ##########
   <node pkg="usb_cam" type="usb_cam_node" name="usb_cam" ns="$(arg robot_ns)">
-    <param name="camera_info_url" value="file://$(find beetle)/config/head_camera.yaml" />
+    <param name="camera_info_url" value="file://$(find beetle)/config/usb_cam.yaml" />
     <param name="video_device" value="/dev/video0" />
     <param name="image_width" value="640" />
     <param name="image_height" value="480" />
