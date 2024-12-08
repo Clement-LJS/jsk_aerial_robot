@@ -51,7 +51,7 @@ class AprilPIDController:
         self.lastMocapEuler = np.array([0.0, 0.0, 0.0])
 
         # Target positions
-        self.bigtag_target_distance = np.array([0.5, 0, 0])
+        self.bigtag_target_distance = np.array([0.3, 0, 0])
         self.smalltag_target_distance = np.array([0.1, 0, 0])
                
         # Flags and states
@@ -100,6 +100,8 @@ class AprilPIDController:
             detected_ids = [detection.id[0] for detection in data.detections]
             detected_positions = {detection.id[0]: detection.pose.pose.pose.position for detection in data.detections}
             detected_orientations = {detection.id[0]: detection.pose.pose.pose.orientation for detection in data.detections}
+
+            print(f"{detected_ids}")
 
             if 0 in detected_ids:
                 if self.id0_detected_start_time is None:
@@ -175,7 +177,7 @@ class AprilPIDController:
             self.pub.publish(self.nav_msg)
             self.rate.sleep()
 
-            print(f"{self.nav_msg}")
+            # print(f"{self.nav_msg}")
 
 if __name__ == "__main__":
     try:
