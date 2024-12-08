@@ -139,12 +139,5 @@
     <remap from="/tag_detections_image" to="/beetle1/tag_detections_image" />
     <param name="publish_tag_detections_image" type="bool" value="true" />
   </node>
-  
-  <!-- <node pkg="apriltag_ros" type="apriltag_ros_continuous_node" name="apriltag_ros_continuous_node" ns="$(arg robot_ns)" clear_params="true"> -->
-  <!--   <remap from="image_rect" to="usb_cam/image_raw" /> -->
-  <!--   <remap from="camera_info" to="usb_cam/camera_info" /> -->
-  <!--   <param name="publish_tag_detections_image" type="bool" value="true" /> -->
-  <!-- </node> -->
-  <!-- <rosparam command="load" file="$(find beetle)/config/apriltag/tags_single.yaml" ns="$(arg robot_ns)/apriltag_ros_continuous_node" /> -->
 
 </launch>
