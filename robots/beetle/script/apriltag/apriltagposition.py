@@ -16,8 +16,8 @@ class AprilPIDController:
         self.kd = -0.01
         self.gaincontroller = 3
 
-        self.dt = 0.05  # time interval
-        # self.dt = 0.025  # time interval
+        # self.dt = 0.05  # time interval
+        self.dt = 0.025  # time interval
 
         # Terms and Errors
         self.p_term = np.array([0.0, 0.0, 0.0])
@@ -37,7 +37,7 @@ class AprilPIDController:
         self.yaw_pre_err = np.array([0.0])
         
         # Positions
-        self.currentPosition = np.array([0.00001, 0.00001, 0.00001])
+        self.currentPosition = np.array([0.0, 0.0, 0.0])
         self.lastPosition = np.array([0.0, 0.0, 0.0])
         # Mocap Positions
         self.currentMocapPosition = np.array([0.0, 0.0, 0.0])
@@ -50,10 +50,17 @@ class AprilPIDController:
         self.currentMocapEuler = np.array([0.0, 0.0, 0.0])
         self.lastMocapEuler = np.array([0.0, 0.0, 0.0])
 
-        # Target Positions
+        # Targets
         self.targetPosition = np.array([0.0, 0.0, 0.0])
-        self.bigtagTargetPosition = np.array([0.6, 0, -0.3])
-        self.smalltagTargetPosition = np.array([0.2, 0, -0.3])
+        
+        # self.bigtagTargetPosition = np.array([0.4, 0, 0.1])
+        # self.smalltagTargetPosition = np.array([0.2, 0, 0.1])
+        self.bigtagTargetPosition = np.array([0.4, 0.0, 0.0])
+        self.smalltagTargetPosition = np.array([0.18, 0.0, 0.03])
+
+        self.vel = np.array([0.0, 0.0, 0.0])
+        self.targetYaw = np.array([0.0])
+        self.target_pos_z = np.array([0.0])
                
         # Flags and states
         self.id0DetectedStartTime = None
@@ -65,10 +72,9 @@ class AprilPIDController:
         self.sub = rospy.Subscriber('/beetle1/tag_detections', AprilTagDetectionArray, self.callback1)
         self.yaw_sub = rospy.Subscriber('/beetle1/mocap/pose', PoseStamped, self.callback2)
         self.pub = rospy.Publisher('/beetle1/uav/nav', FlightNav, queue_size=1)
-
-        self.vel = np.array([0.0, 0.0, 0.0])
-        self.targetYaw = np.array([0.0])
-        self.rate = rospy.Rate(20)
+        
+        # self.rate = rospy.Rate(20)
+        self.rate = rospy.Rate(40)
 
         # Flight navigation message
         self.nav_msg = FlightNav()
@@ -144,8 +150,12 @@ class AprilPIDController:
 
     def callback2(self, data):
         if data.pose:
-            moc = data.pose.orientation
-            self.currentMocapEuler = tf.transformations.euler_from_quaternion((moc.x, moc.y, moc.z, moc.w))
+            moc_pos = data.pose.position
+            moc_ang = data.pose.orientation
+
+            self.currentMocapPosition = (moc_pos.x, moc_pos.y, moc_pos.z)
+            self.lastMocapEuler = self.currentMocapPosition
+            self.currentMocapEuler = tf.transformations.euler_from_quaternion((moc_ang.x, moc_ang.y, moc_ang.z, moc_ang.w))
             self.lastMocapEuler = self.currentMocapEuler
             self.mocapLostFlag = False
 
@@ -154,26 +164,53 @@ class AprilPIDController:
             self.currentMocapEuler = self.lastMocapEuler
 
     def main(self):
+        tag_lost_yaw = None
+        tag_lost_z = None
+        yaw_toggle = False
         while not rospy.is_shutdown():
-            
-            self.calculateError()
+            if not self.tagLostFlag:
+                tag_lost_yaw = None
+                tag_lost_z = None
+                self.calculateError()
+                # Publish navigation command
+                self.nav_msg.control_frame = 1
+                self.nav_msg.target = 1
+                self.nav_msg.pos_xy_nav_mode = 1
+                self.nav_msg.target_vel_x = self.vel[0]
+                self.nav_msg.target_vel_y = self.vel[1]
+                self.nav_msg.pos_z_nav_mode = 2
+                self.nav_msg.target_pos_z = self.currentMocapPosition[2] + self.currentPosition[2] + self.targetPosition[2]
+                self.nav_msg.yaw_nav_mode = 2
+                self.nav_msg.target_yaw = self.targetYaw
 
-            # Publish navigation command
-            self.nav_msg.control_frame = 1
-            self.nav_msg.target = 1
-            self.nav_msg.pos_xy_nav_mode = 1
-            self.nav_msg.target_vel_x = self.vel[0]
-            self.nav_msg.target_vel_y = self.vel[1]
-            self.nav_msg.pos_z_nav_mode = 2
-            self.nav_msg.target_pos_z = self.vel[2]
-            self.nav_msg.yaw_nav_mode = 2
-            self.nav_msg.target_yaw = self.targetYaw
+                print(f"{self.currentPosition[2]}")
+                # print(f"{self.currentPosition[2]}")
+                # print(f"{self.nav_msg.target_pos_z}")
+                # print(f"{math.degrees(self.currentEuler[2])}")
+                
+            else:
+                if tag_lost_yaw is None:
+                    tag_lost_yaw = self.currentMocapEuler[2]
+                    tag_lost_z = self.currentMocapPosition[2]
+
+                self.nav_msg.control_frame = 1
+                self.nav_msg.target = 1
+                self.nav_msg.pos_xy_nav_mode = 1
+                self.nav_msg.target_vel_x = 0.0
+                self.nav_msg.target_vel_y = 0.0
+                self.nav_msg.pos_z_nav_mode = 2
+                self.nav_msg.target_pos_z = tag_lost_z
+                self.nav_msg.yaw_nav_mode = 2
+                
+                # if yaw_toggle:
+                #     self.nav_msg.target_yaw = tag_lost_yaw + math.pi / 2
+                # else:
+                #     self.nav_msg.target_yaw = tag_lost_yaw - math.pi / 2
+                # yaw_toggle = not yaw_toggle
+
             self.pub.publish(self.nav_msg)
             self.rate.sleep()
-
-            print(f"{self.vel}")
-            # print(f"{math.degrees(self.currentEuler[2])}")
-
+            
 if __name__ == "__main__":
     try:
         april_pid = AprilPIDController()
