@@ -104,9 +104,15 @@ def main():
     rospy.sleep(1)
 
     link_name = "dummy_gripper_2"
-
     print("\033[1mEnter the module name: \033[0m")
-    module_name = input().strip().lower()
+
+    try:
+        module_name = input().strip().lower()
+    except KeyboardInterrupt:
+        rospy.loginfo("Interrupted from keyboard.")
+        rospy.signal_shutdown("")
+        break
+
     model_path = f'/home/iida/ros/jsk_aerial_robot_ws/src/jsk_aerial_robot/robots/beetle/models/real/{module_name}_model.sdf'
     if not os.path.exists(model_path):
         print(f"\033[1;91m[Warning] '{module_name}' model not found. Please enter a valid module name.\033[0m")
@@ -118,7 +124,13 @@ def main():
 
     while True:
         print("\033[1mEnter add or delete: \033[0m")
-        operation = input().strip().lower()
+
+        try:
+            operation = input().strip().lower()
+        except KeyboardInterrupt:
+            rospy.loginfo("Interrupted from keyboard.")
+            rospy.signal_shutdown("")
+            break
         
         if operation == "add":
             action = 1

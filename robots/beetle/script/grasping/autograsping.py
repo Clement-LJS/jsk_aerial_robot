@@ -9,7 +9,7 @@ class AutoGrasping:
 
         # Prepared value
         self.limitLoadRange = np.array([20, 50])
-        self.servoMoveRange = np.array([100])
+        self.servoMoveRange = np.array([50])
     
         # Parameters
         self.currentServoLoad_0 = 0.0
@@ -45,7 +45,7 @@ class AutoGrasping:
                     self.targetServoPosition_0 = int(self.currentServoPosition_0 + self.servoMoveRange)
             elif self.limitLoadRange[0] <= self.currentServoLoad_0 < self.limitLoadRange[1]:
                 self.handOpenFlag_0 = not self.handOpenFlag_0
-                rospy.set_param('handOpenFlag_0', self.handOpenFlag_0)
+                rospy.set_param('handOpenFlag_0', self.handOpenFlag_0)                
                 self.targetReachedFlag = True
             else:
                 if self.handOpenFlag_0:
@@ -64,8 +64,9 @@ class AutoGrasping:
                 self.handOpenFlag_1 = not self.handOpenFlag_1
                 rospy.set_param('handOpenFlag_1', self.handOpenFlag_1)
                 self.targetReachedFlag = True
+
             else:
-                if self.handOpenFlag_0:
+                if self.handOpenFlag_1:
                     self.targetServoPosition_1 = int(self.currentServoPosition_1 + self.servoMoveRange)
                 else:
                     self.targetServoPosition_1 = int(self.currentServoPosition_1 - self.servoMoveRange)                
@@ -100,7 +101,13 @@ class AutoGrasping:
     def main(self):
         while not rospy.is_shutdown():
             print("\033[1mEnter the servo index, + or -: \033[0m")
-            targetInput = input().strip().lower()
+            try:
+                targetInput = input().strip().lower()
+            except KeyboardInterrupt:
+                rospy.loginfo("Interrupted from keyboard.")
+                rospy.signal_shutdown("")
+                break
+            
             if targetInput == "+":
                 targetServoIndex = 1
                 break
@@ -111,7 +118,7 @@ class AutoGrasping:
                 print("Incorrect input. Please enter + or -.")
                 continue
 
-        while not rospy.is_shutdown():
+        while not self.targetReachedFlag:
             self.check_subscription()
             self.calculatePosition(targetServoIndex)
             if targetServoIndex == 0 and self.targetServoPosition_0 == self.currentServoPosition_0:
@@ -121,6 +128,9 @@ class AutoGrasping:
                 rospy.loginfo("Servo 1 reached target position. Exiting...")
                 break
             self.rate.sleep()
+
+        print(f"\033[1;32m[Msg] Target reached. Exiting... \033[0m")
+        rospy.signal_shutdown("")
 
 if __name__ == "__main__":
     try:
