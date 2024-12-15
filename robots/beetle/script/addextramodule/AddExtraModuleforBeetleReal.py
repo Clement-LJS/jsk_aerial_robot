@@ -103,7 +103,7 @@ def main():
     rospy.init_node('add_module_client')
     rospy.sleep(1)
 
-    link_name = "dummy_gripper_1"
+    link_name = "dummy_gripper_2"
 
     print("\033[1mEnter the module name: \033[0m")
     module_name = input().strip().lower()
@@ -130,7 +130,7 @@ def main():
 
         elif operation == "delete":
             action = -1
-            send_openhand_command()
+            # send_openhand_command()
             if call_add_extra_module(action, link_name, config):
                 print(f"\033[1;32m[Msg] {module_name} model deleted successfully!\033[0m")
             else:

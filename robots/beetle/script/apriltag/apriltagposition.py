@@ -212,8 +212,9 @@ class AprilPIDController:
             self.rate.sleep()
             
 if __name__ == "__main__":
-    try:
+    try:        
         april_pid = AprilPIDController()
         april_pid.main()
+        rate.sleep()
     except rospy.ROSInterruptException:
         pass

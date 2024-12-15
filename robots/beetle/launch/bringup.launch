@@ -127,5 +127,10 @@
   </node>
   <rosparam command="load" file="$(find beetle)/config/apriltag/tags_single.yaml" ns="$(arg robot_ns)/apriltag_ros_continuous_node" />
 
+  ############### Hand state ###############
+  <param name="handOpenFlag_0" value="true" />
+  <param name="handOpenFlag_1" value="true" />
+  <!-- <rosparam file="$(arg config_dir)/HandFlag.yaml" command="load" /> -->
+  
 </launch>
 
