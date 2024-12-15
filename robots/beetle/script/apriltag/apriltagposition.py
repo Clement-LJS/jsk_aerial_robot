@@ -118,6 +118,8 @@ class AprilPIDController:
             detected_positions = {detection.id[0]: detection.pose.pose.pose.position for detection in data.detections}
             detected_orientations = {detection.id[0]: detection.pose.pose.pose.orientation for detection in data.detections}
 
+            print(f"{detected_ids}")
+
             if 0 in detected_ids:
                 if self.id0DetectedStartTime is None:
                     self.id0DetectedStartTime = time.time()
@@ -210,7 +212,7 @@ class AprilPIDController:
 
             self.pub.publish(self.nav_msg)
             self.rate.sleep()
-            
+
 if __name__ == "__main__":
     try:        
         april_pid = AprilPIDController()

@@ -109,23 +109,36 @@
   </include>
 
   ########## Camera Configuration ##########
-  <node pkg="usb_cam" type="usb_cam_node" name="usb_cam" ns="$(arg robot_ns)">
-    <param name="camera_info_url" value="file://$(find beetle)/config/usb_cam.yaml" />
-    <param name="video_device" value="/dev/video0" />
+  <arg name="node_namespace" default="apriltag_ros_continuous_node" />
+  <arg name="camera_name" default="usb_cam" />
+  <arg name="image_topic" default="image_raw" />
+  
+  <node pkg="usb_cam" type="usb_cam_node" name="usb_cam">
+    <param name="camera_info_url" value="file://$(find beetle)/config/usb_cam.yaml"/>
+    <param name="video_device" value="/dev/video0"/>
     <param name="image_width" value="640" />
     <param name="image_height" value="480" />
-    <param name="framerate" value="30.0" />
     <param name="pixel_format" value="yuyv" />
     <param name="color_format" value="yuv422p" />
   </node>
 
   ########### Apriltag Detection ###########
-  <node pkg="apriltag_ros" type="apriltag_ros_continuous_node" name="apriltag_ros_continuous_node" ns="$(arg robot_ns)" clear_params="true">
-    <remap from="image_rect" to="usb_cam/image_raw" />
-    <remap from="camera_info" to="usb_cam/camera_info" />
+  <node name="image_proc" pkg="image_proc" type="image_proc" output="screen">
+    <remap from="image_raw" to="/$(arg camera_name)/image_raw"/>
+    <remap from="camera_info" to="/$(arg camera_name)/camera_info"/>
+    <remap from="image_rect_color" to="/$(arg camera_name)/image_rect_color" />
+  </node>
+
+  <rosparam command="load" file="$(find apriltag_ros)/config/settings.yaml" ns="$(arg node_namespace)" />
+  <rosparam command="load" file="$(find beetle)/config/apriltag/tags_single.yaml" ns="/apriltag_ros_continuous_node"/>
+  
+  <node pkg="apriltag_ros" type="apriltag_ros_continuous_node" name="$(arg node_namespace)" clear_params="true">
+    <remap from="camera_info" to="$(arg camera_name)/camera_info" />
+    <remap from="image_rect" to="$(arg camera_name)/image_rect_color" />
+    <remap from="/tag_detections" to="/beetle1/tag_detections" />
+    <remap from="/tag_detections_image" to="/beetle1/tag_detections_image" />
     <param name="publish_tag_detections_image" type="bool" value="true" />
   </node>
-  <rosparam command="load" file="$(find beetle)/config/apriltag/tags_single.yaml" ns="$(arg robot_ns)/apriltag_ros_continuous_node" />
 
   ############### Hand state ###############
   <param name="handOpenFlag_0" value="true" />
@@ -133,4 +146,3 @@
   <!-- <rosparam file="$(arg config_dir)/HandFlag.yaml" command="load" /> -->
   
 </launch>
-
