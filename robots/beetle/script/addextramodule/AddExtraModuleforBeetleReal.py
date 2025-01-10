@@ -111,7 +111,6 @@ def main():
     except KeyboardInterrupt:
         rospy.loginfo("Interrupted from keyboard.")
         rospy.signal_shutdown("")
-        break
 
     model_path = f'/home/iida/ros/jsk_aerial_robot_ws/src/jsk_aerial_robot/robots/beetle/models/real/{module_name}_model.sdf'
     if not os.path.exists(model_path):

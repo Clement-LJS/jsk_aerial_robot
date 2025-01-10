@@ -5,6 +5,7 @@ from apriltag_ros.msg import AprilTagDetectionArray
 from std_msgs.msg import Float64, Float32, Bool
 from geometry_msgs.msg import Twist, PoseStamped
 from aerial_robot_msgs.msg import FlightNav
+from spinal.msg import DesireCoord
 
 class AprilPIDController:
     def __init__(self):
@@ -14,16 +15,20 @@ class AprilPIDController:
         self.kp = -0.3
         self.ki = -0.0002
         self.kd = -0.01
-        self.gaincontroller = 3
+        self.gaincontroller = 2
 
         # self.dt = 0.05  # time interval
-        self.dt = 0.025  # time interval
+        self.dt = 0.025
 
         # Terms and Errors
         self.p_term = np.array([0.0, 0.0, 0.0])
         self.i_term = np.array([0.0, 0.0, 0.0])
         self.d_term = np.array([0.0, 0.0, 0.0])
 
+        self.pitch_p_term = np.array([0.0])
+        self.pitch_i_term = np.array([0.0])
+        self.pitch_d_term = np.array([0.0])
+        
         self.yaw_p_term = np.array([0.0])
         self.yaw_i_term = np.array([0.0])
         self.yaw_d_term = np.array([0.0])
@@ -32,6 +37,10 @@ class AprilPIDController:
         self.err_i = np.array([0.0, 0.0, 0.0])
         self.pre_err = np.array([0.0, 0.0, 0.0])
 
+        self.pitch_err = np.array([0.0])
+        self.pitch_err_i = np.array([0.0])
+        self.pitch_pre_err = np.array([0.0])
+        
         self.yaw_err = np.array([0.0])
         self.yaw_err_i = np.array([0.0])
         self.yaw_pre_err = np.array([0.0])
@@ -59,6 +68,7 @@ class AprilPIDController:
         self.smalltagTargetPosition = np.array([0.18, 0.0, 0.03])
 
         self.vel = np.array([0.0, 0.0, 0.0])
+        self.targetPitch = np.array([0.0])
         self.targetYaw = np.array([0.0])
         self.target_pos_z = np.array([0.0])
                
@@ -71,13 +81,14 @@ class AprilPIDController:
         # sub and pub
         self.sub = rospy.Subscriber('/beetle1/tag_detections', AprilTagDetectionArray, self.callback1)
         self.yaw_sub = rospy.Subscriber('/beetle1/mocap/pose', PoseStamped, self.callback2)
-        self.pub = rospy.Publisher('/beetle1/uav/nav', FlightNav, queue_size=1)
-        
+        self.pub = rospy.Publisher('/beetle1/uav/nav', FlightNav, queue_size=10)
+        self.rot_pub = rospy.Publisher('/beetle1/final_target_baselink_rot', DesireCoord, queue_size=10)
         # self.rate = rospy.Rate(20)
         self.rate = rospy.Rate(40)
 
         # Flight navigation message
         self.nav_msg = FlightNav()
+        self.rot_msg = DesireCoord()
 
     def calculateError(self):
         self.pre_err = self.err
@@ -90,15 +101,32 @@ class AprilPIDController:
 
         self.vel = self.p_term + self.i_term + self.d_term
 
+        max_velocity = 0.3
+        self.vel = np.clip(self.vel, -max_velocity, max_velocity)
+
+    def setTargetPitch(self):
+        self.pre_pitch_err = self.pitch_err
+        self.pitch_err = -self.currentEuler[1]
+        self.pitch_err_i += self.pitch_err
+
+        self.pitch_p_term = self.kp * self.gaincontroller * self.pitch_err
+        self.pitch_i_term = self.ki * self.gaincontroller * self.pitch_err_i
+        self.pitch_d_term = self.kd * self.gaincontroller * (self.pitch_err - self.pitch_pre_err) / self.dt
+    
+        self.targetPitch = self.currentMocapEuler[1] + self.pitch_p_term + self.pitch_i_term + self.pitch_d_term
+        self.targetPitchPlus = self.pitch_p_term + self.pitch_i_term + self.pitch_d_term
+
+        # print(f"{self.targetPitch}")
+        
     def setTargetYaw(self):
-        self.pre_err = self.yaw_err
-        self.yaw_err = self.currentEuler[2]
+        self.pre_yaw_err = self.yaw_err
+        self.yaw_err = -self.currentEuler[2]
         self.yaw_err_i += self.yaw_err
 
-        self.yaw_p_term = self.kp * self.gaincontroller * self.err
-        self.yaw_i_term = self.ki * self.gaincontroller * self.err_i
-        self.yaw_d_term = self.kd * self.gaincontroller * (self.err - self.pre_err) / self.dt
-
+        self.yaw_p_term = self.kp * self.gaincontroller * self.yaw_err
+        self.yaw_i_term = self.ki * self.gaincontroller * self.yaw_err_i
+        self.yaw_d_term = self.kd * self.gaincontroller * (self.yaw_err - self.yaw_pre_err) / self.dt
+    
         self.targetYaw = self.currentMocapEuler[2] + self.yaw_p_term + self.yaw_i_term + self.yaw_d_term
 
     def setTargetPosition(self, detected_positions, detected_orientations, tag_id):
@@ -137,8 +165,8 @@ class AprilPIDController:
                 self.id0DetectedStartTime = None
                 self.targetPosChangedFlag = False
 
-            if self.targetPosChangedFlag:
-                self.targetYaw()
+            self.setTargetYaw()
+            self.setTargetPitch()
                 
             self.lastPosition = self.currentPosition
             self.lastEuler = self.currentEuler
@@ -156,13 +184,14 @@ class AprilPIDController:
             moc_ang = data.pose.orientation
 
             self.currentMocapPosition = (moc_pos.x, moc_pos.y, moc_pos.z)
-            self.lastMocapEuler = self.currentMocapPosition
             self.currentMocapEuler = tf.transformations.euler_from_quaternion((moc_ang.x, moc_ang.y, moc_ang.z, moc_ang.w))
+            self.lastMocapEuler = self.currentMocapPosition
             self.lastMocapEuler = self.currentMocapEuler
             self.mocapLostFlag = False
 
         else:
             self.mocapLostFlag = True
+            self.currentMocapPosition = self.lastMocapPosition
             self.currentMocapEuler = self.lastMocapEuler
 
     def main(self):
@@ -171,25 +200,48 @@ class AprilPIDController:
         yaw_toggle = False
         while not rospy.is_shutdown():
             if not self.tagLostFlag:
-                tag_lost_yaw = None
-                tag_lost_z = None
-                self.calculateError()
-                # Publish navigation command
-                self.nav_msg.control_frame = 1
-                self.nav_msg.target = 1
-                self.nav_msg.pos_xy_nav_mode = 1
-                self.nav_msg.target_vel_x = self.vel[0]
-                self.nav_msg.target_vel_y = self.vel[1]
-                self.nav_msg.pos_z_nav_mode = 2
-                self.nav_msg.target_pos_z = self.currentMocapPosition[2] + self.currentPosition[2] + self.targetPosition[2]
-                self.nav_msg.yaw_nav_mode = 2
-                self.nav_msg.target_yaw = self.targetYaw
+                if not self.targetPosChangedFlag:
+                    tag_lost_yaw = None
+                    tag_lost_z = None
+                    self.calculateError()
+                    # Publish navigation command
+                    self.nav_msg.control_frame = 1
+                    self.nav_msg.target = 1
+                    self.nav_msg.pos_xy_nav_mode = 1
+                    self.nav_msg.target_vel_x = self.vel[0]
+                    self.nav_msg.target_vel_y = self.vel[1]
+                    self.nav_msg.pos_z_nav_mode = 2
+                    self.nav_msg.target_pos_z = self.currentMocapPosition[2] + self.currentPosition[2] + self.targetPosition[2]
+                    self.nav_msg.yaw_nav_mode = 2
+                    self.nav_msg.target_yaw = self.targetYaw
 
-                print(f"{self.currentPosition[2]}")
-                # print(f"{self.currentPosition[2]}")
-                # print(f"{self.nav_msg.target_pos_z}")
-                # print(f"{math.degrees(self.currentEuler[2])}")
-                
+                    self.pub.publish(self.nav_msg)
+
+                    self.rot_msg.pitch = self.targetPitch
+
+                    self.rot_pub.publish(self.rot_msg)
+                    
+                else:
+                    tag_lost_yaw = None
+                    tag_lost_z = None
+                    self.calculateError()
+                    # Publish navigation command
+                    self.nav_msg.control_frame = 1
+                    self.nav_msg.target = 1
+                    self.nav_msg.pos_xy_nav_mode = 1
+                    self.nav_msg.target_vel_x = self.vel[0]
+                    self.nav_msg.target_vel_y = self.vel[1]
+                    self.nav_msg.pos_z_nav_mode = 2
+                    self.nav_msg.target_pos_z = self.currentMocapPosition[2] + self.currentPosition[2] + self.targetPosition[2]
+                    self.nav_msg.yaw_nav_mode = 2
+                    self.nav_msg.target_yaw = self.targetYaw
+
+                    self.pub.publish(self.nav_msg)
+
+                    self.rot_msg.pitch = self.targetPitch
+
+                    self.rot_pub.publish(self.rot_msg)
+                    
             else:
                 if tag_lost_yaw is None:
                     tag_lost_yaw = self.currentMocapEuler[2]
@@ -201,16 +253,15 @@ class AprilPIDController:
                 self.nav_msg.target_vel_x = 0.0
                 self.nav_msg.target_vel_y = 0.0
                 self.nav_msg.pos_z_nav_mode = 2
-                self.nav_msg.target_pos_z = tag_lost_z
+                # self.nav_msg.target_pos_z = tag_lost_z
                 self.nav_msg.yaw_nav_mode = 2
-                
-                # if yaw_toggle:
-                #     self.nav_msg.target_yaw = tag_lost_yaw + math.pi / 2
-                # else:
-                #     self.nav_msg.target_yaw = tag_lost_yaw - math.pi / 2
-                # yaw_toggle = not yaw_toggle
 
-            self.pub.publish(self.nav_msg)
+                self.pub.publish(self.nav_msg)
+
+                self.rot_msg.pitch = 0.0
+
+                self.rot_pub.publish(self.rot_msg)
+            
             self.rate.sleep()
 
 if __name__ == "__main__":

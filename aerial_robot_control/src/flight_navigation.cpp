@@ -524,7 +524,7 @@ void BaseNavigator::joyStickControl(const sensor_msgs::JoyConstPtr & joy_msg)
         }
     }
 
-  /* siwthc to pos mode */
+  /* switch to pos mode */
   if(joy_cmd.buttons[PS3_BUTTON_ACTION_CROSS] == 1)
     {
       if (xy_control_mode_ != POS_CONTROL_MODE)

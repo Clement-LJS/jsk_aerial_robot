@@ -35,13 +35,13 @@
     </include>
 
     <include>
-      <uri>model://Apriltag36_11_00000_small//</uri>
+      <uri>model://Apriltag36_11_00000_small</uri>
     </include>
 
     <!-- <model name="april_tag1" > -->
     <!--   <pose>1000.0 0.0 0.0 0 0 0</pose> -->
     <!--   <include> -->
-    <!--     <uri>model://Apriltag36_11_00000_small//</uri> -->
+    <!--     <uri>model://Apriltag36_11_00000_small</uri> -->
     <!--   </include> -->
     <!-- </model> -->
     
