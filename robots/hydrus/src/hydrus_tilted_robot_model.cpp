@@ -57,14 +57,13 @@ void HydrusTiltedRobotModel::updateRobotModelImpl(const KDL::JntArray& joint_pos
     }
   /* special process to find the hovering axis for tilt model */
   Eigen::MatrixXd cog_rot_inv = aerial_robot_model::kdlToEigen(getCogDesireOrientation<KDL::Rotation>().Inverse());
-  // std::cout<<"cog"<<cog_rot_inv<<std::endl;
   Eigen::MatrixXd wrench_mat_on_cog = calcWrenchMatrixOnCoG();
   Eigen::VectorXd f = cog_rot_inv * wrench_mat_on_cog.topRows(3) * getStaticThrust();
 
   double f_norm_roll = atan2(f(1), f(2));
   double f_norm_pitch = atan2(-f(0), sqrt(f(1)*f(1) + f(2)*f(2)));
   /* set the hoverable frame as CoG and reupdate model */
-  //setCogDesireOrientation(f_norm_roll, f_norm_pitch, 0);
+  setCogDesireOrientation(f_norm_roll, f_norm_pitch, 0);
   HydrusRobotModel::updateRobotModelImpl(joint_positions);
 
   if(getVerbose())

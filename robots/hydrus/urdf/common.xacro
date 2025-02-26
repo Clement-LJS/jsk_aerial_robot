@@ -145,7 +145,7 @@
   </joint>
 
 
-  <link name="end_effector">
+  <!-- <link name="end_effector">
     <inertial>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <mass value="0.001"/>
@@ -166,8 +166,8 @@
           <sphere radius="0.02"/>
         </geometry>
       </visual>
-  </link> 
-<!-- 
+  </link>  -->
+
   <link name="end_effector">
     <inertial>
       <origin xyz="0 0 0" rpy="0 0 1.57"/>
@@ -178,18 +178,18 @@
           izz="0.0001"/>
     </inertial>
       <collision>
-        <origin rpy="0 1.57 0" xyz="0.3 0 0"/>
+        <origin rpy="0 1.57 0" xyz="0.1 0 0"/>
         <geometry>
-          <cylinder length="0.6" radius="0.01"/>
+          <cylinder length="0.2" radius="0.01"/>
         </geometry>
       </collision>
       <visual>
-        <origin rpy="0 1.57 0" xyz="0.3 0 0"/>
+        <origin rpy="0 1.57 0" xyz="0.1 0 0"/>
         <geometry>
-          <cylinder length="0.6" radius="0.01"/>
+          <cylinder length="0.2" radius="0.01"/>
         </geometry>
       </visual>
-  </link> -->
+  </link>
 
 
   <gazebo reference="end_effector">

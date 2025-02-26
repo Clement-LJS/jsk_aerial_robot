@@ -291,9 +291,9 @@ void HydrusImpedanceController::controlCore()
 
   // std::cout<<target_thrust_z_term_<<std::endl;
 
-  joint_cmd_pubs_[0].publish(j1_term);
-  joint_cmd_pubs_[1].publish(j2_term);
-  joint_cmd_pubs_[2].publish(j3_term);
+  // joint_cmd_pubs_[0].publish(j1_term);
+  // joint_cmd_pubs_[1].publish(j2_term);
+  // joint_cmd_pubs_[2].publish(j3_term);
   
  
   // std::cout<<"target_thrust_yaw_term_: "<< target_thrust_yaw_term_<<std::endl;

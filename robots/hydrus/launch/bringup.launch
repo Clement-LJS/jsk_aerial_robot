@@ -100,10 +100,10 @@
     <arg name="spawn_yaw" value="$(arg spawn_yaw)" />
   </include>
 
-  <!-- <group if="$(eval arg('simulation'))">
-    <param name="hole/robot_description" command="$(find xacro)/xacro $(find hydrus)/urdf/hole.urdf" />
-    <node pkg="gazebo_ros" type="spawn_model" name="hole_spawn" args="-param hole/robot_description -urdf -x -2 -y 0 -z 0.8 -model hole" />
-  </group> -->
+  <group if="$(eval arg('simulation'))">
+    <param name="hole/robot_description" command="$(find xacro)/xacro $(find hydrus)/urdf/wall.urdf" />
+    <node pkg="gazebo_ros" type="spawn_model" name="hole_spawn" args="-param hole/robot_description -urdf -x 2.5 -y 0 -z 0.8 -model hole" />
+  </group>
 
   ########## Simulation in Mujoco #########
   <include file="$(find aerial_robot_simulation)/launch/mujoco.launch" if="$(eval arg('simulation') and not arg('real_machine') and arg('mujoco'))" >
