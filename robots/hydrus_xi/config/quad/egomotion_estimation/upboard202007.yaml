@@ -1,7 +1,7 @@
 estimation:
   # sensor plugin
   sensor_list:
-    - sensor_plugin/imu
+    - sensor_plugin/hydrus_imu
     - sensor_plugin/mocap
     - sensor_plugin/gps
 

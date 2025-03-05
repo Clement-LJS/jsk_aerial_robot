@@ -26,7 +26,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://hydrus_xi/urdf/mesh/scene/base_link.dae" />
+          filename="package://hydrus_xi/urdf/mesh/scene/wall_link_25mm.dae" />
       </geometry>
       <material
         name="">
@@ -40,8 +40,17 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://hydrus_xi/urdf/mesh/scene/base_link.dae" />
+          filename="package://hydrus_xi/urdf/mesh/scene/wall_link_25mm.dae" />
       </geometry>
     </collision>
   </link>
+
+  <link name="world"/>
+
+  <joint name="joint" type="fixed">
+    <parent link="world"/>
+    <child link="wall_link"/>
+    <origin xyz="2.5 0 1" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/> 
+  </joint>
 </robot>

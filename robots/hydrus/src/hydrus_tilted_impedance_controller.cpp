@@ -27,8 +27,21 @@ void HydrusTiltedImpedanceController::initialize(ros::NodeHandle nh,
   pos_cmd_.x = -0.3;
   pos_cmd_.y = 0.3;
   pos_cmd_.z = 0.0;
+  est_external_wrench_ = Eigen::VectorXd::Zero(6);
+  init_sum_momentum_ = Eigen::VectorXd::Zero(6);
+  integrate_term_ = Eigen::VectorXd::Zero(6);
+  prev_est_wrench_timestamp_ = 0;
+  estimate_external_wrench_pub_ = nh_.advertise<geometry_msgs::WrenchStamped>("estimated_external_wrench", 1);
 
-
+  wrench_estimate_thread_ = boost::thread([this]()
+                                          {
+                                            ros::Rate loop_rate(100.0);
+                                            while(ros::ok())
+                                              {
+                                                externalWrenchEstimate();
+                                                loop_rate.sleep();
+                                              }
+                                          });
   
 }
 
@@ -52,6 +65,21 @@ bool HydrusTiltedImpedanceController::checkRobotModel()
 
 void HydrusTiltedImpedanceController::controlCore()
 {
+  tf::Matrix3x3 uav_rot = estimator_->getOrientation(Frame::COG, estimate_mode_);
+  tf::Vector3 target_acc_w(pid_controllers_.at(X).result(),
+                           pid_controllers_.at(Y).result(),
+                           pid_controllers_.at(Z).result());
+  tf::Vector3 target_acc_cog = uav_rot.inverse() * target_acc_w;
+  Eigen::VectorXd target_wrench_acc_cog = Eigen::VectorXd::Zero(6);
+  target_wrench_acc_cog.head(3) = Eigen::Vector3d(target_acc_cog.x(), target_acc_cog.y(), target_acc_cog.z());
+
+  double target_ang_acc_x = pid_controllers_.at(ROLL).result();
+  double target_ang_acc_y = pid_controllers_.at(PITCH).result();
+  double target_ang_acc_z = pid_controllers_.at(YAW).result();
+  target_wrench_acc_cog.tail(3) = Eigen::Vector3d(target_ang_acc_x, target_ang_acc_y, target_ang_acc_z);
+  setTargetWrenchAccCog(target_wrench_acc_cog);
+
+
   Eigen::MatrixXd BE = Eigen::MatrixXd::Zero(6, 6);
   Eigen::MatrixXd Bpr = Eigen::MatrixXd::Zero(3, 6);
   Eigen::MatrixXd Bn = Eigen::MatrixXd::Zero(6, 6);
@@ -133,7 +161,7 @@ void HydrusTiltedImpedanceController::controlCore()
   if (mode_.data == 1) // position_control
     J.block(3, 3, 3, 3) = Rc.inverse() * (Je_p - (J1_p + J2_p + J3_p + J4_p) / 4);
 
-  std::cout<<"Q"<<Q<<std::endl;
+  // std::cout<<"Q"<<Q<<std::endl;
 
   double uav_mass = robot_model_->getMass();
   Eigen::Matrix3d inertia = robot_model_->getInertia<Eigen::Matrix3d>();
@@ -251,8 +279,8 @@ void HydrusTiltedImpedanceController::controlCore()
   Eigen::MatrixXd Sigma = Eigen::MatrixXd::Zero(6, 6);
   for (int i = 0; i < 6; i++) Sigma(i, i) = abs(Bx(i, i));
 
-  std::cout<<"CE: "<<CE<<std::endl;
-  std::cout<<"Cx: "<<Cx<<std::endl;
+  // std::cout<<"CE: "<<CE<<std::endl;
+  // std::cout<<"Cx: "<<Cx<<std::endl;
 
   //Kd.block(0, 0, 3, 3) = -Cx.block(0, 0, 3, 3) + 2 * 0.9 * (Kp.block(0, 0, 3, 3) * abs(Bx(2, 2))).sqrt();
   Kd.block(0, 0, 2, 2) = roll_pitch_d_ * Eigen::Matrix2d::Identity();
@@ -311,14 +339,14 @@ void HydrusTiltedImpedanceController::controlCore()
   j1_term.data = u(3) - f1[1] * target_thrust_z_term_[0] * 0.3;
   j2_term.data = u(4) - f2[1] * target_thrust_z_term_[1] * 0.3 - f3[1] * target_thrust_z_term_[0] * (0.6 + 0.3 * abs(cos(joint_pos_[0])));
   j3_term.data = u(5) - f4[1] * target_thrust_z_term_[3] * 0.3;
-  std::cout<<"u1"<<x_dot<<std::endl;
-  std::cout<<"u2"<<Cx * x_d_dot<<std::endl;
-  std::cout<<"u3"<<Kd * x_dot<<std::endl;
-  std::cout<<"u4"<<Kp * x<<std::endl;
+  // std::cout<<"u1"<<x_dot<<std::endl;
+  // std::cout<<"u2"<<Cx * x_d_dot<<std::endl;
+  // std::cout<<"u3"<<Kd * x_dot<<std::endl;
+  // std::cout<<"u4"<<Kp * x<<std::endl;
 
-  std::cout<<"f1"<<f1[1] * target_thrust_z_term_[0] * 0.3<<std::endl;
-  std::cout<<"f2"<<f2[1] * target_thrust_z_term_[1] * 0.3 - f3[1] * target_thrust_z_term_[0] * (0.6 + 0.3 * abs(cos(joint_pos_[0])))<<std::endl;
-  std::cout<<"f3"<<f4[1] * target_thrust_z_term_[3] * 0.3<<std::endl;
+  // std::cout<<"f1"<<f1[1] * target_thrust_z_term_[0] * 0.3<<std::endl;
+  // std::cout<<"f2"<<f2[1] * target_thrust_z_term_[1] * 0.3 - f3[1] * target_thrust_z_term_[0] * (0.6 + 0.3 * abs(cos(joint_pos_[0])))<<std::endl;
+  // std::cout<<"f3"<<f4[1] * target_thrust_z_term_[3] * 0.3<<std::endl;
 
 
   // std::cout<<target_thrust_z_term_<<std::endl;
@@ -341,16 +369,16 @@ void HydrusTiltedImpedanceController::controlCore()
  
 //   // std::cout<<"target_thrust_yaw_term_: "<< target_thrust_yaw_term_<<std::endl;
 //   // std::cout<<"sum: "<< target_thrust_yaw_term_(0) + target_thrust_yaw_term_(1) +target_thrust_yaw_term_(2) +target_thrust_yaw_term_(3)<<std::endl;
-  std::cout<<"joint_pos_:"<<joint_pos_[4]<<" "<<joint_pos_[5]<<" "<<joint_pos_[6]<<std::endl;
-  std::cout<<"tar_joint_pos_:"<<target_joint_pos_[0]<<" "<<target_joint_pos_[1]<<" "<<target_joint_pos_[2]<<std::endl;
-  std::cout<<"uz: "<< uz<<std::endl;
-  std::cout<<"j1: "<< u(3)<<std::endl;
-  std::cout<<"j2: "<< u(4)<<std::endl;
-  std::cout<<"j3: "<< u(5)<<std::endl;
-  std::cout<<"------------------------"<<std::endl;
-  std::cout<<"x: "<< x <<std::endl;
-  std::cout<<"x_dot: "<< x_dot <<std::endl;
-  std::cout<<"pe: "<< Rc.inverse() * (Pe - Pc)<<std::endl;
+  // std::cout<<"joint_pos_:"<<joint_pos_[4]<<" "<<joint_pos_[5]<<" "<<joint_pos_[6]<<std::endl;
+  // std::cout<<"tar_joint_pos_:"<<target_joint_pos_[0]<<" "<<target_joint_pos_[1]<<" "<<target_joint_pos_[2]<<std::endl;
+  // std::cout<<"uz: "<< uz<<std::endl;
+  // std::cout<<"j1: "<< u(3)<<std::endl;
+  // std::cout<<"j2: "<< u(4)<<std::endl;
+  // std::cout<<"j3: "<< u(5)<<std::endl;
+  // std::cout<<"------------------------"<<std::endl;
+  // std::cout<<"x: "<< x <<std::endl;
+  // std::cout<<"x_dot: "<< x_dot <<std::endl;
+  // std::cout<<"pe: "<< Rc.inverse() * (Pe - Pc)<<std::endl;
 //   // std::cout<<"Bx: "<< Bx<<std::endl;
 //   // std::cout<<"Cx: "<< Cx<<std::endl;
 //   // std::cout<<"Kd_: "<< Kd_<<std::endl;
@@ -358,7 +386,7 @@ void HydrusTiltedImpedanceController::controlCore()
 //   // std::cout<<"j: "<<  J_<<std::endl;
 //   // std::cout<<"j: "<<  Pre_J_<<std::endl;
 //   // std::cout<<"Jdot: "<<  (J_ - Pre_J_) / (time-time_).toSec()<<std::endl;
-std::cout<<"u: "<< u<<std::endl;
+// std::cout<<"u: "<< u<<std::endl;
 
   Pre_J_ = J;
   Pre_Pe_ = Rc.inverse() * (Pe - Pc);
@@ -404,6 +432,73 @@ void HydrusTiltedImpedanceController::rosParamInit()
   getParam<double>(param_nh, "yaw_d", yaw_d_, 30.0);
   getParam<double>(param_nh, "joints_d", joints_d_, 5.0);
   getParam<double>(param_nh, "pos_d", pos_d_, 4.0);
+  momentum_observer_matrix_ = Eigen::MatrixXd::Identity(6,6);
+  // double force_weight, torque_weight;
+  // getParam<double>(control_nh, "momentum_observer_force_weight", force_weight, 10.0);
+  // getParam<double>(control_nh, "momentum_observer_torque_weight", torque_weight, 10.0);
+  momentum_observer_matrix_.topRows(3) *= 3;
+  momentum_observer_matrix_.bottomRows(3) *= 2.5;
+}
+
+void HydrusTiltedImpedanceController::externalWrenchEstimate()
+{
+  if(navigator_->getNaviState() != aerial_robot_navigation::HOVER_STATE &&
+     navigator_->getNaviState() != aerial_robot_navigation::LAND_STATE)
+    {
+      prev_est_wrench_timestamp_ = 0;
+      integrate_term_ = Eigen::VectorXd::Zero(6);
+      return;
+    }
+
+  Eigen::Vector3d vel_w, omega_cog; // workaround: use the filtered value
+  auto imu_handler = boost::dynamic_pointer_cast<sensor_plugin::HydrusImu>(estimator_->getImuHandler(0));
+  if (!imu_handler)
+  {
+    ROS_ERROR("HydrusImu is null!");
+    return;
+  }
+
+  tf::vectorTFToEigen(imu_handler->getFilteredVelCog(), vel_w);
+  tf::vectorTFToEigen(imu_handler->getFilteredOmegaCog(), omega_cog);
+  Eigen::Matrix3d cog_rot;
+  tf::matrixTFToEigen(estimator_->getOrientation(Frame::COG, estimate_mode_), cog_rot);
+  Eigen::Matrix3d inertia = robot_model_->getInertia<Eigen::Matrix3d>();
+  double mass = robot_model_->getMass();
+
+  Eigen::VectorXd sum_momentum = Eigen::VectorXd::Zero(6);
+  sum_momentum.head(3) = mass * vel_w;
+  sum_momentum.tail(3) = inertia * omega_cog;
+
+  Eigen::MatrixXd J_t = Eigen::MatrixXd::Identity(6,6);
+  J_t.topLeftCorner(3,3) = cog_rot;
+  Eigen::VectorXd N = mass * robot_model_->getGravity();
+  N.tail(3) = aerial_robot_model::skew(omega_cog) * (inertia * omega_cog);
+
+  const Eigen::VectorXd target_wrench_acc_cog = getTargetWrenchAccCog();
+  Eigen::VectorXd target_wrench_cog = Eigen::VectorXd::Zero(6);
+  target_wrench_cog.head(3) = mass * target_wrench_acc_cog.head(3);
+  target_wrench_cog.tail(3) = inertia * target_wrench_acc_cog.tail(3);
+  if(prev_est_wrench_timestamp_ == 0)
+    {
+      prev_est_wrench_timestamp_ = ros::Time::now().toSec();
+      init_sum_momentum_ = sum_momentum; // not good
+    }
+
+  double dt = ros::Time::now().toSec() - prev_est_wrench_timestamp_;
+  integrate_term_ += (J_t * target_wrench_cog - N + est_external_wrench_) * dt;
+  est_external_wrench_ = momentum_observer_matrix_ * (sum_momentum - init_sum_momentum_ - integrate_term_);
+  Eigen::VectorXd est_external_wrench_cog = est_external_wrench_;
+  est_external_wrench_cog.head(3) = cog_rot.inverse() * est_external_wrench_.head(3);
+  geometry_msgs::WrenchStamped wrench_msg;
+  wrench_msg.header.stamp.fromSec(estimator_->getImuLatestTimeStamp());
+  wrench_msg.wrench.force.x = est_external_wrench_(0);
+  wrench_msg.wrench.force.y = est_external_wrench_(1);
+  wrench_msg.wrench.force.z = est_external_wrench_(2);
+  wrench_msg.wrench.torque.x = est_external_wrench_(3);
+  wrench_msg.wrench.torque.y = est_external_wrench_(4);
+  wrench_msg.wrench.torque.z = est_external_wrench_(5);
+  estimate_external_wrench_pub_.publish(wrench_msg);
+  prev_est_wrench_timestamp_ = ros::Time::now().toSec();
 }
 
 

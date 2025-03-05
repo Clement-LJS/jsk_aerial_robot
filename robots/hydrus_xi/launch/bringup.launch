@@ -109,7 +109,7 @@
   ######### Hole model #########
   <group if="$(eval arg('simulation'))">
     <param name="hole/robot_description" command="$(find xacro)/xacro $(find hydrus_xi)/urdf/wall.urdf" />
-    <node pkg="gazebo_ros" type="spawn_model" name="hole_spawn" args="-param hole/robot_description -urdf -x 2.5 -y 0 -z 1.0 -model hole" />
+    <node pkg="gazebo_ros" type="spawn_model" name="hole_spawn" args="-param hole/robot_description -urdf -x 0 -y 0 -z 0 -model hole" />
   </group>
 
   ########## Simulation in Mujoco #########

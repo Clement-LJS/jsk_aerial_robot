@@ -2,7 +2,7 @@
 /*********************************************************************
  * Software License Agreement (BSD License)
  *
- *  Copyright (c) 2020, JSK Lab
+ *  Copyright (c) 2021, JSK Lab
  *  All rights reserved.
  *
  *  Redistribution and use in source and binary forms, with or without
@@ -35,66 +35,63 @@
 
 #pragma once
 
-#include <aerial_robot_control/control/under_actuated_tilted_impedance_controller.h>
-#include <spinal/PMatrixPseudoInverseWithInertia.h>
-#include <geometry_msgs/WrenchStamped.h>
-#include <hydrus/imu.h>
-#include <thread>
+#include <aerial_robot_estimation/sensor/imu.h>
+#include <geometry_msgs/Vector3Stamped.h>
 
-namespace aerial_robot_control
+using namespace Eigen;
+using namespace std;
+
+namespace sensor_plugin
 {
-  class HydrusTiltedImpedanceController: public UnderActuatedTiltedImpedanceController
+  class HydrusImu :public sensor_plugin::Imu
   {
   public:
-    HydrusTiltedImpedanceController();
-    ~HydrusTiltedImpedanceController()
-    {
-      wrench_estimate_thread_.interrupt();
-      wrench_estimate_thread_.join();
-    }
 
-
-    void initialize(ros::NodeHandle nh, ros::NodeHandle nhp,
+    void initialize(ros::NodeHandle nh,
                     boost::shared_ptr<aerial_robot_model::RobotModel> robot_model,
                     boost::shared_ptr<aerial_robot_estimation::StateEstimator> estimator,
-                    boost::shared_ptr<aerial_robot_navigation::BaseNavigator> navigator,
-                    double ctrl_loop_rate);
+                    string sensor_name, int index) override;
+
+    void setFilteredOmegaCog(const tf::Vector3 filtered_omega_cog)
+    {
+      boost::lock_guard<boost::mutex> lock(omega_mutex_);
+      filtered_omega_cog_ = filtered_omega_cog;
+    }
+
+    void setFilteredVelCog(const tf::Vector3 filtered_vel_cog)
+    {
+      boost::lock_guard<boost::mutex> lock(vel_mutex_);
+      filtered_vel_cog_ = filtered_vel_cog;
+    }
+
+    const tf::Vector3 getFilteredOmegaCog()
+    {
+      boost::lock_guard<boost::mutex> lock(omega_mutex_);
+      return filtered_omega_cog_;
+    }
+
+    const tf::Vector3 getFilteredVelCog()
+    {
+      boost::lock_guard<boost::mutex> lock(vel_mutex_);
+      return filtered_vel_cog_;
+    }
 
   protected:
 
-    ros::Publisher estimate_external_wrench_pub_;
+    void ImuCallback(const spinal::ImuConstPtr& imu_msg) override;
 
-    Eigen::MatrixXd Pre_J_ = Eigen::MatrixXd::Zero(6, 6);
+    // work around to obtain filter states
+    boost::mutex omega_mutex_;
+    boost::mutex vel_mutex_;
+    tf::Vector3 filtered_vel_cog_;
+    tf::Vector3 filtered_omega_cog_;
+    IirFilter lpf_omega_; // for gyro
 
-    double roll_pitch_p_, yaw_p_, joints_p_, pos_p_, roll_pitch_d_, yaw_d_, joints_d_, pos_d_;
-
-    std::mutex wrench_mutex_;
-    boost::thread wrench_estimate_thread_;
-    Eigen::VectorXd init_sum_momentum_;
-    Eigen::VectorXd est_external_wrench_;
-    Eigen::VectorXd integrate_term_;
-    double prev_est_wrench_timestamp_;
-    Eigen::VectorXd target_wrench_acc_cog_;
-    Eigen::MatrixXd momentum_observer_matrix_;
-
-    void externalWrenchEstimate();
-    const Eigen::VectorXd getTargetWrenchAccCog()
-    {
-      std::lock_guard<std::mutex> lock(wrench_mutex_);
-      return target_wrench_acc_cog_;
-    }
-    void setTargetWrenchAccCog(const Eigen::VectorXd target_wrench_acc_cog)
-    {
-      std::lock_guard<std::mutex> lock(wrench_mutex_);
-      target_wrench_acc_cog_ = target_wrench_acc_cog;
-    }
-
-    bool checkRobotModel() override;
-    virtual void controlCore() override;
-    virtual void rosParamInit() override;
-    Eigen::Matrix3d getPositionJacobian(std::string name);
-    Eigen::Matrix3d getOrientationJacobian(std::string name);
-    Eigen::MatrixXd getCmatrix(Eigen::MatrixXd delta_M, Eigen::VectorXd delta_xi,  Eigen::VectorXd xi_dot);
+    ros::Publisher omega_filter_pub_; // debug
   };
-   
 };
+
+
+
+
+
