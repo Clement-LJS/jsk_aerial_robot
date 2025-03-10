@@ -257,6 +257,8 @@ namespace aerial_robot_control
 
     pid_controllers_.at(Z).update(err_z, du_z, err_v_z, target_acc_.z());
 
+
+
     if(pid_controllers_.at(Z).getErrI() < 0) pid_controllers_.at(Z).setErrI(0);
 
     if(navigator_->getForceLandingFlag())
@@ -264,6 +266,13 @@ namespace aerial_robot_control
         pid_controllers_.at(Z).setLimitP(z_p_limit); // revert z p limit
         pid_controllers_.at(Z).setErrP(0); // for derived controller which use err_p in feedback control (e.g., LQI)
       }
+//       std::cout<<"err:"<<err_z<<std::endl;
+// std::cout<<"err_v_z:"<<err_v_z<<std::endl;
+// std::cout<<"target_acc_.z():"<<target_acc_.z()<<std::endl;
+// std::cout<<"z:"<<pid_controllers_.at(Z).result()<<std::endl;
+// std::cout<<"P:"<<pid_controllers_.at(Z).getPTerm()<<std::endl;
+// std::cout<<"I:"<<pid_controllers_.at(Z).getITerm()<<std::endl;
+// std::cout<<"D:"<<pid_controllers_.at(Z).getDTerm()<<std::endl;
 
     // roll pitch
     double du_rp = du;

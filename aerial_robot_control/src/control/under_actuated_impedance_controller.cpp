@@ -195,6 +195,7 @@ void UnderActuatedImpedanceController::controlCore()
   target_pitch_ = target_acc_dash.x() / aerial_robot_estimation::G;
   target_roll_ = -target_acc_dash.y() / aerial_robot_estimation::G;
 
+ 
 
 
   //feed-forward term for z
@@ -226,7 +227,6 @@ void UnderActuatedImpedanceController::controlCore()
 
   // special process for yaw since the bandwidth between PC and spinal
   double max_yaw_scale = 0; // for reconstruct yaw control term in spinal
-  //std::cout << "---------------------------------------" << std::endl;
   for(int i = 0; i < motor_num_; i++)
  
     {

@@ -396,7 +396,7 @@ void HydrusTiltedImpedanceController::controlCore()
   time_ = time;
 
 
-  UnderActuatedImpedanceController::controlCore();
+  UnderActuatedTiltedImpedanceController::controlCore();
 }
 
 Eigen::MatrixXd HydrusTiltedImpedanceController::getCmatrix(Eigen::MatrixXd delta_M, Eigen::VectorXd delta_xi,  Eigen::VectorXd xi_dot)

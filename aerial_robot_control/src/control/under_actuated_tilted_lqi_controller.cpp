@@ -89,6 +89,7 @@ void UnderActuatedTiltedLQIController::controlCore()
 
   if(residual > 0)
     {
+      std::cout<<residual<<std::endl;  
       pid_controllers_.at(Z).setErrI(pid_controllers_.at(Z).getPrevErrI());
       target_thrust_z_term *= (1 - residual / max_term);
     }
