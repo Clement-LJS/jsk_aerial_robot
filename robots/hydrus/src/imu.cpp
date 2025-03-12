@@ -62,25 +62,34 @@ namespace sensor_plugin
 
   // override to get filtred gyro data
   void HydrusImu::ImuCallback(const spinal::ImuConstPtr& imu_msg)
-  {   
-    
+  {
     imu_stamp_ = imu_msg->stamp;
     tf::Vector3 filtered_omega;
 
     for(int i = 0; i < 3; i++)
       {
-        if(std::isnan(imu_msg->acc_data[i]) || std::isnan(imu_msg->angles[i]) ||
-           std::isnan(imu_msg->gyro_data[i]) || std::isnan(imu_msg->mag_data[i]))
+        if(std::isnan(imu_msg->acc[i]) || std::isnan(imu_msg->gyro[i]) || std::isnan(imu_msg->mag[i]))
           {
-            ROS_ERROR_THROTTLE(1.0, "IMU sensor publishes Nan value!");
+            ROS_ERROR_THROTTLE(1.0, "IMU plugin receives Nan value in IMU sensors !");
             return;
           }
 
-        acc_b_[i] = imu_msg->acc_data[i];
-        euler_[i] = imu_msg->angles[i];
-        omega_[i] = imu_msg->gyro_data[i];
-        mag_[i] = imu_msg->mag_data[i];
+        acc_b_[i] = imu_msg->acc[i];
+        omega_[i] = imu_msg->gyro[i];
+        mag_[i] = imu_msg->mag[i];
       }
+
+    if(std::isnan(imu_msg->quaternion[0]) || std::isnan(imu_msg->quaternion[1]) ||
+       std::isnan(imu_msg->quaternion[2]) || std::isnan(imu_msg->quaternion[3]))
+      {
+        ROS_ERROR_THROTTLE(1.0, "IMU plugin receives Nan value in Quaternion!");
+        return;
+      }
+
+    tf::Quaternion raw_q(imu_msg->quaternion[0], imu_msg->quaternion[1],
+                         imu_msg->quaternion[2], imu_msg->quaternion[3]);
+    raw_rot_ = tf::Matrix3x3(raw_q);
+
 
     if(first_flag)
       {
