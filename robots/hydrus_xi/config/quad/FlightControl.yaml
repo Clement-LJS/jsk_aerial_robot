@@ -1,4 +1,4 @@
-aerial_robot_control_name: aerial_robot_control/hydrus_tilted_impedance_controller
+aerial_robot_control_name: aerial_robot_control/hydrus_tilted_lqi_controller
 
 controller:
   xy:
@@ -61,8 +61,8 @@ controller:
     roll_pitch_p: 300.0
     roll_pitch_d: 30.0
 
-    yaw_p: 40.0
-    yaw_d: 4.0
+    yaw_p: 4.0
+    yaw_d: 2.0
 
     joints_p: 13.0
     joints_d: 2.0
