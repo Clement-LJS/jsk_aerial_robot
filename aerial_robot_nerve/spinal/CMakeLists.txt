@@ -29,6 +29,7 @@ add_message_files(
   Gyro.msg
   SimpleImu.msg
   FourAxisCommand.msg
+  FourAxisCommandImpedance.msg
   Imu.msg
   Barometer.msg
   Gps.msg

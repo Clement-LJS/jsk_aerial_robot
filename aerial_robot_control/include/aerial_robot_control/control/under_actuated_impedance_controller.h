@@ -40,8 +40,9 @@
 #include <aerial_robot_control/LQIConfig.h>
 #include <aerial_robot_msgs/FourAxisGain.h>
 #include <dynamic_reconfigure/server.h>
-#include <spinal/RollPitchYawTerms.h>
+#include <spinal/FourAxisCommandImpedance.h>
 #include <spinal/PMatrixPseudoInverseWithInertia.h>
+#include <spinal/RollPitchYawTerms.h>
 #include <ros/ros.h>
 #include <thread>
 #include <std_msgs/Float64.h>
@@ -104,6 +105,8 @@ namespace aerial_robot_control
     Eigen::VectorXd Pre_Pe_ = Eigen::VectorXd::Zero(3);
     Eigen::VectorXd Pre_xi_ = Eigen::VectorXd::Zero(9);
     Eigen::VectorXd target_thrust_z_term_;
+    Eigen::VectorXd target_thrust_roll_term_;
+    Eigen::VectorXd target_thrust_pitch_term_;
     Eigen::VectorXd target_thrust_yaw_term_;
     ros::Time time_;
     ros::Subscriber joint_state_sub_;

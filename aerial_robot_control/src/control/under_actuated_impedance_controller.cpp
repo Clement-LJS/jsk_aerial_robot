@@ -60,7 +60,7 @@ void UnderActuatedImpedanceController::initialize(ros::NodeHandle nh,
 
   //publisher
   rpy_gain_pub_ = nh_.advertise<spinal::RollPitchYawTerms>("rpy/gain", 1);
-  flight_cmd_pub_ = nh_.advertise<spinal::FourAxisCommand>("four_axes/command", 1);
+  flight_cmd_pub_ = nh_.advertise<spinal::FourAxisCommandImpedance>("four_axes_imp/command", 1);
   p_matrix_pseudo_inverse_inertia_pub_ = nh_.advertise<spinal::PMatrixPseudoInverseWithInertia>("p_matrix_pseudo_inverse_inertia", 1);
   joint_state_sub_ = nh_.subscribe("joint_states", 1, &UnderActuatedImpedanceController::jointStateCallback, this);
   joint_cmd_sub_ = nh_.subscribe("joints_ctrl", 1, &UnderActuatedImpedanceController::jointCmdCallback, this);
@@ -68,6 +68,8 @@ void UnderActuatedImpedanceController::initialize(ros::NodeHandle nh,
   mode_sub_ = nh_.subscribe("imp_mode", 1, &UnderActuatedImpedanceController::modeCallback, this);
 
   target_thrust_z_term_ = Eigen::VectorXd::Zero(motor_num_);
+  target_thrust_roll_term_ = Eigen::VectorXd::Zero(motor_num_);
+  target_thrust_pitch_term_ = Eigen::VectorXd::Zero(motor_num_);
   target_thrust_yaw_term_ = Eigen::VectorXd::Zero(motor_num_);
 
   joint_pos_ = Eigen::VectorXd::Zero(robot_model_->getJointNum());
