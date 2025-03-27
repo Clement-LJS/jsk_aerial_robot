@@ -31,6 +31,7 @@ namespace aerial_robot_model {
 
     // update robot model instantly for fixed model
     if (fixed_model_) {
+      std::cout<<"in"<<std::endl;
       updateRobotModel();
     }
   }
@@ -374,7 +375,6 @@ namespace aerial_robot_model {
  
     setInertia((cog.Inverse() * link_inertia).getRotationalInertia());
     setCog2Baselink(cog.Inverse() * f_baselink);
-
 
 
     /* thrust point based on COG */

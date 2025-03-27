@@ -53,7 +53,6 @@ void UnderActuatedTiltedImpedanceController::initialize(ros::NodeHandle nh,
   pid_msg_.z.d_term.resize(1);
   z_limit_ = pid_controllers_.at(Z).getLimitSum();
   pid_controllers_.at(Z).setLimitSum(1e6); // do not clamp the sum of PID terms for z axis
-
 }
 
 void UnderActuatedTiltedImpedanceController::controlCore()
@@ -115,7 +114,7 @@ void UnderActuatedTiltedImpedanceController::controlCore()
   // special process for yaw since the bandwidth between PC and spinal
   //std::cout<<"P"<<robot_model_->calcWrenchMatrixOnCoG()<<std::endl;
   candidate_yaw_term_ = target_thrust_yaw_term_(0);
-
+  candidate_yaw_term_ = 0.0;
 }
 
 bool UnderActuatedTiltedImpedanceController::optimalGain()

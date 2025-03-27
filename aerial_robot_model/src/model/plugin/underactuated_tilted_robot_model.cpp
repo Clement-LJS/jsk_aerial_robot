@@ -57,6 +57,7 @@ UnderactuatedTiltedRobotModel::UnderactuatedTiltedRobotModel(bool init_with_rosp
 
   /* set the hoverable frame as CoG and reupdate model */
   setCogDesireOrientation(f_norm_roll, f_norm_pitch, 0);
+  std::cout<<"cc"<<std::endl;
   updateRobotModel();
 
   if(getVerbose())

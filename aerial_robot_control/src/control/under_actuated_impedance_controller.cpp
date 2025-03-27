@@ -71,7 +71,7 @@ void UnderActuatedImpedanceController::initialize(ros::NodeHandle nh,
   target_thrust_yaw_term_ = Eigen::VectorXd::Zero(motor_num_);
 
   joint_pos_ = Eigen::VectorXd::Zero(robot_model_->getJointNum());
-
+  joint_vel_ = Eigen::VectorXd::Zero(robot_model_->getJointNum());
   // joint_pos_ = Eigen::VectorXd::Zero(6);
   // joint_vel_ = Eigen::VectorXd::Zero(6); 
   // // target_joint_pos_ = Eigen::VectorXd::Zero(6);
@@ -180,6 +180,7 @@ void UnderActuatedImpedanceController::sendFourAxisCommand()
   flight_command_data.angles[1] = target_pitch_;
   flight_command_data.angles[2] = candidate_yaw_term_;
   flight_command_data.base_thrust = target_base_thrust_;
+  std::cout<<flight_command_data<<std::endl;
   flight_cmd_pub_.publish(flight_command_data);
 }
 
@@ -243,8 +244,8 @@ void UnderActuatedImpedanceController::controlCore()
      
         // }
     }
+   
     candidate_yaw_term_ = target_thrust_yaw_term_(0);
-
     // std::cout << target_thrust_yaw_term << std::endl;
     // std::cout << candidate_yaw_term_ << std::endl;
     //std::cout << "---------------------------------------" << std::endl;
@@ -505,17 +506,19 @@ void UnderActuatedImpedanceController::sendRotationalInertiaComp()
 
 void UnderActuatedImpedanceController::jointStateCallback(const sensor_msgs::JointStateConstPtr& state)
 {
-  if (joint_pos_.size() == 0)
+  if (joint_pos_.size() > 0)
   {
-
-    //joint_name_.resize(state->position.size());
-  }
-
-  for (int i = 0; i < state->name.size(); i++)
-  {
-    //joint_name_[i] = state->name[i];
-    joint_pos_[i] = state->position[i];
-    joint_vel_[i] = state->velocity[i];
+    for (int i = 0; i < state->name.size(); i++)
+    {
+      // std::cout<<"state size"<<state->name.size()<<std::endl;
+      // std::cout<<"pos size"<<joint_pos_.size()<<std::endl;
+      // std::cout<<"vel size"<<joint_vel_.size()<<std::endl;
+      // std::cout<<"pos size"<<state->position.size()<<std::endl;
+      // std::cout<<"vel size"<<state->velocity.size()<<std::endl;
+      //joint_name_[i] = state->name[i];
+      joint_pos_[i] = state->position[i];
+      // joint_vel_[i] = state->velocity[i];
+    }
   }
 }
 

@@ -73,7 +73,6 @@ AerialRobotBase::AerialRobotBase(ros::NodeHandle nh, ros::NodeHandle nh_private)
   //  - statePublish timer in state estimator for publish odometry and tf
   //  - service server
   callback_spinner_.start();
-
 }
 
 AerialRobotBase::~AerialRobotBase()

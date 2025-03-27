@@ -199,10 +199,8 @@ namespace aerial_robot_control
   bool PoseLinearController::update()
   {
     if(!ControlBase::update()) return false;
-
     controlCore();
     sendCmd();
-
     return true;
   }
 

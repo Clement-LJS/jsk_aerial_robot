@@ -320,6 +320,9 @@ void HydrusTiltedImpedanceController::controlCore()
   Eigen::VectorXd target_total_thrust = P_inv.col(2) * uz + P_inv.col(3) * u(0) + P_inv.col(4) * u(1) + P_inv.col(5) * u(2);
   target_thrust_z_term_ = P_inv.col(2) * uz;
   //if (target_joint_pos_[0] > 1.56)
+  std::cout<<"u(2)"<<u(2)<<std::endl;
+  std::cout<<"P_inv.col(5))"<<P_inv.col(5)<<std::endl;
+  std::cout<<"target_thrust_yaw_term_"<<target_thrust_yaw_term_<<std::endl;
   target_thrust_yaw_term_ =  P_inv.col(5) * u(2); 
   std_msgs::Float64 j1_term, j2_term, j3_term;
 
