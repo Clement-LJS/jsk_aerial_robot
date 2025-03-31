@@ -44,6 +44,7 @@
 #include <spinal/Pwms.h>
 #include <spinal/PwmTest.h>
 #include <spinal/FourAxisCommand.h>
+#include <spinal/FourAxisCommandImpedance.h>
 #include <spinal/RollPitchYawTerms.h>
 #include <spinal/PwmInfo.h>
 #include <spinal/UavInfo.h>
@@ -137,7 +138,8 @@ private:
   float sim_voltage_;
 
 #else
-  ros::Subscriber<spinal::FourAxisCommand, AttitudeController> four_axis_cmd_sub_;
+  // ros::Subscriber<spinal::FourAxisCommand, AttitudeController> four_axis_cmd_sub_;
+  ros::Subscriber<spinal::FourAxisCommandImpedance, AttitudeController> four_axis_cmd_sub_;
   ros::Subscriber<spinal::PwmInfo, AttitudeController> pwm_info_sub_;
   ros::Subscriber<spinal::RollPitchYawTerms, AttitudeController> rpy_gain_sub_;
   ros::Subscriber<spinal::PwmTest, AttitudeController> pwm_test_sub_;
@@ -182,6 +184,10 @@ private:
   float thrust_d_gain_[MAX_MOTOR_NUMBER][3];
   float torque_allocation_matrix_inv_[MAX_MOTOR_NUMBER][3];
   float base_thrust_term_[MAX_MOTOR_NUMBER]; //[N]
+  // Add roll/pitch/yaw control term
+  float roll_thrust_term_[MAX_MOTOR_NUMBER]; //[N]
+  float pitch_thrust_term_[MAX_MOTOR_NUMBER]; //[N]
+  float yaw_thrust_term_[MAX_MOTOR_NUMBER]; //[N]
   float roll_pitch_term_[MAX_MOTOR_NUMBER]; //[N]
   float yaw_term_[MAX_MOTOR_NUMBER]; //[N]
   float extra_yaw_pi_term_[MAX_MOTOR_NUMBER]; //[N]
@@ -215,7 +221,8 @@ private:
   uint32_t pwm_pub_last_time_;
   float pwm_test_value_[MAX_MOTOR_NUMBER]; // PWM Test
 
-  void fourAxisCommandCallback( const spinal::FourAxisCommand &cmd_msg);
+  // void fourAxisCommandCallback( const spinal::FourAxisCommand &cmd_msg);
+  void fourAxisCommandCallback( const spinal::FourAxisCommandImpedance &cmd_msg);
   void pwmInfoCallback( const spinal::PwmInfo &info_msg);
   void rpyGainCallback( const spinal::RollPitchYawTerms &gain_msg);
   void pMatrixInertiaCallback(const spinal::PMatrixPseudoInverseWithInertia& msg);

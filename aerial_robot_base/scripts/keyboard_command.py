@@ -73,9 +73,9 @@ if __name__=="__main__":
         xy_vel   = rospy.get_param("xy_vel", 0.2)
         z_vel    = rospy.get_param("z_vel", 0.2)
         yaw_vel  = rospy.get_param("yaw_vel", 0.2)
-        xy_vel   = 0.05
-        z_vel    = 0.05
-        yaw_vel  = 0.05
+        # xy_vel   = 0.05
+        # z_vel    = 0.05
+        # yaw_vel  = 0.05
 
         motion_start_pub = rospy.Publisher('task_start', Empty, queue_size=1)
 

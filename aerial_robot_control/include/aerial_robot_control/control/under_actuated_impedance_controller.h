@@ -79,6 +79,10 @@ namespace aerial_robot_control
     double target_roll_, target_pitch_;
     double candidate_yaw_term_;
     std::vector<float> target_base_thrust_;
+    std::vector<float> target_roll_thrust_;
+    std::vector<float> target_pitch_thrust_;
+    std::vector<float> target_yaw_thrust_;
+
 
     int lqi_mode_;
     bool clamp_gain_;

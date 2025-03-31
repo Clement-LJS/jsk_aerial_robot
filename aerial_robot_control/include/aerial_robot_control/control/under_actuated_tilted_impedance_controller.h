@@ -60,7 +60,7 @@ namespace aerial_robot_control
     double att_control_weight_;
 
     double z_limit_;
-
+    void sendFourAxisCommand() override;
     void controlCore() override;
     bool optimalGain() override;
     void publishGain() override;

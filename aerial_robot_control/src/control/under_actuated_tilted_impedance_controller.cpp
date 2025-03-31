@@ -55,6 +55,20 @@ void UnderActuatedTiltedImpedanceController::initialize(ros::NodeHandle nh,
   pid_controllers_.at(Z).setLimitSum(1e6); // do not clamp the sum of PID terms for z axis
 }
 
+void UnderActuatedTiltedImpedanceController::sendFourAxisCommand()
+{
+  spinal::FourAxisCommandImpedance flight_command_data;
+  flight_command_data.angles[0] = target_roll_;
+  flight_command_data.angles[1] = target_pitch_;
+  flight_command_data.angles[2] = candidate_yaw_term_;
+  flight_command_data.base_thrust = target_base_thrust_;
+  flight_command_data.roll_thrust = target_roll_thrust_;
+  flight_command_data.pitch_thrust = target_pitch_thrust_;
+  flight_command_data.yaw_thrust = target_yaw_thrust_;
+  flight_cmd_pub_.publish(flight_command_data);
+}
+
+
 void UnderActuatedTiltedImpedanceController::controlCore()
 {
   PoseLinearController::controlCore();
@@ -92,6 +106,9 @@ void UnderActuatedTiltedImpedanceController::controlCore()
   for(int i = 0; i < motor_num_; i++)
     {
       target_base_thrust_.at(i) = target_thrust_z_term(i);
+      target_roll_thrust_.at(i) = target_thrust_roll_term_(i);
+      target_pitch_thrust_.at(i) = target_thrust_pitch_term_(i);
+      target_yaw_thrust_.at(i) = target_thrust_yaw_term_(i);
       pid_msg_.z.total.at(i) =  target_thrust_z_term(i);
     }
 
@@ -99,7 +116,6 @@ void UnderActuatedTiltedImpedanceController::controlCore()
   double ff_ang_yaw = navigator_->getTargetAngAcc().z();
   Eigen::VectorXd ff_ang_yaw_term = q_mat_inv.col(3) * ff_ang_yaw;
   target_thrust_yaw_term_ += ff_ang_yaw_term;
-
 
   // constraint yaw (also I term)
   int index_yaw;
@@ -110,7 +126,6 @@ void UnderActuatedTiltedImpedanceController::controlCore()
       pid_controllers_.at(YAW).setErrI(pid_controllers_.at(YAW).getPrevErrI());
       target_thrust_yaw_term_ *= (1 - yaw_residual / max_yaw_term);
     }
-
   // special process for yaw since the bandwidth between PC and spinal
   //std::cout<<"P"<<robot_model_->calcWrenchMatrixOnCoG()<<std::endl;
   candidate_yaw_term_ = target_thrust_yaw_term_(0);

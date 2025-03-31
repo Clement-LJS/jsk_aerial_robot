@@ -60,7 +60,7 @@ void UnderActuatedImpedanceController::initialize(ros::NodeHandle nh,
 
   //publisher
   rpy_gain_pub_ = nh_.advertise<spinal::RollPitchYawTerms>("rpy/gain", 1);
-  flight_cmd_pub_ = nh_.advertise<spinal::FourAxisCommandImpedance>("four_axes_imp/command", 1);
+  flight_cmd_pub_ = nh_.advertise<spinal::FourAxisCommandImpedance>("four_axes/command", 1);
   p_matrix_pseudo_inverse_inertia_pub_ = nh_.advertise<spinal::PMatrixPseudoInverseWithInertia>("p_matrix_pseudo_inverse_inertia", 1);
   joint_state_sub_ = nh_.subscribe("joint_states", 1, &UnderActuatedImpedanceController::jointStateCallback, this);
   joint_cmd_sub_ = nh_.subscribe("joints_ctrl", 1, &UnderActuatedImpedanceController::jointCmdCallback, this);
@@ -98,6 +98,9 @@ void UnderActuatedImpedanceController::initialize(ros::NodeHandle nh,
 
   //message
   target_base_thrust_.resize(motor_num_);
+  target_roll_thrust_.resize(motor_num_);
+  target_pitch_thrust_.resize(motor_num_);
+  target_yaw_thrust_.resize(motor_num_);
   pid_msg_.z.total.resize(motor_num_);
   pid_msg_.z.p_term.resize(motor_num_);
   pid_msg_.z.i_term.resize(motor_num_);
@@ -182,7 +185,6 @@ void UnderActuatedImpedanceController::sendFourAxisCommand()
   flight_command_data.angles[1] = target_pitch_;
   flight_command_data.angles[2] = candidate_yaw_term_;
   flight_command_data.base_thrust = target_base_thrust_;
-  std::cout<<flight_command_data<<std::endl;
   flight_cmd_pub_.publish(flight_command_data);
 }
 
