@@ -110,11 +110,19 @@ void HydrusTiltedImpedanceController::controlCore()
   Eigen::Vector3d P2 = robot_model_->getPosition("link2");
   Eigen::Vector3d P3 = robot_model_->getPosition("link3");
   Eigen::Vector3d P4 = robot_model_->getPosition("link4");
+  std::cout<<"p1: "<<P1<<std::endl;
+  std::cout<<"p2: "<<P2<<std::endl;
+  std::cout<<"p3: "<<P3<<std::endl;
+  std::cout<<"p4: "<<P4<<std::endl;
   Eigen::Vector3d Pe = robot_model_->getPosition("end_effector");
   Eigen::Matrix3d R1 = robot_model_->getRotation("link1");
   Eigen::Matrix3d R2 = robot_model_->getRotation("link2");
   Eigen::Matrix3d R3 = robot_model_->getRotation("link3");
   Eigen::Matrix3d R4 = robot_model_->getRotation("link4");
+  std::cout<<"R1: "<<R1<<std::endl;
+  std::cout<<"R2: "<<R2<<std::endl;
+  std::cout<<"R3: "<<R3<<std::endl;
+  std::cout<<"R4: "<<R4<<std::endl;
   double M1 = robot_model_->getInertiaMap().at("link1").getMass();
   double M2 = robot_model_->getInertiaMap().at("link2").getMass();
   double M3 = robot_model_->getInertiaMap().at("link3").getMass();
@@ -207,22 +215,22 @@ void HydrusTiltedImpedanceController::controlCore()
 
   double target_roll = target_roll_;
   double target_pitch = target_pitch_;
-  if (target_roll > 0.03)
-    target_roll = 0.03;
-  else if (target_roll < -0.03)
-    target_roll = -0.03;
+  // if (target_roll > 0.03)
+  //   target_roll = 0.03;
+  // else if (target_roll < -0.03)
+  //   target_roll = -0.03;
 
-  if (target_pitch > 0.03)
-    target_pitch = 0.03;
-  else if (target_pitch < -0.03)
-    target_pitch = -0.03;
+  // if (target_pitch > 0.03)
+  //   target_pitch = 0.03;
+  // else if (target_pitch < -0.03)
+  //   target_pitch = -0.03;
   tf::Vector3 target_rpy_cog(target_roll, target_pitch, 0);
 
-  tf::Vector3 target_rpy = tf::Matrix3x3(tf::createQuaternionFromYaw(rpy_.z())) * target_rpy_cog;
+  // tf::Vector3 target_rpy = tf::Matrix3x3(tf::createQuaternionFromYaw(rpy_.z())) * target_rpy_cog;
 
 
-  x(0) = target_rpy.x() - rpy_.x();
-  x(1) = target_rpy.y() - rpy_.y();
+  x(0) = target_roll_ - rpy_.x();
+  x(1) = target_pitch_ - rpy_.y();
   x(2) = pid_controllers_.at(YAW).getErrP();
   x_dot(0) = pid_controllers_.at(ROLL).getErrD();
   x_dot(1) = pid_controllers_.at(PITCH).getErrD();
@@ -316,14 +324,14 @@ void HydrusTiltedImpedanceController::controlCore()
 
   // Exploiting Redundancy in Cartesian Impedance Control of UAVs Equipped with a Robotic Arm, Equation (9)
   Eigen::VectorXd a = Cx * x_d_dot;
-  for (int i = 0; i < a.size(); i++)
-  {
-    if (a(i) > 0.3)
-      a(i) = 0.3;
+  // for (int i = 0; i < a.size(); i++)
+  // {
+  //   if (a(i) > 0.3)
+  //     a(i) = 0.3;
 
-    if (a(i) < -0.3)
-      a(i) = -0.3;
-  }
+  //   if (a(i) < -0.3)
+  //     a(i) = -0.3;
+  // }
  // u = J.transpose() * (Bx * x_d_ddot + Cx * x_d_dot + Kd * x_dot + Kp * x);
   u = J.transpose() * (Bx * x_d_ddot + a + Kd * x_dot + Kp * x);
   // Gravity compensation

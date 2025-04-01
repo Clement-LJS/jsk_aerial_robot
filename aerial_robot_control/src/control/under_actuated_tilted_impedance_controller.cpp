@@ -82,6 +82,14 @@ void UnderActuatedTiltedImpedanceController::controlCore()
   target_pitch_ = atan2(target_acc_dash.x(), target_acc_dash.z());
   target_roll_ = atan2(-target_acc_dash.y(), sqrt(target_acc_dash.x() * target_acc_dash.x() + target_acc_dash.z() * target_acc_dash.z()));
 
+  std::cout<<"x "<<target_acc_w.x()<<std::endl;
+  std::cout<<"y "<<target_acc_w.y()<<std::endl;
+  std::cout<<"z "<<target_acc_w.z()<<std::endl;
+  std::cout<<"yaw "<<rpy_.z()<<std::endl;
+  std::cout<<"xd "<<target_acc_dash.x()<<std::endl;
+  std::cout<<"yd "<<target_acc_dash.y()<<std::endl;
+  std::cout<<"zd "<<target_acc_dash.z()<<std::endl;
+
   if(navigator_->getForceLandingFlag())
     {
       target_pitch_ = 0;
