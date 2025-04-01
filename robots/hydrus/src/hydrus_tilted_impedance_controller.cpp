@@ -84,16 +84,19 @@ void HydrusTiltedImpedanceController::controlCore()
   Eigen::MatrixXd Bpr = Eigen::MatrixXd::Zero(3, 6);
   Eigen::MatrixXd Bn = Eigen::MatrixXd::Zero(6, 6);
   Eigen::MatrixXd CE = Eigen::MatrixXd::Zero(6, 6);
-  Eigen::MatrixXd Kp = Eigen::MatrixXd::Zero(6, 6);
-  Eigen::MatrixXd Kd = Eigen::MatrixXd::Zero(6, 6);
+  //Modified
+  Eigen::MatrixXd Kp = Eigen::MatrixXd::Zero(3, 3);
+  Eigen::MatrixXd Kd = Eigen::MatrixXd::Zero(3, 3);
+
   Eigen::MatrixXd J = Eigen::MatrixXd::Identity(6, 6);
   Eigen::VectorXd xi =  Eigen::VectorXd::Zero(9); 
   Eigen::VectorXd xi_dot =  Eigen::VectorXd::Zero(9); 
-  Eigen::VectorXd x =  Eigen::VectorXd::Zero(6); 
-  Eigen::VectorXd x_dot =  Eigen::VectorXd::Zero(6); 
-  Eigen::VectorXd x_d_dot =  Eigen::VectorXd::Zero(6); 
-  Eigen::VectorXd x_d_ddot =  Eigen::VectorXd::Zero(6); 
-  Eigen::VectorXd u = Eigen::VectorXd::Zero(6); 
+  // Modified
+  Eigen::VectorXd x =  Eigen::VectorXd::Zero(3); 
+  Eigen::VectorXd x_dot =  Eigen::VectorXd::Zero(3); 
+  Eigen::VectorXd x_d_dot =  Eigen::VectorXd::Zero(3); 
+  Eigen::VectorXd x_d_ddot =  Eigen::VectorXd::Zero(3); 
+  Eigen::VectorXd u = Eigen::VectorXd::Zero(3); 
  
 
   Eigen::Matrix3d J1_p = getPositionJacobian("link1");
@@ -110,19 +113,19 @@ void HydrusTiltedImpedanceController::controlCore()
   Eigen::Vector3d P2 = robot_model_->getPosition("link2");
   Eigen::Vector3d P3 = robot_model_->getPosition("link3");
   Eigen::Vector3d P4 = robot_model_->getPosition("link4");
-  std::cout<<"p1: "<<P1<<std::endl;
-  std::cout<<"p2: "<<P2<<std::endl;
-  std::cout<<"p3: "<<P3<<std::endl;
-  std::cout<<"p4: "<<P4<<std::endl;
+  // std::cout<<"p1: "<<P1<<std::endl;
+  // std::cout<<"p2: "<<P2<<std::endl;
+  // std::cout<<"p3: "<<P3<<std::endl;
+  // std::cout<<"p4: "<<P4<<std::endl;
   Eigen::Vector3d Pe = robot_model_->getPosition("end_effector");
   Eigen::Matrix3d R1 = robot_model_->getRotation("link1");
   Eigen::Matrix3d R2 = robot_model_->getRotation("link2");
   Eigen::Matrix3d R3 = robot_model_->getRotation("link3");
   Eigen::Matrix3d R4 = robot_model_->getRotation("link4");
-  std::cout<<"R1: "<<R1<<std::endl;
-  std::cout<<"R2: "<<R2<<std::endl;
-  std::cout<<"R3: "<<R3<<std::endl;
-  std::cout<<"R4: "<<R4<<std::endl;
+  // std::cout<<"R1: "<<R1<<std::endl;
+  // std::cout<<"R2: "<<R2<<std::endl;
+  // std::cout<<"R3: "<<R3<<std::endl;
+  // std::cout<<"R4: "<<R4<<std::endl;
   double M1 = robot_model_->getInertiaMap().at("link1").getMass();
   double M2 = robot_model_->getInertiaMap().at("link2").getMass();
   double M3 = robot_model_->getInertiaMap().at("link3").getMass();
@@ -135,6 +138,8 @@ void HydrusTiltedImpedanceController::controlCore()
   Eigen::Vector3d Pc = aerial_robot_model::kdlToEigen(robot_model_->getCog<KDL::Frame>().p);
 
   tf::Matrix3x3 cog = estimator_->getOrientation(Frame::COG, estimate_mode_);
+
+  Eigen::Matrix3d target_R = (Eigen::AngleAxisd(navigator_->getTargetRPY().z(), Eigen::Vector3d::UnitZ()) * Eigen::AngleAxisd(target_pitch_, Eigen::Vector3d::UnitY()) * Eigen::AngleAxisd(target_roll_, Eigen::Vector3d::UnitX())).toRotationMatrix();
 
   tf::Vector3 rpy = estimator_->getEuler(Frame::COG, estimate_mode_);
  
@@ -150,6 +155,10 @@ void HydrusTiltedImpedanceController::controlCore()
   R(2, 0) = cog.getRow(2).x();
   R(2, 1) = cog.getRow(2).y();
   R(2, 2) = cog.getRow(2).z();
+
+  std::cout<<"R "<<R<<std::endl;
+  std::cout<<"target_R "<<target_R<<std::endl;
+  // std::cout<<"rpy_.z() "<<rpy_.z()<<std::endl;
 
   Eigen::Matrix3d T;
   T(0, 0) = 1.0;
@@ -196,10 +205,10 @@ void HydrusTiltedImpedanceController::controlCore()
   // See Exploiting Redundancy in Cartesian Impedance Control of UAVs  Equipped with a Robotic Arm, Equation (10)
   Kp.block(0, 0, 2, 2) = roll_pitch_p_ * Eigen::Matrix2d::Identity();
   Kp(2, 2) = yaw_p_;
-  if (mode_.data == 1)
-    Kp.block(3, 3, 3, 3) = pos_p_ * Eigen::Matrix3d::Identity();
-  else
-    Kp.block(3, 3, 3, 3) = joints_p_ * Eigen::Matrix3d::Identity();
+  // if (mode_.data == 1)
+  //   Kp.block(3, 3, 3, 3) = pos_p_ * Eigen::Matrix3d::Identity();
+  // else
+  //   Kp.block(3, 3, 3, 3) = joints_p_ * Eigen::Matrix3d::Identity();
 
   
   tf::Vector3 target_vel_ = navigator_->getTargetVel();
@@ -212,80 +221,86 @@ void HydrusTiltedImpedanceController::controlCore()
   vel_ = estimator_->getVel(Frame::COG, estimator_->getEstimateMode());
   rpy_ = estimator_->getEuler(Frame::COG, estimator_->getEstimateMode());
   omega_ = estimator_->getAngularVel(Frame::COG, estimator_->getEstimateMode());
+  Eigen::Vector3d omega;
+  omega(0) = omega_.x();
+  omega(1) = omega_.y();
+  omega(2) = omega_.z();
+  tf::Vector3 target_omega_cog = cog.inverse() * target_omega_;
 
-  double target_roll = target_roll_;
-  double target_pitch = target_pitch_;
-  // if (target_roll > 0.03)
-  //   target_roll = 0.03;
-  // else if (target_roll < -0.03)
-  //   target_roll = -0.03;
-
-  // if (target_pitch > 0.03)
-  //   target_pitch = 0.03;
-  // else if (target_pitch < -0.03)
-  //   target_pitch = -0.03;
-  tf::Vector3 target_rpy_cog(target_roll, target_pitch, 0);
 
   // tf::Vector3 target_rpy = tf::Matrix3x3(tf::createQuaternionFromYaw(rpy_.z())) * target_rpy_cog;
 
+  Eigen::Matrix3d eR = (target_R.transpose() * R - R.transpose() * target_R) / 2;
 
-  x(0) = target_roll_ - rpy_.x();
-  x(1) = target_pitch_ - rpy_.y();
-  x(2) = pid_controllers_.at(YAW).getErrP();
-  x_dot(0) = pid_controllers_.at(ROLL).getErrD();
-  x_dot(1) = pid_controllers_.at(PITCH).getErrD();
-  x_dot(2) = pid_controllers_.at(YAW).getErrD();
-  x_d_dot(0) = target_omega_.x();
-  x_d_dot(1) = target_omega_.y();
-  x_d_dot(2) = target_omega_.z();
-  x_d_ddot(0) = target_ang_acc_.x();
-  x_d_ddot(1) = target_ang_acc_.y();
-  x_d_ddot(2) = target_ang_acc_.z();
-  xi(0) = pos_.x();
-  xi(1) = pos_.y();
-  xi(2) = pos_.z();
-  xi(3) = rpy_.x();
-  xi(4) = rpy_.y();
-  xi(5) = rpy_.z();
-  xi(6) = joint_pos_[4];
-  xi(7) = joint_pos_[5];
-  xi(8) = joint_pos_[6];
-  xi_dot(0) = vel_.x();
-  xi_dot(1) = vel_.y();
-  xi_dot(2) = vel_.z();
-  xi_dot(3) = omega_.x();
-  xi_dot(4) = omega_.y();
-  xi_dot(5) = omega_.z();
-  xi_dot(6) = joint_vel_[4];
-  xi_dot(7) = joint_vel_[5];
-  xi_dot(8) = joint_vel_[6];
-  if (mode_.data == 1)
-  {
-    x(3) = pos_cmd_.x - (Rc.inverse() * (Pe - Pc))[0];
-    x(4) = pos_cmd_.y - (Rc.inverse() * (Pe - Pc))[1];
-    x(5) = pos_cmd_.z - (Rc.inverse() * (Pe - Pc))[2];
-    x_dot(3) = - ((Rc.inverse() * (Pe - Pc))[0] - Pre_Pe_[0]) / (time-time_).toSec();
-    x_dot(4) = - ((Rc.inverse() * (Pe - Pc))[1] - Pre_Pe_[1]) / (time-time_).toSec();
-    x_dot(5) = - ((Rc.inverse() * (Pe - Pc))[2] - Pre_Pe_[2]) / (time-time_).toSec();
-  }
-  else
-  {  
-    x(3) = target_joint_pos_[0] - joint_pos_[4];
-    x(4) = target_joint_pos_[1] - joint_pos_[5];
-    x(5) = target_joint_pos_[2] - joint_pos_[6];
-    x_dot(3) = target_joint_vel_[0] - joint_vel_[4];
-    x_dot(4) = target_joint_vel_[1] - joint_vel_[5];
-    x_dot(5) = target_joint_vel_[2] - joint_vel_[6];
-    x_d_dot(3) = target_joint_vel_[0];
-    x_d_dot(4) = target_joint_vel_[1];
-    x_d_dot(5) = target_joint_vel_[2];
-    x_d_ddot(3) = target_joint_acc_[0];
-    x_d_ddot(4) = target_joint_acc_[1];
-    x_d_ddot(5) = target_joint_acc_[2];
-  }
-  std::cout<<"roll:"<<target_roll<<std::endl;
-  std::cout<<"pitch:"<<target_pitch<<std::endl;
-  std::cout<<"------------------"<<std::endl;
+
+  x(0) = (eR(2, 1) - eR(1, 2)) / 2;
+  x(1) = (eR(0, 2) - eR(2, 0)) / 2;
+  x(2) = (eR(1, 0) - eR(0, 1)) / 2;
+  x_dot(0) = omega_.x() - target_omega_cog.x();
+  x_dot(1) = omega_.y() - target_omega_cog.y();
+  x_dot(2) = omega_.z() - target_omega_cog.z();
+  x_d_dot(0) = -target_omega_cog.x();
+  x_d_dot(1) = -target_omega_cog.y();
+  x_d_dot(2) = -target_omega_cog.z();
+  x_d_ddot(0) = -target_ang_acc_.x();
+  x_d_ddot(1) = -target_ang_acc_.y();
+  x_d_ddot(2) = -target_ang_acc_.z();
+
+  // x_dot(0) = pid_controllers_.at(ROLL).getErrD();
+  // x_dot(1) = pid_controllers_.at(PITCH).getErrD();
+  // x_dot(2) = pid_controllers_.at(YAW).getErrD();
+  // x_d_dot(0) = target_omega_.x();
+  // x_d_dot(1) = target_omega_.y();
+  // x_d_dot(2) = target_omega_.z();
+  // x_d_ddot(0) = target_ang_acc_.x();
+  // x_d_ddot(1) = target_ang_acc_.y();
+  // x_d_ddot(2) = target_ang_acc_.z();
+  // xi(0) = pos_.x();
+  // xi(1) = pos_.y();
+  // xi(2) = pos_.z();
+  // xi(3) = rpy_.x();
+  // xi(4) = rpy_.y();
+  // xi(5) = rpy_.z();
+  // xi(6) = joint_pos_[4];
+  // xi(7) = joint_pos_[5];
+  // xi(8) = joint_pos_[6];
+  // xi_dot(0) = vel_.x();
+  // xi_dot(1) = vel_.y();
+  // xi_dot(2) = vel_.z();
+  // xi_dot(3) = omega_.x();
+  // xi_dot(4) = omega_.y();
+  // xi_dot(5) = omega_.z();
+  // xi_dot(6) = joint_vel_[4];
+  // xi_dot(7) = joint_vel_[5];
+  // xi_dot(8) = joint_vel_[6];
+  // if (mode_.data == 1)
+  // {
+  //   x(3) = pos_cmd_.x - (Rc.inverse() * (Pe - Pc))[0];
+  //   x(4) = pos_cmd_.y - (Rc.inverse() * (Pe - Pc))[1];
+  //   x(5) = pos_cmd_.z - (Rc.inverse() * (Pe - Pc))[2];
+  //   x_dot(3) = - ((Rc.inverse() * (Pe - Pc))[0] - Pre_Pe_[0]) / (time-time_).toSec();
+  //   x_dot(4) = - ((Rc.inverse() * (Pe - Pc))[1] - Pre_Pe_[1]) / (time-time_).toSec();
+  //   x_dot(5) = - ((Rc.inverse() * (Pe - Pc))[2] - Pre_Pe_[2]) / (time-time_).toSec();
+  // }
+  // else
+  // {  
+  //   x(3) = target_joint_pos_[0] - joint_pos_[4];
+  //   x(4) = target_joint_pos_[1] - joint_pos_[5];
+  //   x(5) = target_joint_pos_[2] - joint_pos_[6];
+  //   x_dot(3) = target_joint_vel_[0] - joint_vel_[4];
+  //   x_dot(4) = target_joint_vel_[1] - joint_vel_[5];
+  //   x_dot(5) = target_joint_vel_[2] - joint_vel_[6];
+  //   x_d_dot(3) = target_joint_vel_[0];
+  //   x_d_dot(4) = target_joint_vel_[1];
+  //   x_d_dot(5) = target_joint_vel_[2];
+  //   x_d_ddot(3) = target_joint_acc_[0];
+  //   x_d_ddot(4) = target_joint_acc_[1];
+  //   x_d_ddot(5) = target_joint_acc_[2];
+  // }
+  // std::cout<<"x:"<<x<<std::endl;
+  // std::cout<<"roll:"<<target_roll_<<std::endl;
+  // std::cout<<"pitch:"<<target_pitch_<<std::endl;
+  // std::cout<<"------------------"<<std::endl;
 
   Eigen::MatrixXd delta_B = Eigen::MatrixXd::Zero(9, 9);
   delta_B.block(0, 3, 3, 6) = Bpr - Pre_Bpr_;
@@ -299,31 +314,36 @@ void HydrusTiltedImpedanceController::controlCore()
 
   // Suppose C = 0, then Cx = -Bx,  see Exploiting Redundancy in Cartesian Impedance Control of UAVs Equipped with a Robotic Arm, Equation (9)
   
-  Eigen::MatrixXd Bx = aerial_robot_model::pseudoinverse(J).transpose() * BE * aerial_robot_model::pseudoinverse(J);
-  Eigen::MatrixXd Cx = aerial_robot_model::pseudoinverse(J).transpose() * (CE - BE * aerial_robot_model::pseudoinverse(J) * (J - Pre_J_) / (time-time_).toSec()) * aerial_robot_model::pseudoinverse(J);
-  
+  // Eigen::MatrixXd Bx = aerial_robot_model::pseudoinverse(J).transpose() * BE * aerial_robot_model::pseudoinverse(J);
+  // Eigen::MatrixXd Cx = aerial_robot_model::pseudoinverse(J).transpose() * (CE - BE * aerial_robot_model::pseudoinverse(J) * (J - Pre_J_) / (time-time_).toSec()) * aerial_robot_model::pseudoinverse(J);
+
+  Eigen::Matrix3d M = robot_model_->getInertia<Eigen::Matrix3d>();
+  Eigen::Matrix3d Md = M;
+  // Eigen::Matrix3d Md = Eigen::Matrix3d::Zero();
+  // Md(0, 0) = 0.3;
+  // Md(1, 1) = 0.3;
+  // Md(2, 2) = 1.2;
   
   //Kd = -Cx + 2 * (Kp * Bx).sqrt();
-  Eigen::MatrixXd Sigma = Eigen::MatrixXd::Zero(6, 6);
-  for (int i = 0; i < 6; i++) Sigma(i, i) = abs(Bx(i, i));
+  // Eigen::MatrixXd Sigma = Eigen::MatrixXd::Zero(6, 6);
+  // for (int i = 0; i < 6; i++) Sigma(i, i) = abs(Bx(i, i));
 
-  // std::cout<<"CE: "<<CE<<std::endl;
+  std::cout<<"inertia: "<<inertia<<std::endl;
   // std::cout<<"Cx: "<<Cx<<std::endl;
 
   //Kd.block(0, 0, 3, 3) = -Cx.block(0, 0, 3, 3) + 2 * 0.9 * (Kp.block(0, 0, 3, 3) * abs(Bx(2, 2))).sqrt();
   Kd.block(0, 0, 2, 2) = roll_pitch_d_ * Eigen::Matrix2d::Identity();
   Kd(2, 2) = yaw_d_;
-  if (mode_.data == 1)
-    Kd.block(3, 3, 3, 3) = pos_d_ * Eigen::Matrix3d::Identity();
-  else
-    Kd.block(3, 3, 3, 3) = joints_d_ * Eigen::Matrix3d::Identity();
+  // if (mode_.data == 1)
+  //   Kd.block(3, 3, 3, 3) = pos_d_ * Eigen::Matrix3d::Identity();
+  // else
+  //   Kd.block(3, 3, 3, 3) = joints_d_ * Eigen::Matrix3d::Identity();
   //Kd.block(3, 3, 3, 3) = -Cx.block(3, 3, 3, 3) + 2 * 0.2 * (Kp.block(3, 3, 3, 3) * Bx.block(3, 3, 3, 3)).sqrt();
 
   //Kd = -Cx + 2 * 1.0 * (Kp * Sigma).sqrt();
 
 
   // Exploiting Redundancy in Cartesian Impedance Control of UAVs Equipped with a Robotic Arm, Equation (9)
-  Eigen::VectorXd a = Cx * x_d_dot;
   // for (int i = 0; i < a.size(); i++)
   // {
   //   if (a(i) > 0.3)
@@ -332,8 +352,8 @@ void HydrusTiltedImpedanceController::controlCore()
   //   if (a(i) < -0.3)
   //     a(i) = -0.3;
   // }
- // u = J.transpose() * (Bx * x_d_ddot + Cx * x_d_dot + Kd * x_dot + Kp * x);
-  u = J.transpose() * (Bx * x_d_ddot + a + Kd * x_dot + Kp * x);
+//  u = J.transpose() * (Bx * x_d_ddot + Cx * x_d_dot + Kd * x_dot + Kp * x);
+  u = (M * Md.inverse() - Eigen::Matrix3d::Identity()) * est_external_wrench_.segment(3, 3) + M * Md.inverse() * (-Kd * x_dot - Kp * x) + aerial_robot_model::skew(omega) * inertia * omega;
   // Gravity compensation
 
   //
@@ -349,7 +369,7 @@ void HydrusTiltedImpedanceController::controlCore()
   Eigen::MatrixXd P = robot_model_->calcWrenchMatrixOnCoG();
   Eigen::MatrixXd P_inv = aerial_robot_model::pseudoinverse(P);
 
-  Eigen::VectorXd target_total_thrust = P_inv.col(3) * u(0) + P_inv.col(4) * u(1) + P_inv.col(5) * u(2);
+  // Eigen::VectorXd target_total_thrust = P_inv.col(3) * u(0) + P_inv.col(4) * u(1) + P_inv.col(5) * u(2);
   target_thrust_roll_term_ = P_inv.col(3) * u(0);
   target_thrust_pitch_term_ = P_inv.col(4) * u(1);
   target_thrust_yaw_term_ =  P_inv.col(5) * u(2); 
@@ -395,11 +415,11 @@ void HydrusTiltedImpedanceController::controlCore()
   // pe1_term.data = a(4);
   // pe2_term.data = (Kd * x_dot)(4);
   // pe3_term.data = (Kp * x)(4);
-  pe1_term.data = x(0);
-  pe2_term.data = x(1);
+  // pe1_term.data = x(0);
+  // pe2_term.data = x(1);
 
-  pos_pubs_[0].publish(pe1_term);
-  pos_pubs_[1].publish(pe2_term);
+  // pos_pubs_[0].publish(pe1_term);
+  // pos_pubs_[1].publish(pe2_term);
   // pos_pubs_[2].publish(pe3_term);
 
  
