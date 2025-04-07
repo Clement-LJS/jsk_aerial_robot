@@ -71,7 +71,7 @@ namespace aerial_robot_control
     ros::Publisher rpy_gain_pub_; // for spinal
     ros::Publisher four_axis_gain_pub_;
     ros::Publisher p_matrix_pseudo_inverse_inertia_pub_;
-
+    ros::Subscriber external_wrench_sub_;
     bool verbose_;
     boost::shared_ptr<dynamic_reconfigure::Server<aerial_robot_control::LQIConfig> > lqi_server_;
     dynamic_reconfigure::Server<aerial_robot_control::LQIConfig>::CallbackType dynamic_reconf_func_lqi_;
@@ -121,6 +121,8 @@ namespace aerial_robot_control
     std::vector<ros::Publisher> pos_pubs_;
     geometry_msgs::Point pos_cmd_;
     std_msgs::UInt8 mode_;
+
+    geometry_msgs::WrenchStamped external_wrench_;
     //private functions
 
     virtual bool checkRobotModel();
@@ -155,5 +157,7 @@ namespace aerial_robot_control
     void posCmdCallback(const geometry_msgs::PointConstPtr& cmd);
 
     void modeCallback(const std_msgs::UInt8ConstPtr& cmd);
+
+    void addExternalWrenchCallback(const geometry_msgs::WrenchStampedConstPtr& msg);
   };
 };

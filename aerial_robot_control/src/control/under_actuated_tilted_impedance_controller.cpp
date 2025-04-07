@@ -73,8 +73,8 @@ void UnderActuatedTiltedImpedanceController::controlCore()
 {
   PoseLinearController::controlCore();
 
-  tf::Vector3 target_acc_w(pid_controllers_.at(X).result(),
-                           pid_controllers_.at(Y).result(),
+  tf::Vector3 target_acc_w(pid_controllers_.at(X).result() ,
+                           pid_controllers_.at(Y).result() + external_wrench_.wrench.force.y / robot_model_->getMass(),
                            pid_controllers_.at(Z).result());
 
   tf::Vector3 target_acc_dash = (tf::Matrix3x3(tf::createQuaternionFromYaw(rpy_.z()))).inverse() * target_acc_w;

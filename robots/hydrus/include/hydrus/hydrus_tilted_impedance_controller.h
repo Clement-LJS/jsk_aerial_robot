@@ -64,6 +64,8 @@ namespace aerial_robot_control
 
     ros::Publisher estimate_external_wrench_pub_;
 
+ 
+
     Eigen::MatrixXd Pre_J_ = Eigen::MatrixXd::Zero(6, 6);
 
     double roll_pitch_p_, yaw_p_, joints_p_, pos_p_, roll_pitch_d_, yaw_d_, joints_d_, pos_d_;
@@ -76,6 +78,7 @@ namespace aerial_robot_control
     double prev_est_wrench_timestamp_;
     Eigen::VectorXd target_wrench_acc_cog_;
     Eigen::MatrixXd momentum_observer_matrix_;
+
 
     void externalWrenchEstimate();
     const Eigen::VectorXd getTargetWrenchAccCog()
@@ -95,6 +98,7 @@ namespace aerial_robot_control
     Eigen::Matrix3d getPositionJacobian(std::string name);
     Eigen::Matrix3d getOrientationJacobian(std::string name);
     Eigen::MatrixXd getCmatrix(Eigen::MatrixXd delta_M, Eigen::VectorXd delta_xi,  Eigen::VectorXd xi_dot);
+
   };
    
 };

@@ -33,6 +33,7 @@ void HydrusTiltedImpedanceController::initialize(ros::NodeHandle nh,
   prev_est_wrench_timestamp_ = 0;
   estimate_external_wrench_pub_ = nh_.advertise<geometry_msgs::WrenchStamped>("estimated_external_wrench", 1);
 
+
   wrench_estimate_thread_ = boost::thread([this]()
                                           {
                                             ros::Rate loop_rate(100.0);
@@ -322,7 +323,7 @@ void HydrusTiltedImpedanceController::controlCore()
   // Eigen::Matrix3d Md = Eigen::Matrix3d::Zero();
   // Md(0, 0) = 0.3;
   // Md(1, 1) = 0.3;
-  // Md(2, 2) = 1.2;
+  // Md(2, 2) = 2.0;
   
   //Kd = -Cx + 2 * (Kp * Bx).sqrt();
   // Eigen::MatrixXd Sigma = Eigen::MatrixXd::Zero(6, 6);
@@ -332,8 +333,9 @@ void HydrusTiltedImpedanceController::controlCore()
   // std::cout<<"Cx: "<<Cx<<std::endl;
 
   //Kd.block(0, 0, 3, 3) = -Cx.block(0, 0, 3, 3) + 2 * 0.9 * (Kp.block(0, 0, 3, 3) * abs(Bx(2, 2))).sqrt();
-  Kd.block(0, 0, 2, 2) = roll_pitch_d_ * Eigen::Matrix2d::Identity();
-  Kd(2, 2) = yaw_d_;
+  // Kd.block(0, 0, 2, 2) = roll_pitch_d_ * Eigen::Matrix2d::Identity();
+  // Kd(2, 2) = yaw_d_;
+  Kd = 2 * (Kp * Md).sqrt();
   // if (mode_.data == 1)
   //   Kd.block(3, 3, 3, 3) = pos_d_ * Eigen::Matrix3d::Identity();
   // else
@@ -370,11 +372,12 @@ void HydrusTiltedImpedanceController::controlCore()
   Eigen::MatrixXd P_inv = aerial_robot_model::pseudoinverse(P);
 
   // Eigen::VectorXd target_total_thrust = P_inv.col(3) * u(0) + P_inv.col(4) * u(1) + P_inv.col(5) * u(2);
+
   target_thrust_roll_term_ = P_inv.col(3) * u(0);
   target_thrust_pitch_term_ = P_inv.col(4) * u(1);
-  target_thrust_yaw_term_ =  P_inv.col(5) * u(2); 
+  target_thrust_yaw_term_ =  P_inv.col(5) * (u(2) - external_wrench_.wrench.torque.z); 
   //if (target_joint_pos_[0] > 1.56)
-  // std::cout<<"u(2)"<<u(2)<<std::endl;
+  std::cout<<"ex"<<external_wrench_.wrench.torque.z<<std::endl;
   // std::cout<<"P_inv.col(5))"<<P_inv.col(5)<<std::endl;
   std_msgs::Float64 j1_term, j2_term, j3_term;
 
@@ -579,6 +582,8 @@ Eigen::Matrix3d HydrusTiltedImpedanceController::getOrientationJacobian(std::str
     o_jacobian.block(0, 2, 3, 1) = jacobian.block(3, 5, 3, 1);
     return o_jacobian;
 }
+
+
 
 
 

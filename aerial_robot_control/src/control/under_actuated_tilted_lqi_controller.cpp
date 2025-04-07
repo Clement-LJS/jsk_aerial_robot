@@ -127,7 +127,7 @@ bool UnderActuatedTiltedLQIController::optimalGain()
   q_diagonals << lqi_roll_pitch_weight_(0), lqi_roll_pitch_weight_(2), lqi_roll_pitch_weight_(0), lqi_roll_pitch_weight_(2), lqi_yaw_weight_(0), lqi_yaw_weight_(2), lqi_roll_pitch_weight_(1), lqi_roll_pitch_weight_(1), lqi_yaw_weight_(1);
   Eigen::MatrixXd Q = q_diagonals.asDiagonal();
 
-  Eigen::MatrixXd P_trans = P.topRows(3) / robot_model_->getMass() ;
+  Eigen::MatrixXd P_trans = P.topRows(3) / robot_model_->getMass();
   Eigen::MatrixXd R_trans = P_trans.transpose() * P_trans;
   Eigen::MatrixXd R_input = Eigen::MatrixXd::Identity(motor_num_, motor_num_);
   Eigen::MatrixXd R = R_trans * trans_constraint_weight_ + R_input * att_control_weight_;

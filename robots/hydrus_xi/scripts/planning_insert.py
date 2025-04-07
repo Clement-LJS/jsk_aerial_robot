@@ -119,12 +119,12 @@ if __name__ == "__main__":
             # nav_msg.target_vel_y = 0.3 * (0.00 - end2world.point.y)
             # nav_msg.target_vel_z = 0.5 * (1.00 - end2world.point.z)
             if external_wrench.wrench.force.x < -0.25 and 0< 2.45 - end2world.point.x < 0.01:
-                nav_msg.target_vel_x = -0.02 * (-0.25 - external_wrench.wrench.force.x)
+                nav_msg.target_vel_x = -0.02 * (-0.20 - external_wrench.wrench.force.x)
                 nav_msg.target_vel_y = 1.0 * (0.00 - end2world.point.y)
                 nav_msg.target_vel_z = 1.0 * (1.00 - end2world.point.z)
                 print("a")
             else:
-                nav_msg.target_vel_x = 0.04 * (2.60 - end2world.point.x)
+                nav_msg.target_vel_x = 0.04 * (2.50 - end2world.point.x)
                 nav_msg.target_vel_y = 0.2 * (0.00 - end2world.point.y)
                 nav_msg.target_vel_z = 0.4 * (1.00 - end2world.point.z)
                 print("b")

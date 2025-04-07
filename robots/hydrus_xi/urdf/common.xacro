@@ -88,15 +88,27 @@
           <cylinder length="0.2" radius="0.01"/>
         </geometry>
       </collision>
+      <collision>
+        <origin rpy="0 0 0" xyz="0.2 0 0"/>
+        <geometry>
+          <sphere radius="0.01"/>
+        </geometry>
+      </collision>
       <visual>
         <origin rpy="0 1.57 0" xyz="0.1 0 0"/>
         <geometry>
           <cylinder length="0.2" radius="0.01"/>
         </geometry>
       </visual>
+      <visual>
+        <origin rpy="0 0 0" xyz="0.2 0 0"/>
+        <geometry>
+          <sphere radius="0.01"/>
+        </geometry>
+      </visual>
   </link>
 
-  <joint name="end_eff" type="fixed">
+  <!-- <joint name="end_eff" type="fixed">
       <parent link="end_effector"/>
       <child link="end_frame"/>
       <origin rpy="0 0 0" xyz="0.2 0 0"/>
@@ -114,13 +126,13 @@
           <sphere radius="0.01"/>
         </geometry>
       </visual>
-  </link>
+  </link> -->
 
 
   <gazebo reference="end_effector">
     <sensor name="contacts" type="contact">
         <contact>
-          <collision>link4_fixed_joint_lump__end_effector_collision_1</collision>
+          <collision>link4_fixed_joint_lump__end_effector_collision_2</collision>
         </contact>
         <plugin name="gazebo_ros_bumper_controller" filename="libgazebo_ros_bumper.so">
           <always_on>true</always_on>

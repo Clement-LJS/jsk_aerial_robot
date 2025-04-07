@@ -66,6 +66,7 @@ void UnderActuatedImpedanceController::initialize(ros::NodeHandle nh,
   joint_cmd_sub_ = nh_.subscribe("joints_ctrl", 1, &UnderActuatedImpedanceController::jointCmdCallback, this);
   pos_cmd_sub_ = nh_.subscribe("pos_cmds", 1, &UnderActuatedImpedanceController::posCmdCallback, this);
   mode_sub_ = nh_.subscribe("imp_mode", 1, &UnderActuatedImpedanceController::modeCallback, this);
+  external_wrench_sub_ = nh_.subscribe("external_wrench", 1, &UnderActuatedImpedanceController::addExternalWrenchCallback, this);
 
   target_thrust_z_term_ = Eigen::VectorXd::Zero(motor_num_);
   target_thrust_roll_term_ = Eigen::VectorXd::Zero(motor_num_);
@@ -551,6 +552,11 @@ void UnderActuatedImpedanceController::modeCallback(const std_msgs::UInt8ConstPt
       ROS_INFO_STREAM("Joint Angle Mode");
   }
   mode_ = *mode;
+}
+
+void UnderActuatedImpedanceController::addExternalWrenchCallback(const geometry_msgs::WrenchStampedConstPtr& msg)
+{
+  external_wrench_ = *msg;
 }
 
 /* plugin registration */

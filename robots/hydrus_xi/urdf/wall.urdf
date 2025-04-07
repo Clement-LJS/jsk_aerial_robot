@@ -9,7 +9,7 @@
     <inertial>
       <origin
         xyz="1.11022302462516E-16 -6.93889390390723E-17 -0.420396561017662"
-        rpy="0 0 0" />
+        rpy="0 0 0.06" />
       <mass
         value="107.874336293856" />
       <inertia
@@ -23,7 +23,7 @@
     <visual>
       <origin
         xyz="0 0 0"
-        rpy="0 0 0" />
+        rpy="0 0 0.06" />
       <geometry>
         <mesh
           filename="package://hydrus_xi/urdf/mesh/scene/wall_link_25mm.dae" />
