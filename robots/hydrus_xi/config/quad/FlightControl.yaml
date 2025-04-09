@@ -11,7 +11,7 @@ controller:
     limit_d: 3
 
   z:
-    p_gain: 6.0
+    p_gain: 9.0
     i_gain: 1.55
     d_gain: 9.0 # old: 3.4
     limit_err_p: 1.0
@@ -61,8 +61,8 @@ controller:
     roll_pitch_p: 50.0
     roll_pitch_d: 5.0
 
-    yaw_p: 4.0
-    yaw_d: 1.5
+    yaw_p: 40.0
+    yaw_d: 4.0
 
     joints_p: 13.0
     joints_d: 2.0

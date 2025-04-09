@@ -41,8 +41,8 @@
 
   <xacro:frame_model name="main_frame1" mass="${frame_mass}" length="$(arg env_length)" width="0.02" x="0" y="${0.5 * $(arg env_width)}" height="${0.5 * $(arg opening_height)}" thickness="$(arg opening_height)" direction="0" />
   <xacro:frame_model name="main_frame2" mass="${frame_mass}" length="$(arg env_length)" width="0.02" x="0" y="${-0.5 * $(arg env_width)}"  height="${0.5 * $(arg opening_height)}" thickness="$(arg opening_height)" direction="0" />
-  <xacro:frame_model name="main_frame3" mass="${frame_mass}" length="0.02" width="${$(arg env_width) * 0.5 - $(arg opening_width) * 0.5}" x="0" y="${$(arg env_width) * 0.25 + $(arg opening_width) * 0.25}"  height="${0.5 * $(arg opening_height)}" thickness="$(arg opening_height)" direction="0"  />
-  <xacro:frame_model name="main_frame4" mass="${frame_mass}" length="0.02" width="${$(arg env_width) * 0.5 - $(arg opening_width) * 0.5}" x="0" y="${$(arg env_width) * -0.25 + $(arg opening_width) * -0.25}"  height="${0.5 * $(arg opening_height)}" thickness="$(arg opening_height)" direction="0"  />
+  <xacro:frame_model name="main_frame3" mass="${frame_mass}" length="0.02" width="$(arg env_width)" x="0" y="0"  height="${0.5 * $(arg opening_height)}" thickness="$(arg opening_height)" direction="0"  />
+
 
   <joint name="frame_joint1" type="fixed">
     <parent link="main_frame1"/>
@@ -56,12 +56,7 @@
     <origin xyz="0 0 0" rpy="0 0 0"/>
     <axis xyz="0 0 1"/>
   </joint>
-  <joint name="frame_joint3" type="fixed">
-    <parent link="main_frame1"/>
-    <child link="main_frame4"/>
-    <origin xyz="0 0 0" rpy="0 0 0"/>
-    <axis xyz="0 0 1"/>
-  </joint>
+
 
   <!-- TODO: change friction rate to paramter -->
   <!-- Noet: 0.13 corresponds to 3.5N -->
@@ -83,11 +78,7 @@
     <mu2>0.13</mu2>
   </gazebo>
 
-  <gazebo reference="main_frame4">
-    <material>Gazebo/Black</material>
-    <mu1>0.13</mu1>
-    <mu2>0.13</mu2>
-  </gazebo>
+
 
   <gazebo>
     <static>true</static>

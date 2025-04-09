@@ -57,15 +57,18 @@ void UnderActuatedTiltedImpedanceController::initialize(ros::NodeHandle nh,
 
 void UnderActuatedTiltedImpedanceController::sendFourAxisCommand()
 {
-  spinal::FourAxisCommandImpedance flight_command_data;
+  spinal::FourAxisCommand flight_command_data;
+  spinal::FourAxisCommandImpedance flight_command_impedance_data;
   flight_command_data.angles[0] = target_roll_;
   flight_command_data.angles[1] = target_pitch_;
   flight_command_data.angles[2] = candidate_yaw_term_;
   flight_command_data.base_thrust = target_base_thrust_;
-  flight_command_data.roll_thrust = target_roll_thrust_;
-  flight_command_data.pitch_thrust = target_pitch_thrust_;
-  flight_command_data.yaw_thrust = target_yaw_thrust_;
+  flight_command_impedance_data.base_thrust = target_base_thrust_;
+  flight_command_impedance_data.roll_thrust = target_roll_thrust_;
+  flight_command_impedance_data.pitch_thrust = target_pitch_thrust_;
+  flight_command_impedance_data.yaw_thrust = target_yaw_thrust_;
   flight_cmd_pub_.publish(flight_command_data);
+  flight_impedance_cmd_pub_.publish(flight_command_impedance_data);
 }
 
 
@@ -113,7 +116,7 @@ void UnderActuatedTiltedImpedanceController::controlCore()
     }
   for(int i = 0; i < motor_num_; i++)
     {
-      target_base_thrust_.at(i) = target_thrust_z_term(i);
+      target_base_thrust_.at(i) = target_thrust_z_term(i) + target_thrust_roll_term_(i) + target_thrust_pitch_term_(i) + target_thrust_yaw_term_(i);
       target_roll_thrust_.at(i) = target_thrust_roll_term_(i);
       target_pitch_thrust_.at(i) = target_thrust_pitch_term_(i);
       target_yaw_thrust_.at(i) = target_thrust_yaw_term_(i);

@@ -90,13 +90,15 @@ if __name__ == "__main__":
         nav_msg.target_pos_x = -1.15
         nav_msg.target_vel_x = 0.0
         nav_msg.target_pos_y = 0.3 * math.cos(round / 50)
+ 
         nav_msg.pos_z_nav_mode = 4 
         nav_msg.target_pos_z = 0.6 + 0.3 * math.sin(round / 50)
+        # nav_msg.target_vel_z = 0.1 * math.cos(round / 50)
         nav_msg.yaw_nav_mode = 4 
         nav_msg.target_yaw = -0.85
         nav_pub.publish(nav_msg)
-        # external_wrench_added.wrench.torque.z = 0.5 * math.sin(round / 50)
-        #external_wrench_added.wrench.force.y = 0.30 * math.sin(round / 50)
+        external_wrench_added.wrench.torque.z = 0.4 * math.cos(round / 50)
+        external_wrench_added.wrench.force.y = 0.6 * math.cos(round / 50)
         wrench_pub.publish(external_wrench_added)
         time.sleep(duration)
 

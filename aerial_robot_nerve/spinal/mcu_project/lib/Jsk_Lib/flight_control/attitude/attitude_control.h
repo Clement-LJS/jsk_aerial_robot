@@ -222,7 +222,7 @@ private:
   float pwm_test_value_[MAX_MOTOR_NUMBER]; // PWM Test
 
   // void fourAxisCommandCallback( const spinal::FourAxisCommand &cmd_msg);
-  void fourAxisCommandCallback( const spinal::FourAxisCommandImpedance &cmd_msg);
+  void fourAxisCommandCallback( const spinal::FourAxisCommand &cmd_msg);
   void pwmInfoCallback( const spinal::PwmInfo &info_msg);
   void rpyGainCallback( const spinal::RollPitchYawTerms &gain_msg);
   void pMatrixInertiaCallback(const spinal::PMatrixPseudoInverseWithInertia& msg);

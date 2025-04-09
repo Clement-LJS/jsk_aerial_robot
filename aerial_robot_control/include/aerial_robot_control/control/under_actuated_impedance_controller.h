@@ -68,6 +68,7 @@ namespace aerial_robot_control
   protected:
 
     ros::Publisher flight_cmd_pub_; // for spinal
+    ros::Publisher flight_impedance_cmd_pub_; // for rosbag
     ros::Publisher rpy_gain_pub_; // for spinal
     ros::Publisher four_axis_gain_pub_;
     ros::Publisher p_matrix_pseudo_inverse_inertia_pub_;
