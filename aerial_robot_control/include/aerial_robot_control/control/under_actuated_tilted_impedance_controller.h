@@ -56,9 +56,23 @@ namespace aerial_robot_control
 
     ros::Publisher desired_baselink_rot_pub_;
 
-    double trans_constraint_weight_;
-    double att_control_weight_;
 
+    std::mutex wrench_mutex_;
+    Eigen::VectorXd est_external_wrench_;
+    Eigen::VectorXd target_wrench_acc_cog_;
+
+    double target_acc_x_, target_acc_y_, target_acc_z_;
+    double x_y_p_, z_p_, roll_pitch_p_, yaw_p_, joints_p_, pos_p_, x_y_zeta_, z_zeta_, roll_pitch_zeta_, yaw_zeta_, joints_d_, pos_d_;
+    const Eigen::VectorXd getTargetWrenchAccCog()
+    {
+      std::lock_guard<std::mutex> lock(wrench_mutex_);
+      return target_wrench_acc_cog_;
+    }
+    void setTargetWrenchAccCog(const Eigen::VectorXd target_wrench_acc_cog)
+    {
+      std::lock_guard<std::mutex> lock(wrench_mutex_);
+      target_wrench_acc_cog_ = target_wrench_acc_cog;
+    }
     double z_limit_;
     void sendFourAxisCommand() override;
     void controlCore() override;

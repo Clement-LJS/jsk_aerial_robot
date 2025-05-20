@@ -68,32 +68,20 @@ namespace aerial_robot_control
 
     Eigen::MatrixXd Pre_J_ = Eigen::MatrixXd::Zero(6, 6);
 
-    double roll_pitch_p_, yaw_p_, joints_p_, pos_p_, roll_pitch_d_, yaw_d_, joints_d_, pos_d_;
 
-    std::mutex wrench_mutex_;
+
     boost::thread wrench_estimate_thread_;
     Eigen::VectorXd init_sum_momentum_;
-    Eigen::VectorXd est_external_wrench_;
     Eigen::VectorXd integrate_term_;
     double prev_est_wrench_timestamp_;
-    Eigen::VectorXd target_wrench_acc_cog_;
     Eigen::MatrixXd momentum_observer_matrix_;
 
 
     void externalWrenchEstimate();
-    const Eigen::VectorXd getTargetWrenchAccCog()
-    {
-      std::lock_guard<std::mutex> lock(wrench_mutex_);
-      return target_wrench_acc_cog_;
-    }
-    void setTargetWrenchAccCog(const Eigen::VectorXd target_wrench_acc_cog)
-    {
-      std::lock_guard<std::mutex> lock(wrench_mutex_);
-      target_wrench_acc_cog_ = target_wrench_acc_cog;
-    }
+
 
     bool checkRobotModel() override;
-    virtual void controlCore() override;
+    // virtual void controlCore() override;
     virtual void rosParamInit() override;
     Eigen::Matrix3d getPositionJacobian(std::string name);
     Eigen::Matrix3d getOrientationJacobian(std::string name);

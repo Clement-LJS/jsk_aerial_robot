@@ -61,7 +61,7 @@
   ###########  Base Platform  ###########
   <node pkg="aerial_robot_base" type="aerial_robot_base_node" name="aerial_robot_base_node" ns="$(arg robot_ns)" output="screen">
     <param name="tf_prefix" value="$(arg robot_ns)"/>
-    <param name="param_verbose" value="false"/>
+    <param name="param_verbose" value="true"/>
     <param name="main_rate" value="40"/>
   </node>
 
@@ -108,10 +108,10 @@
 
 
   ######### Hole model #########
-  <group if="$(eval arg('simulation'))">
+  <!-- <group if="$(eval arg('simulation'))">
     <param name="hole/robot_description" command="$(find xacro)/xacro $(find hydrus_xi)/urdf/wall.urdf" />
     <node pkg="gazebo_ros" type="spawn_model" name="hole_spawn" args="-param hole/robot_description -urdf -x 0 -y 0 -z 0 -model hole" />
-  </group>
+  </group> -->
 
   ########## Simulation in Mujoco #########
   <include file="$(find aerial_robot_simulation)/launch/mujoco.launch" if="$(eval arg('simulation') and not arg('real_machine') and arg('mujoco'))" >

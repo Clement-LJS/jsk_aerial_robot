@@ -76,33 +76,159 @@ void UnderActuatedTiltedImpedanceController::controlCore()
 {
   PoseLinearController::controlCore();
 
-  tf::Vector3 target_acc_w(pid_controllers_.at(X).result() ,
-                           pid_controllers_.at(Y).result() + external_wrench_.wrench.force.y / robot_model_->getMass(),
-                           pid_controllers_.at(Z).result());
+
+  // Inerial params
+  double uav_mass = robot_model_->getMass();
+  double mx = 2 * uav_mass;
+  double my = 2 * uav_mass;
+  double mz = 2 * uav_mass;
+  Eigen::Matrix3d I = robot_model_->getInertia<Eigen::Matrix3d>();
+  Eigen::Matrix3d Id = 2 * I;
+
+  // Control params
+  double Kpx = x_y_p_;
+  double Kpy = x_y_p_;
+  double Kpz = z_p_;
+  double Kdx = 2 * x_y_zeta_ * sqrt(x_y_p_);
+  double Kdy = 2 * x_y_zeta_ * sqrt(x_y_p_);
+  double Kdz = 2 * z_zeta_ * sqrt(z_p_);
+  Eigen::MatrixXd Kp = Eigen::MatrixXd::Zero(3, 3);
+  Eigen::MatrixXd Zeta = Eigen::MatrixXd::Zero(3, 3);
+  Eigen::MatrixXd Kd = Eigen::MatrixXd::Zero(3, 3);
+  Kp.block(0, 0, 2, 2) = roll_pitch_p_ * Eigen::Matrix2d::Identity();
+  Kp(2, 2) = yaw_p_;
+  Zeta.block(0, 0, 2, 2) = roll_pitch_zeta_ * Eigen::Matrix2d::Identity();
+  Zeta(2, 2) = yaw_zeta_;
+  Kd = 2 * Zeta * (Kp * Id).sqrt();
+ 
+  tf::Matrix3x3 cog = estimator_->getOrientation(Frame::COG, estimate_mode_);
+  Eigen::Matrix3d R = Eigen::Matrix3d::Zero();
+  for (int i = 0; i < 3; i++)
+  {
+    for (int j = 0; j < 3; j++)
+    {
+      R(i, j) = cog[i][j];
+    }
+  }
+
+  Eigen::VectorXd delta_p =  Eigen::VectorXd::Zero(6); 
+  Eigen::VectorXd delta_v =  Eigen::VectorXd::Zero(6); 
+
+  tf::Vector3 target_vel_ = navigator_->getTargetVel();
+  tf::Vector3 target_acc_ = navigator_->getTargetAcc();
+  tf::Vector3 target_omega_ = navigator_->getTargetOmega();
+  tf::Vector3 target_ang_acc_ = navigator_->getTargetAngAcc();
+
+
+  pos_ = estimator_->getPos(Frame::COG, estimator_->getEstimateMode());
+  vel_ = estimator_->getVel(Frame::COG, estimator_->getEstimateMode());
+  rpy_ = estimator_->getEuler(Frame::COG, estimator_->getEstimateMode());
+  omega_ = estimator_->getAngularVel(Frame::COG, estimator_->getEstimateMode());
+  Eigen::Vector3d omega;
+  omega(0) = omega_.x();
+  omega(1) = omega_.y();
+  omega(2) = omega_.z();
+  tf::Vector3 target_omega_cog = cog.inverse() * target_omega_;
+
+
+  // tf::Vector3 target_rpy = tf::Matrix3x3(tf::createQuaternionFromYaw(rpy_.z())) * target_rpy_cog;
+
+  delta_p(0) = pos_.x() - target_pos_.x();
+  delta_p(1) = pos_.y() - target_pos_.y();
+  delta_p(2) = pos_.z() - target_pos_.z();
+  delta_v(0) = vel_.x() - target_vel_.x();
+  delta_v(1) = vel_.y() - target_vel_.y();
+  delta_v(2) = vel_.z() - target_vel_.z();
+
+  // double target_acc_x = (1 / mx - 1 / uav_mass) * est_external_wrench_[0] + (-Kdx * delta_v(0) - Kpx * delta_p(0));
+  // double target_acc_y = (1 / my - 1 / uav_mass) * est_external_wrench_[1] + (-Kdy * delta_v(1) - Kpy * delta_p(1));
+  // double target_acc_z = (1 / mz - 1 / uav_mass) * est_external_wrench_[2] + (-Kdz * delta_v(2) - Kpy * delta_p(2)) + aerial_robot_estimation::G;
+
+
+  double target_acc_x = (-Kdx * delta_v(0) - Kpx * delta_p(0));
+  double target_acc_y = (-Kdy * delta_v(1) - Kpy * delta_p(1));
+  double target_acc_z = (-Kdz * delta_v(2) - Kpy * delta_p(2)) + aerial_robot_estimation::G;
+
+  std::cout<<"delta_p:"<<delta_p<<std::endl;
+  std::cout<<"delta_v:"<<delta_v<<std::endl;
+
+
+  if (target_acc_x > 1.0)
+    target_acc_x = 1.0;
+  if (target_acc_x < -1.0)
+    target_acc_x = -1.0;
+
+  if (target_acc_y > 1.0)
+    target_acc_y = 1.0;
+  if (target_acc_y < -1.0)
+    target_acc_y = -1.0;
+
+  if (target_acc_z > 15.0)
+    target_acc_z = 15.0;
+  if (target_acc_z < -15.0)
+    target_acc_z = -15.0;
+
+  std::cout<<"x:"<<target_acc_x<<std::endl;
+  std::cout<<"y:"<<target_acc_y<<std::endl;
+  std::cout<<"z:"<<target_acc_z<<std::endl;
+
+  tf::Vector3 target_acc_w(target_acc_x,
+                          target_acc_y,
+                          target_acc_z);
 
   tf::Vector3 target_acc_dash = (tf::Matrix3x3(tf::createQuaternionFromYaw(rpy_.z()))).inverse() * target_acc_w;
-
-  target_pitch_ = atan2(target_acc_dash.x(), target_acc_dash.z());
-  target_roll_ = atan2(-target_acc_dash.y(), sqrt(target_acc_dash.x() * target_acc_dash.x() + target_acc_dash.z() * target_acc_dash.z()));
-
-  std::cout<<"x "<<target_acc_w.x()<<std::endl;
-  std::cout<<"y "<<target_acc_w.y()<<std::endl;
-  std::cout<<"z "<<target_acc_w.z()<<std::endl;
-  std::cout<<"yaw "<<rpy_.z()<<std::endl;
-  std::cout<<"xd "<<target_acc_dash.x()<<std::endl;
-  std::cout<<"yd "<<target_acc_dash.y()<<std::endl;
-  std::cout<<"zd "<<target_acc_dash.z()<<std::endl;
-
-  if(navigator_->getForceLandingFlag())
-    {
-      target_pitch_ = 0;
-      target_roll_ = 0;
-    }
 
   Eigen::VectorXd f = robot_model_->getStaticThrust();
   Eigen::VectorXd g = robot_model_->getGravity();
   Eigen::VectorXd allocate_scales = f / g.norm();
   Eigen::VectorXd target_thrust_z_term = allocate_scales * target_acc_w.length();
+
+  target_pitch_ = atan2(target_acc_dash.x(), target_acc_dash.z());
+  target_roll_ = atan2(-target_acc_dash.y(), sqrt(target_acc_dash.x() * target_acc_dash.x() + target_acc_dash.z() * target_acc_dash.z()));
+
+
+
+  std::cout<<"target_pitch_:"<<target_pitch_<<std::endl;
+  std::cout<<" target_roll_ :"<< target_roll_ <<std::endl;
+  std::cout<<"r:"<<rpy_.x()<<std::endl;
+  std::cout<<"p:"<<rpy_.y()<<std::endl;
+  std::cout<<"y:"<<rpy_.z()<<std::endl;
+
+  if(navigator_->getForceLandingFlag())
+  {
+    target_pitch_ = 0;
+    target_roll_ = 0;
+  }
+
+  Eigen::Matrix3d target_R = (Eigen::AngleAxisd(navigator_->getTargetRPY().z(), Eigen::Vector3d::UnitZ()) * Eigen::AngleAxisd(target_pitch_, Eigen::Vector3d::UnitY()) * Eigen::AngleAxisd(target_roll_, Eigen::Vector3d::UnitX())).toRotationMatrix();
+  Eigen::Matrix3d eR = (target_R.transpose() * R - R.transpose() * target_R) / 2;
+  delta_p(3) = (eR(2, 1) - eR(1, 2)) / 2;
+  delta_p(4) = (eR(0, 2) - eR(2, 0)) / 2;
+  delta_p(5) = (eR(1, 0) - eR(0, 1)) / 2;
+  delta_v(3) = omega_.x() - target_omega_cog.x();
+  delta_v(4) = omega_.y() - target_omega_cog.y();
+  delta_v(5) = omega_.z() - target_omega_cog.z();
+
+  Eigen::Vector3d tao_cmd = Eigen::Vector3d::Zero();
+
+  //tao_cmd = (I * Id.inverse() - Eigen::Matrix3d::Identity()) * est_external_wrench_.segment(3, 3) + (-Kd * delta_v.segment(3, 3) - Kp * delta_p.segment(3, 3)) + aerial_robot_model::skew(omega) * I * omega;
+  tao_cmd = (-Kd * delta_v.segment(3, 3) - Kp * delta_p.segment(3, 3)) + aerial_robot_model::skew(omega) * I * omega;
+  // target_wrench_acc_cog_(0) = tan(rpy_.y()) * target_acc_z * uav_mass;
+  // target_wrench_acc_cog_(1) = -tan(rpy_.x()) / cos(rpy_.y()) * target_acc_z * uav_mass;
+  // target_wrench_acc_cog_(2) = target_acc_z * uav_mass;
+  // target_wrench_acc_cog_.segment(3, 3) = tao_cmd;
+  std::cout<<"Kd:"<<Kd<<std::endl;
+  std::cout<<"Kp:"<<Kp<<std::endl;
+  std::cout<<"tao_cmd:"<<tao_cmd<<std::endl;
+  std::cout<<"I:"<<I<<std::endl;
+  Eigen::MatrixXd P = robot_model_->calcWrenchMatrixOnCoG();
+  Eigen::MatrixXd P_inv = aerial_robot_model::pseudoinverse(P);
+
+  // Eigen::VectorXd target_total_thrust = P_inv.col(3) * u(0) + P_inv.col(4) * u(1) + P_inv.col(5) * u(2);
+
+  target_thrust_roll_term_ = P_inv.col(3) * tao_cmd(0);
+  target_thrust_pitch_term_ = P_inv.col(4) * tao_cmd(1);
+  target_thrust_yaw_term_ =  P_inv.col(5) * tao_cmd(2); 
 
   // constraint z (also  I term)
   int index;
@@ -121,7 +247,9 @@ void UnderActuatedTiltedImpedanceController::controlCore()
       target_pitch_thrust_.at(i) = target_thrust_pitch_term_(i);
       target_yaw_thrust_.at(i) = target_thrust_yaw_term_(i);
       pid_msg_.z.total.at(i) =  target_thrust_z_term(i);
+      std::cout<<target_thrust_roll_term_(i)<<target_thrust_pitch_term_(i)<<target_thrust_yaw_term_(i)<<target_thrust_z_term(i)<<std::endl;
     }
+
 
   Eigen::MatrixXd q_mat_inv = getQInv();
   double ff_ang_yaw = navigator_->getTargetAngAcc().z();
@@ -177,11 +305,6 @@ void UnderActuatedTiltedImpedanceController::rosParamInit()
 {
   UnderActuatedImpedanceController::rosParamInit();
 
-  ros::NodeHandle control_nh(nh_, "controller");
-  ros::NodeHandle lqi_nh(control_nh, "lqi");
-
-  getParam<double>(lqi_nh, "trans_constraint_weight", trans_constraint_weight_, 1.0);
-  getParam<double>(lqi_nh, "att_control_weight", att_control_weight_, 1.0);
 }
 
 
