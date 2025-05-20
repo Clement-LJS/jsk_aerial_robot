@@ -11,9 +11,9 @@ controller:
     limit_d: 3
 
   z:
-    p_gain: 9.0
+    p_gain: 3.6
     i_gain: 1.55
-    d_gain: 9.0 # old: 3.4
+    d_gain: 5.0 # old: 3.4
     limit_err_p: 1.0
     limit_sum: 25.0 # N for clamping thrust force
     limit_p: 25.0 # m / s^2
