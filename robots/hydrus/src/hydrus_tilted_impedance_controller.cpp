@@ -483,7 +483,7 @@ void HydrusTiltedImpedanceController::rosParamInit()
   getParam<double>(param_nh, "pos_d", pos_d_, 4.0);
 
   momentum_observer_matrix_ = Eigen::MatrixXd::Identity(6,6);
-  momentum_observer_matrix_.topRows(3) *= 3;
+  momentum_observer_matrix_.topRows(3) *= 8.0;
   momentum_observer_matrix_.bottomRows(3) *= 2.5;
 }
 
@@ -519,18 +519,15 @@ void HydrusTiltedImpedanceController::externalWrenchEstimate()
   Eigen::MatrixXd J_t = Eigen::MatrixXd::Identity(6,6);
   J_t.topLeftCorner(3,3) = cog_rot;
   Eigen::VectorXd N = mass * robot_model_->getGravity();
-  N.tail(3) = aerial_robot_model::skew(omega_cog) * (inertia * omega_cog);
 
-  const Eigen::VectorXd target_wrench_acc_cog = getTargetWrenchAccCog();
-  Eigen::VectorXd target_wrench_cog = Eigen::VectorXd::Zero(6);
-  target_wrench_cog.head(3) = mass * target_wrench_acc_cog.head(3);
-  target_wrench_cog.tail(3) = inertia * target_wrench_acc_cog.tail(3);
+  N.tail(3) = aerial_robot_model::skew(omega_cog) * (inertia * omega_cog);
+  Eigen::VectorXd target_wrench_cog = getTargetWrenchCog();
+
   if(prev_est_wrench_timestamp_ == 0)
     {
       prev_est_wrench_timestamp_ = ros::Time::now().toSec();
       init_sum_momentum_ = sum_momentum; // not good
     }
-
   double dt = ros::Time::now().toSec() - prev_est_wrench_timestamp_;
   integrate_term_ += (J_t * target_wrench_cog - N + est_external_wrench_) * dt;
   est_external_wrench_ = momentum_observer_matrix_ * (sum_momentum - init_sum_momentum_ - integrate_term_);

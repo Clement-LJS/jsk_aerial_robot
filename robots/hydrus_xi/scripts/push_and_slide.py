@@ -52,7 +52,7 @@ if __name__ == "__main__":
     mode = UInt8()
     mode.data = 1
     joints = JointState()
-    joints.position = [1.0, 1.5, -0.59]
+    joints.position = [math.pi/3, math.pi/3, -math.pi/6]
     nav_msg = FlightNav()
 
     joint_pub.publish(joints)
@@ -62,20 +62,21 @@ if __name__ == "__main__":
     print("preparation 1")
     nav_msg.pos_xy_nav_mode = 4 # pos_vel mode
     nav_msg.target_pos_x = -1.5
-    nav_msg.target_vel_x = -0.1
+    nav_msg.target_vel_x = -0.05
     nav_msg.target_pos_y = 0.3
-    nav_msg.target_vel_y = -0.1
+    nav_msg.target_vel_y = -0.05
     nav_msg.pos_z_nav_mode = 4 
     nav_msg.target_pos_z = 0.6
     nav_msg.target_vel_z = 0.1
     nav_msg.yaw_nav_mode = 4 
-    nav_msg.target_yaw = -0.85
+    nav_msg.target_yaw = -math.pi/6
+    nav_msg.target_omega_z = -0.05
 
     nav_pub.publish(nav_msg)
  
     time.sleep(4)
     print("preparation 2")
-    nav_msg.target_pos_x = -1.15
+    nav_msg.target_pos_x = -1.20
     nav_pub.publish(nav_msg)
     time.sleep(5)
     print("preparation 3")
@@ -87,15 +88,15 @@ if __name__ == "__main__":
 
         round += 1
         nav_msg.pos_xy_nav_mode = 4
-        nav_msg.target_pos_x = -1.15
+        nav_msg.target_pos_x = -1.20
         nav_msg.target_vel_x = 0.0
-        nav_msg.target_pos_y = 0.3 * math.cos(round / 50)
- 
+        nav_msg.target_pos_y = 0.3 * math.cos(math.pi * round / 50)
+        nav_msg.target_vel_y = -0.12 * math.pi * math.sin(math.pi * round / 50)
         nav_msg.pos_z_nav_mode = 4 
-        nav_msg.target_pos_z = 0.6 + 0.3 * math.sin(round / 50)
-        # nav_msg.target_vel_z = 0.1 * math.cos(round / 50)
+        nav_msg.target_pos_z = 0.6 + 0.3 * math.sin(math.pi * round / 50)
+        nav_msg.target_vel_z = 0.12 * math.pi * math.cos(math.pi * round / 50)
         nav_msg.yaw_nav_mode = 4 
-        nav_msg.target_yaw = -0.85
+        nav_msg.target_yaw = -math.pi/6
         nav_pub.publish(nav_msg)
         external_wrench_added.wrench.torque.z = 0.4 * math.cos(round / 50)
         external_wrench_added.wrench.force.y = 0.6 * math.cos(round / 50)

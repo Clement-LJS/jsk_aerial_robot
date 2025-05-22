@@ -59,21 +59,23 @@ namespace aerial_robot_control
 
     std::mutex wrench_mutex_;
     Eigen::VectorXd est_external_wrench_;
-    Eigen::VectorXd target_wrench_acc_cog_;
+    Eigen::VectorXd est_external_wrench_clamped_;
+    Eigen::VectorXd target_wrench_cog_;
 
     double target_acc_x_, target_acc_y_, target_acc_z_;
     double x_y_p_, z_p_, roll_pitch_p_, yaw_p_, joints_p_, pos_p_, x_y_zeta_, z_zeta_, roll_pitch_zeta_, yaw_zeta_, joints_d_, pos_d_;
-    const Eigen::VectorXd getTargetWrenchAccCog()
+    const Eigen::VectorXd getTargetWrenchCog()
     {
       std::lock_guard<std::mutex> lock(wrench_mutex_);
-      return target_wrench_acc_cog_;
+      return target_wrench_cog_;
     }
-    void setTargetWrenchAccCog(const Eigen::VectorXd target_wrench_acc_cog)
+    void setTargetWrenchCog(const Eigen::VectorXd target_wrench_cog)
     {
       std::lock_guard<std::mutex> lock(wrench_mutex_);
-      target_wrench_acc_cog_ = target_wrench_acc_cog;
+      target_wrench_cog_ = target_wrench_cog;
     }
     double z_limit_;
+    void clampEstExternalWrench();
     void sendFourAxisCommand() override;
     void controlCore() override;
     bool optimalGain() override;
