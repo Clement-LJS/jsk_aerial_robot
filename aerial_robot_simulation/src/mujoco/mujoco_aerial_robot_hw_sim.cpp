@@ -10,7 +10,6 @@ namespace mujoco_ros_control
                               )
   {
     DefaultRobotHWSim::init(robot_namespace, model_nh, mujoco_model, mujoco_data);
-
     rotor_list_.resize(0);
 
     // get entire mass
@@ -20,7 +19,6 @@ namespace mujoco_ros_control
        mass += mujoco_model_->body_mass[i];
       }
     ROS_INFO_STREAM("[mujoco] robot mass is " << mass);
-
 
     // get rotor names from mujoco model
     int motor_num = 0;
@@ -33,22 +31,23 @@ namespace mujoco_ros_control
             motor_num++;
           }
       }
-
     // init joints from rosparam
     XmlRpc::XmlRpcValue all_servos_params;
     model_nh.getParam("servo_controller", all_servos_params);
     std::string init_value_param_name = "init_value";
     for(auto servo_group_params: all_servos_params)
       {
+
         if (servo_group_params.second.getType() != XmlRpc::XmlRpcValue::TypeStruct)
           continue;
         for(auto servo_params : servo_group_params.second)
           {
             if(servo_params.first.find("controller") != string::npos)
               {
+                std::cout<<servo_params.first<<std::endl;
+                  
                 std::string servo_name = static_cast<std::string>(servo_params.second["name"]);
                 double init_value = 0.0;
-
                 // check simulation param exists
                 if(!servo_group_params.second.hasMember("simulation") &&
                    !servo_params.second.hasMember("simulation"))
@@ -76,10 +75,10 @@ namespace mujoco_ros_control
                     init_value = static_cast<double>(servo_params.second["simulation"][init_value_param_name]);
                   }
                 control_input_.at((mj_name2id(mujoco_model_, mjtObj_::mjOBJ_ACTUATOR, servo_name.c_str()))) = init_value;
+                std::cout<<control_input_.size()<<std::endl;
               }
           }
       }
-
     /* Initialize spinal interface */
     spinal_interface_.init(model_nh, rotor_list_.size());
     registerInterface(&spinal_interface_);
@@ -102,7 +101,6 @@ namespace mujoco_ros_control
     simulation_nh.param("mocap_rot_noise", mocap_rot_noise_, 0.001); // rad
     ground_truth_pub_ = model_nh.advertise<nav_msgs::Odometry>("ground_truth", 1);
     mocap_pub_ = model_nh.advertise<geometry_msgs::PoseStamped>("mocap/pose", 1);
-
     return true;
   }
 
@@ -116,7 +114,6 @@ namespace mujoco_ros_control
                                              site_xmat[9 * fc_id + 6], site_xmat[9 * fc_id + 7], site_xmat[9 * fc_id + 8]);
     tf::Quaternion fc_quat;
     fc_rot_mat.getRotation(fc_quat);
-
     tf::Vector3 acc, gyro, mag;
     for(int i = 0; i < mujoco_model_->nsensor; i++)
       {
@@ -185,7 +182,6 @@ namespace mujoco_ros_control
         mocap_pub_.publish(pose_msg);
         last_mocap_time_ = time;
       }
-
     DefaultRobotHWSim::read(time, period);
   }
 
@@ -193,11 +189,12 @@ namespace mujoco_ros_control
   {
     for(int i = 0; i < spinal_interface_.getMotorNum(); i++)
       {
+       
         int rotor_id = mj_name2id(mujoco_model_, mjOBJ_ACTUATOR, rotor_list_.at(i).c_str());
         double rotor_force = spinal_interface_.getForce(i);
         control_input_.at(rotor_id) = rotor_force;
-      }
 
+      }
       DefaultRobotHWSim::write(time, period);
   }
 

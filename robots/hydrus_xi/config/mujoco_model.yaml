@@ -2,6 +2,8 @@ package:
   ["hydrus_xi"]
 
 hydrus_xi:
-  input:  ["robots/hex_branch/xavier201811.urdf.xacro", "robots/hex_branch/xavier_hokuyo.urdf.xacro"]
-  filename: ["hex_branch/xavier201811", "hex_branch/xavier_hokuyo"]
+  # input:  ["robots/hex_branch/xavier201811.urdf.xacro", "robots/hex_branch/xavier_hokuyo.urdf.xacro", "robots/quad/upboard202007.urdf.xacro"]
+  # filename: ["hex_branch/xavier201811", "hex_branch/xavier_hokuyo", "quad/upboard202007"]
+  input:  ["robots/quad/upboard202007.urdf.xacro"]
+  filename: ["quad/upboard202007"]
   meshdir: "urdf/mesh"

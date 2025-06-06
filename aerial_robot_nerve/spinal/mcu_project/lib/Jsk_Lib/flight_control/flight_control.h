@@ -48,9 +48,7 @@ public:
     config_ack_pub_ = nh_->advertise<std_msgs::UInt8>("flight_config_ack", 1);
     uav_info_sub_ = nh_->subscribe("uav_info", 1, &FlightControl::uavInfoConfigCallback, this);
     flight_config_sub_ = nh_->subscribe("flight_config_cmd", 1, &FlightControl::flightConfigCallback, this);
-
     att_controller_.init(nh, estimator);
-
     start_control_flag_ = false;
     pwm_test_flag_ = false;
     integrate_flag_ = false;
@@ -70,14 +68,12 @@ public:
   void init(TIM_HandleTypeDef* htim1, TIM_HandleTypeDef* htim2, StateEstimate* estimator, DShot* dshot, BatteryStatus* bat, ros::NodeHandle* nh, osMutexId* mutex = NULL)
   {
     nh_ = nh;
-
     /* config ack to ROS */
     nh_->advertise(config_ack_pub_);
     /* uav & motor type */
     nh_->subscribe(uav_info_sub_);
     /* flight control base config */
     nh_->subscribe(flight_config_sub_);
-
     estimator_ = estimator;
 
     bat_ = bat;
@@ -86,10 +82,8 @@ public:
     pwm_htim2_ = htim2;
 
     mutex_ = mutex;
-
     att_controller_.init(htim1, htim2, estimator, dshot, bat, nh, mutex);
     //pos_controller_.init(estimator_, &att_controller_, nh_);
-
     start_control_flag_ = false;
     pwm_test_flag_ = false;
     integrate_flag_ = false;

@@ -58,7 +58,7 @@ void RobotModel::updateJacobians()
 
 void RobotModel::updateJacobians(const KDL::JntArray& joint_positions, bool update_model)
 {
-    std::cout<<"dd"<<std::endl;
+
   if(update_model) updateRobotModel(joint_positions);
 
   calcCoGMomentumJacobian(); // should be processed first

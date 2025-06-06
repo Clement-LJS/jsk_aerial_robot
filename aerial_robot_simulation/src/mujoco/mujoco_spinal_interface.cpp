@@ -23,7 +23,6 @@ namespace hardware_interface
         /* assume the robot is static, acc: [0, 0, g] */
         setImuValue(0, 0, aerial_robot_estimation::G, 0, 0, 0);
       }
-
     spinal_state_estimator_.update();
   }
 
