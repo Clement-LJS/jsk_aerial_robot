@@ -1,0 +1,103 @@
+<mujoco model="hydrus_xi">
+  <compiler angle="radian" autolimits="true"/>
+  <statistic meansize="0.125908" extent="2.642" center="1.289 0 0"/>
+  <asset>
+    <mesh name="end_link1" file="end_link1.stl" scale="0.001 0.001 0.001"/>
+    <mesh name="T-motor-CF-14inch-CW" file="T-motor-CF-14inch-CW.stl"/>
+    <mesh name="end_link2" file="end_link2.stl" scale="0.001 0.001 0.001"/>
+    <mesh name="T-motor-CF-14inch-CCW" file="T-motor-CF-14inch-CCW.stl"/>
+    <mesh name="middle_link" file="middle_link.stl" scale="0.001 0.001 0.001"/>
+    <mesh name="propeller_link" file="propeller_link.stl" scale="0.001 0.001 0.001"/>
+    <mesh name="battery" file="battery.stl"/>
+    <mesh name="fc" file="fc.stl"/>
+    <mesh name="upboard" file="upboard.stl" scale="0.001 0.001 0.001"/>
+  </asset>
+  <worldbody>
+    <body name="wall" pos="5.0 0 0">
+      <geom name="wall" size="0.1 4 4" type="box" contype="1" conaffinity="0"/>
+    </body>
+    <body name="link1" pos="0 0 0.2">
+      <inertial pos="0.327173 -0.000033 -0.006011" mass="0.455151" fullinertia="0.001020 0.008076 0.007129 -0.000009 -0.002149 -0.000000"/>
+      <freejoint/>
+      <geom name="link1" pos="0.0 0 0" type="mesh" mesh="end_link1" contype="1" conaffinity="0"/>
+      <body name="link2" pos="0.6 0 0">
+        <inertial pos="0.308126 -4.92303e-05 -0.0061696" quat="0.477214 0.521143 0.52302 0.476578" mass="0.771652" diaginertia="0.0159855 0.0148716 0.00124186"/>
+        <joint name="joint1" pos="0 0 0" axis="0 0 1" range="-1.57 1.57" damping="0.8" frictionloss="0.05"/>
+        <geom name="link2" pos="0.0 0 0" type="mesh" mesh="middle_link" contype="1" conaffinity="0"/>
+        <body name="link3" pos="0.6 0 0">
+          <inertial pos="0.260961 -4.38642e-05 -0.0085071" quat="0.494388 0.5051 0.506179 0.494204" mass="0.866052" diaginertia="0.0183964 0.0171414 0.00138296"/>
+          <joint name="joint2" pos="0 0 0" axis="0 0 1" range="-1.57 1.57" damping="0.8" frictionloss="0.05"/>
+          <geom name="link3" pos="0.0 0 0" type="mesh" mesh="middle_link" contype="1" conaffinity="0"/>
+          <geom name="pc" pos="0.06225 0 -0.01" type="mesh" mesh="upboard" contype="1" conaffinity="0"/>
+          <body name="link4" pos="0.6 0 0">
+            <inertial pos="0.272629 -5.52176e-05 -0.0061174" quat="0.480097 0.517971 0.520235 0.480176" mass="0.685782" diaginertia="0.00818967 0.00705106 0.00133153"/>
+            <joint name="joint3" pos="0 0 0" axis="0 0 1" range="-1.57 1.57" damping="0.8" frictionloss="0.05"/>
+            <geom name="link4" pos="0.0 0 0" type="mesh" mesh="end_link2" contype="1" conaffinity="0"/>
+            <geom name="end_effector1" size="0.01 0.1" pos="0.7 0 0" quat="0.707388 0 0.706825 0" type="cylinder"/>
+            <geom name="end_effector2" size="0.01" pos="0.8 0 0"/>
+            <body name="gimbal_link4" pos="0.3016 0 0.05967" quat="1.32679e-06 0 0 1">
+              <inertial pos="-0.00611376 9.99962e-07 0.0327787" quat="0.986808 0 0.161895 0" mass="0.26001" diaginertia="0.001001 0.001001 0.001001"/>
+              <joint name="gimbal4" pos="0 0 0" axis="0 0 1" range="-18.8496 18.8496" damping="0.8" frictionloss="0.05"/>
+              <geom name="gimbal_link4" pos="0.0 0 0" type="mesh" mesh="propeller_link" contype="1" conaffinity="0"/>
+              <body name="thrust4" pos="0 0 0.05091" quat="0.984808 0 0.173648 0">
+                <inertial pos="0 0 0" quat="0.5 0.5 -0.5 0.5" mass="0.02" diaginertia="3.1684e-06 1.5842e-06 1.5842e-06"/>
+                <!-- <geom name="thrust4" pos="0 0 0.032" type="mesh" mesh="T-motor-CF-14inch-CCW" contype="1" conaffinity="0"/> -->
+                <site name="rotor4" pos="0 0 0"/>
+              </body>
+            </body>
+          </body>
+          <body name="gimbal_link3" pos="0.3016 0 0.05967" quat="1.32679e-06 0 0 1">
+            <inertial pos="-0.00611376 9.99962e-07 0.0327787" quat="0.986808 0 0.161895 0" mass="0.26001" diaginertia="0.001001 0.001001 0.001001"/>
+            <joint name="gimbal3" pos="0 0 0" axis="0 0 1" range="-18.8496 18.8496" damping="0.8" frictionloss="0.05"/>
+            <geom name="gimbal_link3" pos="0.0 0 0" type="mesh" mesh="propeller_link" contype="1" conaffinity="0"/>
+            <body name="thrust3" pos="0 0 0.05091" quat="0.984808 0 0.173648 0">
+              <inertial pos="0 0 0" quat="0.5 0.5 -0.5 0.5" mass="0.02" diaginertia="3.1684e-06 1.5842e-06 1.5842e-06"/>
+              <!-- <geom name="thrust3" pos="0 0 0.032" type="mesh" mesh="T-motor-CF-14inch-CW" contype="1" conaffinity="0"/> -->
+              <site name="rotor3" pos="0 0 0"/>
+            </body>
+          </body>
+        </body>
+        <body name="gimbal_link2" pos="0.3016 0 0.05967" quat="1.32679e-06 0 0 1">
+          <inertial pos="-0.00611376 9.99962e-07 0.0327787" quat="0.986808 0 0.161895 0" mass="0.26001" diaginertia="0.001001 0.001001 0.001001"/>
+          <joint name="gimbal2" pos="0 0 0" axis="0 0 1" range="-18.8496 18.8496" damping="0.8" frictionloss="0.05"/>
+          <geom name="gimbal_link2" pos="0.0 0 0" type="mesh" mesh="propeller_link" contype="1" conaffinity="0"/>
+          <body name="thrust2" pos="0 0 0.05091" quat="0.984808 0 0.173648 0">
+            <inertial pos="0 0 0" quat="0.5 0.5 -0.5 0.5" mass="0.02" diaginertia="3.1684e-06 1.5842e-06 1.5842e-06"/>
+            <!-- <geom name="thrust2" pos="0 0 0.032" type="mesh" mesh="T-motor-CF-14inch-CCW" contype="1" conaffinity="0"/> -->
+            <site name="rotor2" pos="0 0 0"/>
+          </body>
+        </body>
+        <site name="fc" pos="0.5451 -0.006 -0.032"/>
+      </body>
+      <body name="gimbal_link1" pos="0.3016 0 0.05967" quat="1.32679e-06 0 0 1">
+        <inertial pos="-0.00611376 9.99962e-07 0.0327787" quat="0.986808 0 0.161895 0" mass="0.26001" diaginertia="0.001001 0.001001 0.001001"/>
+        <joint name="gimbal1" pos="0 0 0" axis="0 0 1" range="-18.8496 18.8496" damping="0.8" frictionloss="0.05"/>
+        <geom name="gimbal_link1" pos="0.0 0 0" type="mesh" mesh="propeller_link" contype="1" conaffinity="0"/>
+        <body name="thrust1" pos="0 0 0.05091" quat="0.984808 0 0.173648 0">
+          <inertial pos="0 0 0" quat="0.5 0.5 -0.5 0.5" mass="0.02" diaginertia="3.1684e-06 1.5842e-06 1.5842e-06"/>
+          <!-- <geom name="thrust1" pos="0 0 0.032" type="mesh" mesh="T-motor-CF-14inch-CW" contype="1" conaffinity="0"/> -->
+          <site name="rotor1" pos="0 0 0"/>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+  <actuator>
+    <motor name="rotor1" ctrllimited="true" ctrlrange="1 20" gear="0 0 1 0 0 0.0172" site="rotor1"/>
+    <motor name="rotor2" ctrllimited="true" ctrlrange="1 20" gear="0 0 1 0 0 -0.0172" site="rotor2"/>
+    <motor name="rotor3" ctrllimited="true" ctrlrange="1 20" gear="0 0 1 0 0 0.0172" site="rotor3"/>
+    <motor name="rotor4" ctrllimited="true" ctrlrange="1 20" gear="0 0 1 0 0 -0.0172" site="rotor4"/>
+    <position name="joint1" kp="40" joint="joint1"/>
+    <position name="joint2" kp="40" joint="joint2"/>
+    <position name="joint3" kp="40" joint="joint3"/>
+    <position name="gimbal1" kp="40" joint="gimbal1"/>
+    <position name="gimbal2" kp="40" joint="gimbal2"/>
+    <position name="gimbal3" kp="40" joint="gimbal3"/>
+    <position name="gimbal4" kp="40" joint="gimbal4"/>
+  </actuator>
+  <sensor>
+    <accelerometer name="acc" site="fc"/>
+    <gyro name="gyro" site="fc"/>
+    <magnetometer name="mag" site="fc"/>
+  </sensor>
+  <include file="../../../../../../aerial_robot_3rdparty/mujoco_ros_control/config/world.xml"/>
+</mujoco>
