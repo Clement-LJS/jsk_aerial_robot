@@ -14,9 +14,7 @@ namespace flight_controllers
     int index = n.getNamespace().rfind('/');
     std::string robot_ns = n.getNamespace().substr(0, index);
     ros::NodeHandle n_robot = ros::NodeHandle(robot_ns);
-     std::cout<<"xx"<<std::endl;
     controller_core_->init(&n_robot, robot->getEstimatorPtr());
-        std::cout<<"yy"<<std::endl;
     return true;
 
   }

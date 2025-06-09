@@ -44,7 +44,6 @@ namespace mujoco_ros_control
           {
             if(servo_params.first.find("controller") != string::npos)
               {
-                std::cout<<servo_params.first<<std::endl;
                   
                 std::string servo_name = static_cast<std::string>(servo_params.second["name"]);
                 double init_value = 0.0;
@@ -75,7 +74,6 @@ namespace mujoco_ros_control
                     init_value = static_cast<double>(servo_params.second["simulation"][init_value_param_name]);
                   }
                 control_input_.at((mj_name2id(mujoco_model_, mjtObj_::mjOBJ_ACTUATOR, servo_name.c_str()))) = init_value;
-                std::cout<<control_input_.size()<<std::endl;
               }
           }
       }

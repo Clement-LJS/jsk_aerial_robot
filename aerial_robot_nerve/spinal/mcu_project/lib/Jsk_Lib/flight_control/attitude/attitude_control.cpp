@@ -34,7 +34,6 @@ void AttitudeController::init(ros::NodeHandle* nh, StateEstimate* estimator)
   torque_allocation_matrix_inv_sub_ = nh_->subscribe("torque_allocation_matrix_inv", 1, &AttitudeController::torqueAllocationMatrixInvCallback, this);
   sim_vol_sub_ = nh_->subscribe("set_sim_voltage", 1, &AttitudeController::setSimVolCallback, this);
   offset_rot_sub_ = nh_->subscribe("desire_coordinate", 1, &AttitudeController::offsetRotCallback, this);
-  std::cout<<"ZZ"<<std::endl;
   baseInit();
 }
 

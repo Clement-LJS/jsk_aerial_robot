@@ -79,13 +79,10 @@ void UnderActuatedTiltedLQIController::controlCore()
   Eigen::VectorXd allocate_scales = f / g.norm();
   Eigen::VectorXd target_thrust_z_term = allocate_scales * target_acc_w.length();
 
-
   // constraint z (also  I term)
   int index;
   double max_term = target_thrust_z_term.cwiseAbs().maxCoeff(&index);
   double residual = max_term - z_limit_;
-
-  //std::cout<<"P"<<robot_model_->calcWrenchMatrixOnCoG()<<std::endl;
 
   if(residual > 0)
     {
@@ -99,7 +96,6 @@ void UnderActuatedTiltedLQIController::controlCore()
       target_base_thrust_.at(i) = target_thrust_z_term(i);
       pid_msg_.z.total.at(i) =  target_thrust_z_term(i);
     }
-
   allocateYawTerm();
 }
 
