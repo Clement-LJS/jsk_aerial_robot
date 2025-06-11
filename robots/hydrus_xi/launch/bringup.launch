@@ -17,7 +17,7 @@
   <arg name="sensor_config_file" default="$(find hydrus_xi)/config/$(arg type)/egomotion_estimation/$(arg onboards_model).yaml"/>
   <arg name="sensor_launch_file" default="$(find hydrus_xi)/launch/includes/$(arg onboards_model)/sensors.launch.xml"/>
   <arg name="launch_gazebo" default="True" />
-  <arg name="spawn_x" default="0.0"/>
+  <arg name="spawn_x" default="-3.0"/>
   <arg name="spawn_y" default="0.0"/>
   <arg name="spawn_z" default="0.0"/>
   <arg name="spawn_yaw" default="0.0"/>
@@ -107,10 +107,10 @@
   <node pkg="hydrus_xi" name="init_gimbal_angles" type="init_gimbal_angles.py" ns="$(arg robot_ns)" if="$(arg init_gimbal_angle)"/>
 
 
-  ######### Hole model #########
-  <!-- <group if="$(eval arg('simulation'))">
-    <param name="hole/robot_description" command="$(find xacro)/xacro $(find hydrus_xi)/urdf/wall.urdf" />
-    <node pkg="gazebo_ros" type="spawn_model" name="hole_spawn" args="-param hole/robot_description -urdf -x 0 -y 0 -z 0 -model hole" />
+  <!-- ######### Hole model #########
+ <group if="$(eval arg('simulation'))">
+    <param name="opening/robot_description" command="$(find xacro)/xacro $(find squeeze_navigation)/urdf/2d_opening.urdf" />
+    <node pkg="gazebo_ros" type="spawn_model" name="valve_spawn" args="-param opening/robot_description -urdf -x 0 -y 0 -z 0 -model opening" />
   </group> -->
 
   ########## Simulation in Mujoco #########

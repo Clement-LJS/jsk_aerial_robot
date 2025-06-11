@@ -81,9 +81,9 @@ void UnderActuatedTiltedImpedanceController::controlCore()
 
   // Inerial params
   double uav_mass = robot_model_->getMass();
-  double mx = 2 * uav_mass;
-  double my = 2 * uav_mass;
-  double mz = 2 * uav_mass;
+  double mx = 2.0 * uav_mass;
+  double my = 2.0 * uav_mass;
+  double mz = 2.0 * uav_mass;
   Eigen::Matrix3d I = robot_model_->getInertia<Eigen::Matrix3d>();
   //Eigen::Matrix3d Id = 2 * I;
   Eigen::Matrix3d Id = Eigen::Matrix3d::Zero();
@@ -118,6 +118,7 @@ void UnderActuatedTiltedImpedanceController::controlCore()
 
   Eigen::VectorXd delta_p =  Eigen::VectorXd::Zero(6); 
   Eigen::VectorXd delta_v =  Eigen::VectorXd::Zero(6); 
+  Eigen::VectorXd acc =  Eigen::VectorXd::Zero(6); 
 
   // tf::Vector3 target_vel_ = navigator_->getTargetVel();
   // tf::Vector3 target_acc_ = navigator_->getTargetAcc();
@@ -125,10 +126,10 @@ void UnderActuatedTiltedImpedanceController::controlCore()
   // tf::Vector3 target_ang_acc_ = navigator_->getTargetAngAcc();
 
 
-  pos_ = estimator_->getPos(Frame::COG, estimator_->getEstimateMode());
-  vel_ = estimator_->getVel(Frame::COG, estimator_->getEstimateMode());
-  rpy_ = estimator_->getEuler(Frame::COG, estimator_->getEstimateMode());
-  omega_ = estimator_->getAngularVel(Frame::COG, estimator_->getEstimateMode());
+  // pos_ = estimator_->getPos(Frame::COG, estimator_->getEstimateMode());
+  // vel_ = estimator_->getVel(Frame::COG, estimator_->getEstimateMode());
+  // rpy_ = estimator_->getEuler(Frame::COG, estimator_->getEstimateMode());
+  // omega_ = estimator_->getAngularVel(Frame::COG, estimator_->getEstimateMode());
   Eigen::Vector3d omega;
   omega(0) = omega_.x();
   omega(1) = omega_.y();
@@ -144,37 +145,40 @@ void UnderActuatedTiltedImpedanceController::controlCore()
   delta_v(0) = vel_.x() - target_vel_.x();
   delta_v(1) = vel_.y() - target_vel_.y();
   delta_v(2) = vel_.z() - target_vel_.z();
+  // acc(0) = target_acc_.x();
+  // acc(1) = target_acc_.y();
+  // acc(2) = target_acc_.z();
   clampEstExternalWrench();
 
-  // double target_acc_x = (1 / mx - 1 / uav_mass) * est_external_wrench_clamped_[0] + (-Kdx * delta_v(0) - Kpx * delta_p(0));
-  // double target_acc_y = (1 / my - 1 / uav_mass) * est_external_wrench_clamped_[1] + (-Kdy * delta_v(1) - Kpy * delta_p(1));
-  // double target_acc_z = (1 / mz - 1 / uav_mass) * est_external_wrench_clamped_[2] + (-Kdz * delta_v(2) - Kpy * delta_p(2)) + aerial_robot_estimation::G;
+  double target_acc_x = acc(0) + (1 / mx - 1 / uav_mass) * est_external_wrench_clamped_[0] + (-Kdx * delta_v(0) - Kpx * delta_p(0));
+  double target_acc_y = acc(1) + (1 / my - 1 / uav_mass) * est_external_wrench_clamped_[1] + (-Kdy * delta_v(1) - Kpy * delta_p(1));
+  double target_acc_z = acc(2) + (1 / mz - 1 / uav_mass) * est_external_wrench_clamped_[2] + (-Kdz * delta_v(2) - Kpy * delta_p(2)) + aerial_robot_estimation::G;
 
 
-  double target_acc_x = (-Kdx * delta_v(0) - Kpx * delta_p(0));
-  double target_acc_y = (-Kdy * delta_v(1) - Kpy * delta_p(1));
-  double target_acc_z = (-Kdz * delta_v(2) - Kpy * delta_p(2)) + aerial_robot_estimation::G;
+  // double target_acc_x = (-Kdx * delta_v(0) - Kpx * delta_p(0));
+  // double target_acc_y = (-Kdy * delta_v(1) - Kpy * delta_p(1));
+  // double target_acc_z = (-Kdz * delta_v(2) - Kpy * delta_p(2)) + aerial_robot_estimation::G;
 
 
-  if (target_acc_x > 1.0)
-    target_acc_x = 1.0;
-  if (target_acc_x < -1.0)
-    target_acc_x = -1.0;
+  if (target_acc_x > 3.0)
+    target_acc_x = 3.0;
+  if (target_acc_x < -3.0)
+    target_acc_x = -3.0;
 
-  if (target_acc_y > 1.0)
-    target_acc_y = 1.0;
-  if (target_acc_y < -1.0)
-    target_acc_y = -1.0;
+  if (target_acc_y > 3.0)
+    target_acc_y = 3.0;
+  if (target_acc_y < -3.0)
+    target_acc_y = -3.0;
 
   if (target_acc_z > 15.0)
     target_acc_z = 15.0;
   if (target_acc_z < -15.0)
     target_acc_z = -15.0;
 
-  // std::cout<<"x"<<target_acc_x<<std::endl;
-  // std::cout<<"y"<<target_acc_y<<std::endl;
-  // std::cout<<"z"<<target_acc_z<<std::endl;
-
+  std::cout<<"x"<<target_acc_y<<std::endl;
+  std::cout<<"y"<<(1 / my - 1 / uav_mass) * est_external_wrench_clamped_[1]<<std::endl;
+  std::cout<<"z"<<(-Kdx * delta_v(1) - Kpx * delta_p(1));
+  std::cout<<"w"<<acc(1);
   std::cout<<"delta_p"<<delta_p<<std::endl;
   std::cout<<"pos_.x()"<<pos_.x()<<std::endl;
   std::cout<<"target_pos_.x()"<<target_pos_.x()<<std::endl;
@@ -190,12 +194,13 @@ void UnderActuatedTiltedImpedanceController::controlCore()
   Eigen::VectorXd g = robot_model_->getGravity();
   Eigen::VectorXd allocate_scales = f / g.norm();
   Eigen::VectorXd target_thrust_z_term = allocate_scales * target_acc_w.length();
-
+   std::cout<<"za"<<pid_controllers_.at(Z).result()<<std::endl;
+  //Eigen::VectorXd target_thrust_z_term = Eigen::VectorXd::Zero(4);
   target_pitch_ = atan2(target_acc_dash.x(), target_acc_dash.z());
   target_roll_ = atan2(-target_acc_dash.y(), sqrt(target_acc_dash.x() * target_acc_dash.x() + target_acc_dash.z() * target_acc_dash.z()));
 
-
-
+  double rate = pid_controllers_.at(Z).result() / (aerial_robot_estimation::G - 0.3);
+  target_thrust_z_term = rate * target_thrust_z_term;
   if(navigator_->getForceLandingFlag())
   {
     target_pitch_ = 0;
@@ -210,25 +215,20 @@ void UnderActuatedTiltedImpedanceController::controlCore()
   delta_v(3) = omega_.x() - target_omega_cog.x();
   delta_v(4) = omega_.y() - target_omega_cog.y();
   delta_v(5) = omega_.z() - target_omega_cog.z();
-
+  // acc(3) = target_ang_acc_.x();
+  // acc(4) = target_ang_acc_.y();
+  // acc(5) = target_ang_acc_.z();
   Eigen::Vector3d tao_cmd = Eigen::Vector3d::Zero();
 
-  //tao_cmd = (I * Id.inverse() - Eigen::Matrix3d::Identity()) * est_external_wrench_clamped_.segment(3, 3) + (-Kd * delta_v.segment(3, 3) - Kp * delta_p.segment(3, 3)) + aerial_robot_model::skew(omega) * I * omega;
-  tao_cmd = (-Kd * delta_v.segment(3, 3) - Kp * delta_p.segment(3, 3)) + aerial_robot_model::skew(omega) * I * omega;
+  tao_cmd = I * acc.segment(3, 3) + (I * Id.inverse() - Eigen::Matrix3d::Identity()) * est_external_wrench_clamped_.segment(3, 3) + (-Kd * delta_v.segment(3, 3) - Kp * delta_p.segment(3, 3)) + aerial_robot_model::skew(omega) * I * omega;
+  //tao_cmd = (-Kd * delta_v.segment(3, 3) - Kp * delta_p.segment(3, 3)) + aerial_robot_model::skew(omega) * I * omega;
   target_wrench_cog_(0) = tan(rpy_.y()) * target_acc_z * uav_mass;
   target_wrench_cog_(1) = -tan(rpy_.x()) / cos(rpy_.y()) * target_acc_z * uav_mass;
   target_wrench_cog_(2) = target_acc_z * uav_mass;
   target_wrench_cog_.segment(3, 3) = tao_cmd;
-
-  // geometry_msgs::WrenchStamped wrench_msg;
-  // wrench_msg.header.stamp.fromSec(estimator_->getImuLatestTimeStamp());
-  // wrench_msg.wrench.force.x = target_wrench_cog_(0);
-  // wrench_msg.wrench.force.y = target_wrench_cog_(1);
-  // wrench_msg.wrench.force.z = target_wrench_cog_(2);
-  // wrench_msg.wrench.torque.x = target_wrench_cog_(3);
-  // wrench_msg.wrench.torque.y = target_wrench_cog_(4);
-  // wrench_msg.wrench.torque.z = target_wrench_cog_(5);
-  // estimate_external_wrench_pub_.publish(wrench_msg);
+  std::cout<<"tao_cmd"<<tao_cmd<<std::endl;
+  std::cout<<"y"<<(I * Id.inverse() - Eigen::Matrix3d::Identity()) * est_external_wrench_clamped_.segment(3, 3)<<std::endl;
+  std::cout<<"z"<<(-Kd * delta_v.segment(3, 3) - Kp * delta_p.segment(3, 3)) + aerial_robot_model::skew(omega) * I * omega<<std::endl;
 
   Eigen::MatrixXd P = robot_model_->calcWrenchMatrixOnCoG();
   Eigen::MatrixXd P_inv = aerial_robot_model::pseudoinverse(P);

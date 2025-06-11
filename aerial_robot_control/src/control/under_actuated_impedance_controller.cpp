@@ -59,6 +59,7 @@ void UnderActuatedImpedanceController::initialize(ros::NodeHandle nh,
 
 
   //publisher
+
   rpy_gain_pub_ = nh_.advertise<spinal::RollPitchYawTerms>("rpy/gain", 1);
   flight_cmd_pub_ = nh_.advertise<spinal::FourAxisCommand>("four_axes/command", 1);
   flight_impedance_cmd_pub_ = nh_.advertise<spinal::FourAxisCommandImpedance>("four_axes/imp_command", 1);

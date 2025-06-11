@@ -1,4 +1,4 @@
-aerial_robot_control_name: aerial_robot_control/hydrus_tilted_lqi_controller
+aerial_robot_control_name: aerial_robot_control/hydrus_tilted_impedance_controller
 
 controller:
   xy:
@@ -12,7 +12,7 @@ controller:
 
   z:
     p_gain: 3.6
-    i_gain: 1.55
+    i_gain: 6.0 # old: 1.55
     d_gain: 5.0 # old: 3.4
     limit_err_p: 1.0
     limit_sum: 25.0 # N for clamping thrust force
@@ -61,11 +61,11 @@ controller:
     x_y_p: 2.3
     x_y_zeta: 0.7
 
-    z_p: 3.6
-    z_zeta: 0.7
+    z_p: 6.0
+    z_zeta: 0.65
 
     roll_pitch_p: 55.0
-    roll_pitch_zeta: 0.9
+    roll_pitch_zeta: 0.85
 
     yaw_p: 20.0
     yaw_zeta: 0.75
