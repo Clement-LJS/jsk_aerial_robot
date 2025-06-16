@@ -38,6 +38,7 @@
 #include <aerial_robot_control/control/under_actuated_tilted_impedance_controller.h>
 #include <spinal/PMatrixPseudoInverseWithInertia.h>
 #include <geometry_msgs/WrenchStamped.h>
+#include <gazebo_msgs/ApplyBodyWrench.h>
 #include <hydrus/imu.h>
 #include <thread>
 
@@ -63,6 +64,7 @@ namespace aerial_robot_control
   protected:
 
     ros::Publisher estimate_external_wrench_pub_;
+    ros::Subscriber ext_force_sub_;
 
  
 
@@ -76,16 +78,23 @@ namespace aerial_robot_control
     double prev_est_wrench_timestamp_;
     Eigen::MatrixXd momentum_observer_matrix_;
 
+    Eigen::Vector3d xd_ddot_, xd_dot_, xd_, xref_;
+
+    ros::Time time_; 
+
+    geometry_msgs::Wrench ext_force_;
+    ros::Duration ext_duration_;
 
     void externalWrenchEstimate();
 
 
     bool checkRobotModel() override;
-    // virtual void controlCore() override;
+    virtual void controlCore() override;
     virtual void rosParamInit() override;
     Eigen::Matrix3d getPositionJacobian(std::string name);
     Eigen::Matrix3d getOrientationJacobian(std::string name);
     Eigen::MatrixXd getCmatrix(Eigen::MatrixXd delta_M, Eigen::VectorXd delta_xi,  Eigen::VectorXd xi_dot);
+    void extForceCallback(const geometry_msgs::WrenchConstPtr& cmd);
 
   };
    

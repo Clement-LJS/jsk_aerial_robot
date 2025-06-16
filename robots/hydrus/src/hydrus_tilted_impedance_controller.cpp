@@ -1,4 +1,5 @@
 #include <hydrus/hydrus_tilted_impedance_controller.h>
+#include <kdl/chainiksolverpos_lma.hpp>
 
 using namespace aerial_robot_control;
 
@@ -27,11 +28,24 @@ void HydrusTiltedImpedanceController::initialize(ros::NodeHandle nh,
   pos_cmd_.x = -0.3;
   pos_cmd_.y = 0.3;
   pos_cmd_.z = 0.0;
-  est_external_wrench_ = Eigen::VectorXd::Zero(6);
+
+  xd_ddot_ = Eigen::VectorXd::Zero(3);
+  xd_dot_ = Eigen::VectorXd::Zero(3);
+  xd_ = Eigen::VectorXd::Zero(3);
+  xref_ = Eigen::VectorXd::Zero(3);
+  
+  xref_(0) = 0.9047;
+  xref_(1) = 0.5223;
+
+  xd_(0) = 0.9047;
+  xd_(1) = 0.5223;
+
   init_sum_momentum_ = Eigen::VectorXd::Zero(6);
   integrate_term_ = Eigen::VectorXd::Zero(6);
+  est_external_wrench_ = Eigen::VectorXd::Zero(6);
   prev_est_wrench_timestamp_ = 0;
   estimate_external_wrench_pub_ = nh_.advertise<geometry_msgs::WrenchStamped>("estimated_external_wrench", 1);
+  ext_force_sub_ = nh_.subscribe("ext_force", 1, &HydrusTiltedImpedanceController::extForceCallback, this);
 
 
   wrench_estimate_thread_ = boost::thread([this]()
@@ -62,6 +76,68 @@ bool HydrusTiltedImpedanceController::checkRobotModel()
     }
   return true;
   
+}
+void HydrusTiltedImpedanceController::controlCore()
+{
+  UnderActuatedTiltedImpedanceController::controlCore();
+
+
+
+
+
+
+  // Admittance control
+  double Ma = 5;
+  double Ca = 2*0.35*sqrt(750);
+  double Ka = 150;
+
+  double dt = (ros::Time::now() - time_).toSec();
+  Eigen::AngleAxisd rotation_vector(rpy_.z(), Eigen::Vector3d::UnitZ());
+  Eigen::Matrix3d R = rotation_vector.toRotationMatrix(); 
+  Eigen::Vector3d Fext = Eigen::Vector3d::Zero();
+  Fext(0) = ext_force_.force.x;
+  xd_ddot_ = (R.inverse() * Fext - Ka * (xd_ - xref_) - Ca * xd_dot_) / Ma;
+  xd_ += xd_dot_ * dt;
+  xd_dot_ += xd_ddot_ * dt;
+
+  std_msgs::Float64 j1_term, j2_term, j3_term;
+  // joint_cmd_pubs_[0].publish(j1_term);
+  // joint_cmd_pubs_[1].publish(j2_term);
+  // joint_cmd_pubs_[2].publish(j3_term);
+  std::cout<<ext_force_<<std::endl;
+  std::cout<<"xd_"<<xd_<<std::endl;
+  // std::cout<<"ext_duration_"<<ext_duration_<<std::endl;
+  // KDL::Chain kdl_chain;
+  // robot_model_->getTree().getChain(std::string("root"), std::string("end_effector"), kdl_chain);
+  //   // 2. 创建IK解算器
+  // KDL::ChainIkSolverPos_LMA ik_solver(kdl_chain);
+  // KDL::ChainFkSolverPos_recursive fk_solver(kdl_chain);
+  //   // 3. 设置目标末端位姿（在质心坐标系下）
+  // KDL::Frame target_pose;
+  // target_pose.p = KDL::Vector(0.6, 1.639, 0.00);           // 位移部分
+  // target_pose.M = KDL::Rotation::Identity();              // 如不考虑姿态，可设为单位旋转
+  //   // 4. 初始猜测值
+  // unsigned int nj = kdl_chain.getNrOfJoints();
+  // std::cout<<"nj"<<nj<<std::endl;
+  // KDL::JntArray q_init(nj); 
+  // q_init(0) = 1.047;        
+  // q_init(1) = 1.047; 
+  // q_init(2) = -0.524; 
+  // KDL::JntArray q_result(nj);
+  // KDL::Frame tt;
+  //   // 5. 求解逆运动学
+  // int a = fk_solver.JntToCart(q_init, tt);
+  // std::cout << "q" << aerial_robot_model::kdlToEigen(tt.M) << aerial_robot_model::kdlToEigen(tt.p)<<std::endl;
+  //   int status = ik_solver.CartToJnt(q_init, target_pose, q_result);
+  //   if (status >= 0) {
+  //       std::cout << "IK 成功，角度解为：" << std::endl;
+  //       for (unsigned int i = 0; i < nj; ++i) {
+  //           std::cout << "q" << i << " = " << q_result(i) << " rad" << std::endl;
+  //       }
+  //   } else {
+  //       std::cerr << "IK 求解失败，错误代码：" << status << std::endl;
+  //   }
+  time_ = ros::Time::now();
 }
 
 // void HydrusTiltedImpedanceController::controlCore()
@@ -567,8 +643,12 @@ Eigen::Matrix3d HydrusTiltedImpedanceController::getOrientationJacobian(std::str
     o_jacobian.block(0, 2, 3, 1) = jacobian.block(3, 5, 3, 1);
     return o_jacobian;
 }
+void HydrusTiltedImpedanceController::extForceCallback(const geometry_msgs::WrenchConstPtr& cmd)
+{
+  std::cout<<"*cmd"<<*cmd<<std::endl;
+  ext_force_ = *cmd;
 
-
+}
 
 
 
