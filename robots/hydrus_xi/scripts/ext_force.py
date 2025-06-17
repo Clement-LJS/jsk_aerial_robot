@@ -24,11 +24,11 @@ if __name__ == "__main__":
     applywerench_srv = rospy.ServiceProxy('/gazebo/apply_body_wrench', ApplyBodyWrench)
     ext_signal_pub = rospy.Publisher("/hydrus_xi/ext_force", Wrench, queue_size=10)
     time.sleep(0.5)
-    force = Vector3(x=5.0, y=0.0, z=0.0)
-    torque = Vector3(x=0.0, y=0.0, z=0.0)
+    force = Vector3(x=0.0, y=0.0, z=0.0)
+    torque = Vector3(x=0.0, y=0.0, z=1.0)
     wrench = Wrench(force=force, torque=torque)
     start_time = rospy.Time(0) 
-    duration = rospy.Duration(5.0)  
+    duration = rospy.Duration(10.0)  
     ext_signal_pub.publish(wrench)
     response = applywerench_srv(
         body_name="hydrus_xi::link4", 
@@ -36,8 +36,9 @@ if __name__ == "__main__":
         start_time=start_time,
         duration=duration)
 
-    time.sleep(5.0)
+    time.sleep(10.0)
     force = Vector3(x=0.0, y=0.0, z=0.0)
+    torque = Vector3(x=0.0, y=0.0, z=0.0)
     wrench = Wrench(force=force, torque=torque)
     ext_signal_pub.publish(wrench)
 

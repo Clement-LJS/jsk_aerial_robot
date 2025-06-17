@@ -418,7 +418,7 @@ void HydrusTiltedImpedanceController::controlCore()
 
 // //  u = J.transpose() * (Bx * x_d_ddot + Cx * x_d_dot + Kd * x_dot + Kp * x);
 //   f_cmd = (M * Md.inverse() - Eigen::Matrix3d::Identity()) * est_external_wrench_.segment(0, 3) + (-Kd * x_dot - Kp * x) + robot_model_->getGravity();
-//   tao_cmd = (I * Id.inverse() - Eigen::Matrix3d::Identity()) * est_external_wrench_.segment(3, 3) + (-Kd * x_dot - Kp * x) + aerial_robot_model::skew(omega) * inertia * omega;
+//   tau_cmd = (I * Id.inverse() - Eigen::Matrix3d::Identity()) * est_external_wrench_.segment(3, 3) + (-Kd * x_dot - Kp * x) + aerial_robot_model::skew(omega) * inertia * omega;
 //   // Gravity compensation
 
 //   //
@@ -436,9 +436,9 @@ void HydrusTiltedImpedanceController::controlCore()
 
 //   // Eigen::VectorXd target_total_thrust = P_inv.col(3) * u(0) + P_inv.col(4) * u(1) + P_inv.col(5) * u(2);
 //   target_thrust_z_term_ = P_inv.col(2) * f_cmd(2);
-//   target_thrust_roll_term_ = P_inv.col(3) * tao_cmd(0);
-//   target_thrust_pitch_term_ = P_inv.col(4) * tao_cmd(1);
-//   target_thrust_yaw_term_ =  P_inv.col(5) * tao_cmd(2); 
+//   target_thrust_roll_term_ = P_inv.col(3) * tau_cmd(0);
+//   target_thrust_pitch_term_ = P_inv.col(4) * tau_cmd(1);
+//   target_thrust_yaw_term_ =  P_inv.col(5) * tau_cmd(2); 
 //   //if (target_joint_pos_[0] > 1.56)
 //   std::cout<<"ex"<<external_wrench_.wrench.torque.z<<std::endl;
 //   // std::cout<<"P_inv.col(5))"<<P_inv.col(5)<<std::endl;
@@ -604,6 +604,8 @@ void HydrusTiltedImpedanceController::externalWrenchEstimate()
       prev_est_wrench_timestamp_ = ros::Time::now().toSec();
       init_sum_momentum_ = sum_momentum; // not good
     }
+  std::cout<<"target_wrench_cog: "<<(J_t * target_wrench_cog).transpose()<<std::endl;
+  std::cout<<"est_external_wrench_: "<<est_external_wrench_.transpose()<<std::endl;
   double dt = ros::Time::now().toSec() - prev_est_wrench_timestamp_;
   integrate_term_ += (J_t * target_wrench_cog - N + est_external_wrench_) * dt;
   est_external_wrench_ = momentum_observer_matrix_ * (sum_momentum - init_sum_momentum_ - integrate_term_);

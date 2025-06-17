@@ -194,13 +194,13 @@ void UnderActuatedTiltedImpedanceController::controlCore()
   Eigen::VectorXd g = robot_model_->getGravity();
   Eigen::VectorXd allocate_scales = f / g.norm();
   Eigen::VectorXd target_thrust_z_term = allocate_scales * target_acc_w.length();
-   //std::cout<<"za"<<pid_controllers_.at(Z).result()<<std::endl;
+   std::cout<<"f"<<f<<std::endl;
   //Eigen::VectorXd target_thrust_z_term = Eigen::VectorXd::Zero(4);
   target_pitch_ = atan2(target_acc_dash.x(), target_acc_dash.z());
   target_roll_ = atan2(-target_acc_dash.y(), sqrt(target_acc_dash.x() * target_acc_dash.x() + target_acc_dash.z() * target_acc_dash.z()));
 
-  double rate = pid_controllers_.at(Z).result() / (aerial_robot_estimation::G - 0.3);
-  target_thrust_z_term = rate * target_thrust_z_term;
+  // double rate = pid_controllers_.at(Z).result() / (aerial_robot_estimation::G - 0.3);
+  // target_thrust_z_term = rate * target_thrust_z_term;
   if(navigator_->getForceLandingFlag())
   {
     target_pitch_ = 0;
@@ -218,26 +218,42 @@ void UnderActuatedTiltedImpedanceController::controlCore()
   // acc(3) = target_ang_acc_.x();
   // acc(4) = target_ang_acc_.y();
   // acc(5) = target_ang_acc_.z();
-  Eigen::Vector3d tao_cmd = Eigen::Vector3d::Zero();
+  Eigen::Vector3d tau_cmd = Eigen::Vector3d::Zero();
 
-  //tao_cmd = I * acc.segment(3, 3) + (I * Id.inverse() - Eigen::Matrix3d::Identity()) * est_external_wrench_clamped_.segment(3, 3) + (-Kd * delta_v.segment(3, 3) - Kp * delta_p.segment(3, 3)) + aerial_robot_model::skew(omega) * I * omega;
-  tao_cmd = (-Kd * delta_v.segment(3, 3) - Kp * delta_p.segment(3, 3)) + aerial_robot_model::skew(omega) * I * omega;
-  target_wrench_cog_(0) = tan(rpy_.y()) * target_acc_z * uav_mass;
-  target_wrench_cog_(1) = -tan(rpy_.x()) / cos(rpy_.y()) * target_acc_z * uav_mass;
-  target_wrench_cog_(2) = target_acc_z * uav_mass;
-  target_wrench_cog_.segment(3, 3) = tao_cmd;
-  // std::cout<<"tao_cmd"<<tao_cmd<<std::endl;
+  //tau_cmd = I * acc.segment(3, 3) + (I * Id.inverse() - Eigen::Matrix3d::Identity()) * est_external_wrench_clamped_.segment(3, 3) + (-Kd * delta_v.segment(3, 3) - Kp * delta_p.segment(3, 3)) + aerial_robot_model::skew(omega) * I * omega;
+  tau_cmd = (-Kd * delta_v.segment(3, 3) - Kp * delta_p.segment(3, 3)) + aerial_robot_model::skew(omega) * I * omega;
+  target_wrench_cog_(2) = target_acc_w.length() * uav_mass;
+  std::cout<<"tar"<<tau_cmd<<std::endl;
+  std::cout<<"dtheta"<<Kp * delta_p.segment(3, 3)<<std::endl;
+  target_wrench_cog_.segment(3, 3) = tau_cmd;
+  // std::cout<<"tau_cmd"<<tau_cmd<<std::endl;
   // std::cout<<"y"<<(I * Id.inverse() - Eigen::Matrix3d::Identity()) * est_external_wrench_clamped_.segment(3, 3)<<std::endl;
   // std::cout<<"z"<<(-Kd * delta_v.segment(3, 3) - Kp * delta_p.segment(3, 3)) + aerial_robot_model::skew(omega) * I * omega<<std::endl;
-
+  for (int i = 0; i < 3; i++)
+  {
+    if (target_wrench_cog_(i) > 8.0)
+    {
+      target_wrench_cog_(i) = 8.0;
+    }
+    else if (target_wrench_cog_(i) < -8.0)
+    {
+      target_wrench_cog_(i) = -8.0;
+    }
+  }
   Eigen::MatrixXd P = robot_model_->calcWrenchMatrixOnCoG();
-  Eigen::MatrixXd P_inv = aerial_robot_model::pseudoinverse(P);
+  Eigen::MatrixXd P_rot_inv = aerial_robot_model::pseudoinverse(P.bottomRows(3));
 
   // Eigen::VectorXd target_total_thrust = P_inv.col(3) * u(0) + P_inv.col(4) * u(1) + P_inv.col(5) * u(2);
 
-  target_thrust_roll_term_ = P_inv.col(3) * tao_cmd(0);
-  target_thrust_pitch_term_ = P_inv.col(4) * tao_cmd(1);
-  target_thrust_yaw_term_ =  P_inv.col(5) * tao_cmd(2); 
+  target_thrust_roll_term_ = P_rot_inv.col(0) * tau_cmd(0);
+  target_thrust_pitch_term_ = P_rot_inv.col(1) * tau_cmd(1);
+  target_thrust_yaw_term_ =  P_rot_inv.col(2) * tau_cmd(2); 
+  std::cout<<"roll_ "<<target_thrust_roll_term_ <<std::endl;
+  std::cout<<"pitch_ "<<target_thrust_pitch_term_ <<std::endl;
+  std::cout<<"yaw_ "<<target_thrust_yaw_term_ <<std::endl;
+  std::cout<<"tau"<<tau_cmd<<std::endl;
+  std::cout<<"P "<<P <<std::endl;
+  std::cout<<"wrench"<<P * (target_thrust_roll_term_ + target_thrust_pitch_term_ + target_thrust_yaw_term_)<<std::endl;
 
   // constraint z (also  I term)
   int index;

@@ -64,11 +64,11 @@ controller:
     z_p: 6.0
     z_zeta: 0.65
 
-    roll_pitch_p: 55.0
-    roll_pitch_zeta: 0.85
+    roll_pitch_p: 20.0
+    roll_pitch_zeta: 0.8
 
-    yaw_p: 20.0
-    yaw_zeta: 0.75
+    yaw_p: 18.0
+    yaw_zeta: 0.6
 
     joints_p: 13.0
     joints_d: 2.0
