@@ -604,8 +604,8 @@ void HydrusTiltedImpedanceController::externalWrenchEstimate()
       prev_est_wrench_timestamp_ = ros::Time::now().toSec();
       init_sum_momentum_ = sum_momentum; // not good
     }
-  std::cout<<"target_wrench_cog: "<<(J_t * target_wrench_cog).transpose()<<std::endl;
-  std::cout<<"est_external_wrench_: "<<est_external_wrench_.transpose()<<std::endl;
+  // std::cout<<"target_wrench_cog: "<<(J_t * target_wrench_cog).transpose()<<std::endl;
+  // std::cout<<"est_external_wrench_: "<<est_external_wrench_.transpose()<<std::endl;
   double dt = ros::Time::now().toSec() - prev_est_wrench_timestamp_;
   integrate_term_ += (J_t * target_wrench_cog - N + est_external_wrench_) * dt;
   est_external_wrench_ = momentum_observer_matrix_ * (sum_momentum - init_sum_momentum_ - integrate_term_);
