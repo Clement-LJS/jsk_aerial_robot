@@ -545,6 +545,12 @@ void HydrusTiltedImpedanceController::rosParamInit()
   UnderActuatedImpedanceController::rosParamInit();
   
   ros::NodeHandle param_nh(nh_, "controller/impedance");
+  getParam<double>(param_nh, "mdx", mdx_, 1.0);
+  getParam<double>(param_nh, "mdy", mdz_, 1.0);
+  getParam<double>(param_nh, "mdz", mdz_, 1.0);
+  getParam<double>(param_nh, "Idx", Idx_, 0.22);
+  getParam<double>(param_nh, "Idy", Idy_, 0.22);
+  getParam<double>(param_nh, "Idz", Idz_, 0.42);
   getParam<double>(param_nh, "x_y_p", x_y_p_, 30.0);
   getParam<double>(param_nh, "z_p", z_p_, 30.0);
   getParam<double>(param_nh, "roll_pitch_p", roll_pitch_p_, 30.0);
@@ -560,7 +566,7 @@ void HydrusTiltedImpedanceController::rosParamInit()
 
   momentum_observer_matrix_ = Eigen::MatrixXd::Identity(6,6);
   momentum_observer_matrix_.topRows(3) *= 8.0;
-  momentum_observer_matrix_.bottomRows(3) *= 2.5;
+  momentum_observer_matrix_.bottomRows(3) *= 1.25;
 }
 
 void HydrusTiltedImpedanceController::externalWrenchEstimate()

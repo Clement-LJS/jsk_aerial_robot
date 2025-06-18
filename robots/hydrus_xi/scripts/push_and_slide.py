@@ -76,33 +76,33 @@ if __name__ == "__main__":
  
     time.sleep(4)
     print("preparation 2")
-    nav_msg.target_pos_x = -1.35
+    nav_msg.target_pos_x = -1.20
     nav_pub.publish(nav_msg)
     time.sleep(5)
     print("preparation 3")
     round = 0
 
-    # while not rospy.is_shutdown():
+    while not rospy.is_shutdown():
 
-    #     nav_msg = FlightNav()
+        nav_msg = FlightNav()
 
-    #     round += 1
-    #     nav_msg.pos_xy_nav_mode = 3
-    #     nav_msg.target_pos_x = -1.35
-    #     nav_msg.target_vel_x = 0.0
-    #     nav_msg.target_pos_y = 0.3 * math.cos(math.pi * round / 50)
-    #     nav_msg.target_vel_y = -0.12 * math.pi * math.sin(math.pi * round / 50)
-    #     nav_msg.target_acc_y = -0.048 * math.pi * math.pi * math.cos(math.pi * round / 50)
-    #     nav_msg.pos_z_nav_mode = 4 
-    #     nav_msg.target_pos_z = 0.6 + 0.3 * math.sin(math.pi * round / 50)
-    #     nav_msg.target_vel_z = 0.12 * math.pi * math.cos(math.pi * round / 50)
-    #     #nav_msg.target_acc_z = -0.048 * math.pi * math.pi * math.sin(math.pi * round / 50)
-    #     nav_msg.yaw_nav_mode = 4 
-    #     nav_msg.target_yaw = -math.pi/6
-    #     nav_pub.publish(nav_msg)
-    #     # external_wrench_added.wrench.torque.z = 0.4 * math.cos(round / 50)
-    #     # external_wrench_added.wrench.force.y = 0.6 * math.cos(round / 50)
-    #     wrench_pub.publish(external_wrench_added)
-    #     time.sleep(duration)
+        round += 1
+        nav_msg.pos_xy_nav_mode = 4
+        nav_msg.target_pos_x = -1.20
+        nav_msg.target_vel_x = 0.0
+        nav_msg.target_pos_y = 0.3 * math.cos(math.pi * round / 50)
+        nav_msg.target_vel_y = -0.12 * math.pi * math.sin(math.pi * round / 50)
+        #nav_msg.target_acc_y = -0.048 * math.pi * math.pi * math.cos(math.pi * round / 50)
+        nav_msg.pos_z_nav_mode = 4 
+        nav_msg.target_pos_z = 0.6 + 0.3 * math.sin(math.pi * round / 50)
+        nav_msg.target_vel_z = 0.12 * math.pi * math.cos(math.pi * round / 50)
+        #nav_msg.target_acc_z = -0.048 * math.pi * math.pi * math.sin(math.pi * round / 50)
+        nav_msg.yaw_nav_mode = 4 
+        nav_msg.target_yaw = -math.pi/6
+        nav_pub.publish(nav_msg)
+        # external_wrench_added.wrench.torque.z = 0.4 * math.cos(round / 50)
+        # external_wrench_added.wrench.force.y = 0.6 * math.cos(round / 50)
+        wrench_pub.publish(external_wrench_added)
+        time.sleep(duration)
 
 
