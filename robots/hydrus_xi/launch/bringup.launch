@@ -106,6 +106,12 @@
   ######### init gimbal angles #########
   <node pkg="hydrus_xi" name="init_gimbal_angles" type="init_gimbal_angles.py" ns="$(arg robot_ns)" if="$(arg init_gimbal_angle)"/>
 
+  ######### IK #########
+  <node pkg="differential_kinematics" type="se2_end_effector_ik_node" name="end_effector_ik_node"  output="screen" ns="$(arg robot_ns)" >
+    <param name = "tf_prefix" value = "$(arg robot_ns)" />
+    <rosparam file="$(find hydrus)/config/$(arg type)/RvizInit.yaml" command="load" />
+    <rosparam file="$(find differential_kinematics)/config/hydrus/$(arg type)/EndEffectorIK.yaml" command="load" />
+  </node>
 
    ######### Hole model #########
  <group if="$(eval arg('simulation'))">

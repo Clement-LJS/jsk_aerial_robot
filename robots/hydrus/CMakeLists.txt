@@ -14,7 +14,6 @@ find_package(catkin REQUIRED COMPONENTS
   tf_conversions
   std_srvs
   )
-
 find_package(Eigen3 REQUIRED)
 
 catkin_package(
@@ -44,7 +43,9 @@ include_directories(
   ${Boost_INCLUDE_DIR}
   ${catkin_INCLUDE_DIRS}
   ${EIGEN3_INCLUDE_DIRS}
+  /home/cherryblossomnight/ros/catkin_ws/src/motion_planning/aerial_motion/differential_kinematics/include
 )
+
 
 add_library(hydrus_sensor_pluginlib  src/imu.cpp)
 target_link_libraries(hydrus_sensor_pluginlib ${catkin_LIBRARIES})

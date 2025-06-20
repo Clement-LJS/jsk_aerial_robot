@@ -42,6 +42,11 @@
 #include <hydrus/imu.h>
 #include <thread>
 
+namespace differential_kinematics 
+{
+  class EndEffectorIKSolverCore;
+}
+
 namespace aerial_robot_control
 {
   class HydrusTiltedImpedanceController: public UnderActuatedTiltedImpedanceController
@@ -86,8 +91,8 @@ namespace aerial_robot_control
     ros::Duration ext_duration_;
 
     void externalWrenchEstimate();
-
-
+    KDL::JntArray q_result_;
+    bool inited = false;
     bool checkRobotModel() override;
     virtual void controlCore() override;
     virtual void rosParamInit() override;

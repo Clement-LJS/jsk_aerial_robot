@@ -13,6 +13,7 @@ find_package(catkin REQUIRED COMPONENTS
 find_package(NLopt REQUIRED)
 find_package(OsqpEigen REQUIRED)
 
+
 catkin_package(
   INCLUDE_DIRS include
   LIBRARIES  hydrus_xi_fully_actuated_robot_model

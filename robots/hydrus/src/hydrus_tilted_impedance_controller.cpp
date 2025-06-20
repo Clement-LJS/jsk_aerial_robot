@@ -7,6 +7,7 @@ HydrusTiltedImpedanceController::HydrusTiltedImpedanceController():
   UnderActuatedTiltedImpedanceController()
 {
 }
+using namespace differential_kinematics;
 
 void HydrusTiltedImpedanceController::initialize(ros::NodeHandle nh,
                                      ros::NodeHandle nhp,
@@ -39,6 +40,8 @@ void HydrusTiltedImpedanceController::initialize(ros::NodeHandle nh,
 
   xd_(0) = 0.9047;
   xd_(1) = 0.5223;
+
+  q_result_ = KDL::JntArray(3);
 
   init_sum_momentum_ = Eigen::VectorXd::Zero(6);
   integrate_term_ = Eigen::VectorXd::Zero(6);
@@ -107,36 +110,43 @@ void HydrusTiltedImpedanceController::controlCore()
   std::cout<<ext_force_<<std::endl;
   std::cout<<"xd_"<<xd_<<std::endl;
   // std::cout<<"ext_duration_"<<ext_duration_<<std::endl;
-  // KDL::Chain kdl_chain;
-  // robot_model_->getTree().getChain(std::string("root"), std::string("end_effector"), kdl_chain);
-  //   // 2. 创建IK解算器
-  // KDL::ChainIkSolverPos_LMA ik_solver(kdl_chain);
-  // KDL::ChainFkSolverPos_recursive fk_solver(kdl_chain);
-  //   // 3. 设置目标末端位姿（在质心坐标系下）
+  KDL::Chain kdl_chain;
+  robot_model_->getTree().getChain(std::string("root"), std::string("end_effector"), kdl_chain);
+  KDL::Frame cog = robot_model_->getCog<KDL::Frame>();
+  KDL::ChainFkSolverPos_recursive fk_solver(kdl_chain);
+  KDL::JntArray q_init(3); 
+  q_init(0) = 1.047;        
+  q_init(1) = 1.047; 
+  q_init(2) = -0.524; 
+  KDL::Frame fk_ee;
+  if (!inited)
+  {
+    int a = fk_solver.JntToCart(q_init, fk_ee);
+    inited = true;
+  }
+  else
+    int a = fk_solver.JntToCart(q_result_, fk_ee);
+ 
+  KDL::Frame target_pose_cog;
+  target_pose_cog.p = KDL::Vector(0.6, 1.63, 0.00);           // 位移部分
+  target_pose_cog.M = KDL::Rotation::Identity();
+  
   // KDL::Frame target_pose;
-  // target_pose.p = KDL::Vector(0.6, 1.639, 0.00);           // 位移部分
-  // target_pose.M = KDL::Rotation::Identity();              // 如不考虑姿态，可设为单位旋转
-  //   // 4. 初始猜测值
-  // unsigned int nj = kdl_chain.getNrOfJoints();
-  // std::cout<<"nj"<<nj<<std::endl;
-  // KDL::JntArray q_init(nj); 
-  // q_init(0) = 1.047;        
-  // q_init(1) = 1.047; 
-  // q_init(2) = -0.524; 
-  // KDL::JntArray q_result(nj);
-  // KDL::Frame tt;
-  //   // 5. 求解逆运动学
-  // int a = fk_solver.JntToCart(q_init, tt);
-  // std::cout << "q" << aerial_robot_model::kdlToEigen(tt.M) << aerial_robot_model::kdlToEigen(tt.p)<<std::endl;
-  //   int status = ik_solver.CartToJnt(q_init, target_pose, q_result);
-  //   if (status >= 0) {
-  //       std::cout << "IK 成功，角度解为：" << std::endl;
-  //       for (unsigned int i = 0; i < nj; ++i) {
-  //           std::cout << "q" << i << " = " << q_result(i) << " rad" << std::endl;
-  //       }
-  //   } else {
-  //       std::cerr << "IK 求解失败，错误代码：" << status << std::endl;
-  //   }
+  // target_pose = cog * target_pose_cog;
+  // target_pose.M = fk_ee.M;
+  KDL::ChainIkSolverPos_LMA ik_solver(kdl_chain);
+
+
+  // std::cout << "q" << aerial_robot_model::kdlToEigen(target_pose.M) << aerial_robot_model::kdlToEigen(target_pose.p)<<std::endl;
+    int status = ik_solver.CartToJnt(q_init, target_pose_cog, q_result_);
+    if (status >= 0) {
+        std::cout << "IK 成功，角度解为：" << std::endl;
+        for (unsigned int i = 0; i < 3; ++i) {
+            std::cout << "q" << i << " = " << q_result_(i) << " rad" << std::endl;
+        }
+    } else {
+        std::cerr << "IK 求解失败，错误代码：" << status << std::endl;
+    }
   time_ = ros::Time::now();
 }
 
@@ -418,7 +428,7 @@ void HydrusTiltedImpedanceController::controlCore()
 
 // //  u = J.transpose() * (Bx * x_d_ddot + Cx * x_d_dot + Kd * x_dot + Kp * x);
 //   f_cmd = (M * Md.inverse() - Eigen::Matrix3d::Identity()) * est_external_wrench_.segment(0, 3) + (-Kd * x_dot - Kp * x) + robot_model_->getGravity();
-//   tau_cmd = (I * Id.inverse() - Eigen::Matrix3d::Identity()) * est_external_wrench_.segment(3, 3) + (-Kd * x_dot - Kp * x) + aerial_robot_model::skew(omega) * inertia * omega;
+//   tao_cmd = (I * Id.inverse() - Eigen::Matrix3d::Identity()) * est_external_wrench_.segment(3, 3) + (-Kd * x_dot - Kp * x) + aerial_robot_model::skew(omega) * inertia * omega;
 //   // Gravity compensation
 
 //   //
@@ -436,9 +446,9 @@ void HydrusTiltedImpedanceController::controlCore()
 
 //   // Eigen::VectorXd target_total_thrust = P_inv.col(3) * u(0) + P_inv.col(4) * u(1) + P_inv.col(5) * u(2);
 //   target_thrust_z_term_ = P_inv.col(2) * f_cmd(2);
-//   target_thrust_roll_term_ = P_inv.col(3) * tau_cmd(0);
-//   target_thrust_pitch_term_ = P_inv.col(4) * tau_cmd(1);
-//   target_thrust_yaw_term_ =  P_inv.col(5) * tau_cmd(2); 
+//   target_thrust_roll_term_ = P_inv.col(3) * tao_cmd(0);
+//   target_thrust_pitch_term_ = P_inv.col(4) * tao_cmd(1);
+//   target_thrust_yaw_term_ =  P_inv.col(5) * tao_cmd(2); 
 //   //if (target_joint_pos_[0] > 1.56)
 //   std::cout<<"ex"<<external_wrench_.wrench.torque.z<<std::endl;
 //   // std::cout<<"P_inv.col(5))"<<P_inv.col(5)<<std::endl;
@@ -545,12 +555,6 @@ void HydrusTiltedImpedanceController::rosParamInit()
   UnderActuatedImpedanceController::rosParamInit();
   
   ros::NodeHandle param_nh(nh_, "controller/impedance");
-  getParam<double>(param_nh, "mdx", mdx_, 1.0);
-  getParam<double>(param_nh, "mdy", mdz_, 1.0);
-  getParam<double>(param_nh, "mdz", mdz_, 1.0);
-  getParam<double>(param_nh, "Idx", Idx_, 0.22);
-  getParam<double>(param_nh, "Idy", Idy_, 0.22);
-  getParam<double>(param_nh, "Idz", Idz_, 0.42);
   getParam<double>(param_nh, "x_y_p", x_y_p_, 30.0);
   getParam<double>(param_nh, "z_p", z_p_, 30.0);
   getParam<double>(param_nh, "roll_pitch_p", roll_pitch_p_, 30.0);
@@ -566,7 +570,7 @@ void HydrusTiltedImpedanceController::rosParamInit()
 
   momentum_observer_matrix_ = Eigen::MatrixXd::Identity(6,6);
   momentum_observer_matrix_.topRows(3) *= 8.0;
-  momentum_observer_matrix_.bottomRows(3) *= 1.25;
+  momentum_observer_matrix_.bottomRows(3) *= 2.5;
 }
 
 void HydrusTiltedImpedanceController::externalWrenchEstimate()
@@ -610,8 +614,6 @@ void HydrusTiltedImpedanceController::externalWrenchEstimate()
       prev_est_wrench_timestamp_ = ros::Time::now().toSec();
       init_sum_momentum_ = sum_momentum; // not good
     }
-  // std::cout<<"target_wrench_cog: "<<(J_t * target_wrench_cog).transpose()<<std::endl;
-  // std::cout<<"est_external_wrench_: "<<est_external_wrench_.transpose()<<std::endl;
   double dt = ros::Time::now().toSec() - prev_est_wrench_timestamp_;
   integrate_term_ += (J_t * target_wrench_cog - N + est_external_wrench_) * dt;
   est_external_wrench_ = momentum_observer_matrix_ * (sum_momentum - init_sum_momentum_ - integrate_term_);
