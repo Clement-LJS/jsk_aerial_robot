@@ -31,7 +31,6 @@ namespace aerial_robot_model {
 
     // update robot model instantly for fixed model
     if (fixed_model_) {
-      std::cout<<"in"<<std::endl;
       updateRobotModel();
     }
   }
@@ -50,6 +49,7 @@ namespace aerial_robot_model {
     /* robot model */
     if (!model_.initParam("robot_description"))
       {
+ 
         ROS_ERROR("Failed to extract urdf model from rosparam");
         return;
       }

@@ -71,8 +71,8 @@ controller:
     z_p: 6.0
     z_zeta: 0.65
 
-    roll_pitch_p: 18.0
-    roll_pitch_zeta: 1.08
+    roll_pitch_p: 13
+    roll_pitch_zeta: 1.10
 
     yaw_p: 18.0
     yaw_zeta: 0.6

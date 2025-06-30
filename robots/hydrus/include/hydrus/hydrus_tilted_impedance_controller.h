@@ -90,6 +90,8 @@ namespace aerial_robot_control
     geometry_msgs::Wrench ext_force_;
     ros::Duration ext_duration_;
 
+    ros::Publisher ee_pos_pub_;
+
     void externalWrenchEstimate();
     KDL::JntArray q_result_;
     bool inited = false;

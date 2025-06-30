@@ -178,9 +178,9 @@ void UnderActuatedTiltedImpedanceController::controlCore()
   if (target_acc_z < -15.0)
     target_acc_z = -15.0;
 
-  std::cout<<"y"<<target_acc_y<<std::endl;
-  std::cout<<"y"<<(1 / my - 1 / uav_mass) * est_external_wrench_clamped_[1]<<std::endl;
-  std::cout<<"y"<<(-Kdx * delta_v(1) - Kpx * delta_p(1));
+  // std::cout<<"y"<<target_acc_y<<std::endl;
+  // std::cout<<"y"<<(1 / my - 1 / uav_mass) * est_external_wrench_clamped_[1]<<std::endl;
+  // std::cout<<"y"<<(-Kdx * delta_v(1) - Kpx * delta_p(1));
   // std::cout<<"w"<<acc(1);
   // std::cout<<"delta_p"<<delta_p<<std::endl;
   // std::cout<<"pos_.x()"<<pos_.x()<<std::endl;
@@ -198,7 +198,7 @@ void UnderActuatedTiltedImpedanceController::controlCore()
   Eigen::VectorXd allocate_scales = f / g.norm();
   Eigen::VectorXd target_thrust_z_term = allocate_scales * target_acc_w.length();
   // std::cout<<"est_external_wrench_clamped_"<<est_external_wrench_clamped_<<std::endl; 
-  std::cout<<"mdx"<<mdx_<<std::endl;
+  // std::cout<<"mdx"<<mdx_<<std::endl;
   // std::cout<<"--------------------------"<<std::endl;
  
   //Eigen::VectorXd target_thrust_z_term = Eigen::VectorXd::Zero(4);

@@ -35,11 +35,16 @@ void HydrusTiltedImpedanceController::initialize(ros::NodeHandle nh,
   xd_ = Eigen::VectorXd::Zero(3);
   xref_ = Eigen::VectorXd::Zero(3);
   
-  xref_(0) = 0.9047;
-  xref_(1) = 0.5223;
+  // xref_(0) = 0.9047;
+  // xref_(1) = 0.5223;
 
-  xd_(0) = 0.9047;
-  xd_(1) = 0.5223;
+  // xd_(0) = 0.9047;
+  // xd_(1) = 0.5223;
+  xref_(0) = 0.62;
+  xref_(1) = 1.635;
+
+  xd_(0) = 0.62;
+  xd_(1) = 1.635;
 
   q_result_ = KDL::JntArray(3);
 
@@ -49,8 +54,9 @@ void HydrusTiltedImpedanceController::initialize(ros::NodeHandle nh,
   prev_est_wrench_timestamp_ = 0;
   estimate_external_wrench_pub_ = nh_.advertise<geometry_msgs::WrenchStamped>("estimated_external_wrench", 1);
   ext_force_sub_ = nh_.subscribe("ext_force", 1, &HydrusTiltedImpedanceController::extForceCallback, this);
+  ee_pos_pub_ = nh_.advertise<geometry_msgs::Pose>("end_effector_pose", 1);
 
-
+ // = nh.serviceClient<hydrus::EndEffectorIK>("/hydrus/end_effector_ik");
   wrench_estimate_thread_ = boost::thread([this]()
                                           {
                                             ros::Rate loop_rate(100.0);
@@ -91,63 +97,92 @@ void HydrusTiltedImpedanceController::controlCore()
 
   // Admittance control
   double Ma = 5;
-  double Ca = 2*0.35*sqrt(750);
-  double Ka = 150;
+  double Ca = 2*0.35*sqrt(250);
+  double Ka = 50;
 
   double dt = (ros::Time::now() - time_).toSec();
-  Eigen::AngleAxisd rotation_vector(rpy_.z(), Eigen::Vector3d::UnitZ());
-  Eigen::Matrix3d R = rotation_vector.toRotationMatrix(); 
-  Eigen::Vector3d Fext = Eigen::Vector3d::Zero();
-  Fext(0) = ext_force_.force.x;
-  xd_ddot_ = (R.inverse() * Fext - Ka * (xd_ - xref_) - Ca * xd_dot_) / Ma;
-  xd_ += xd_dot_ * dt;
-  xd_dot_ += xd_ddot_ * dt;
-
-  std_msgs::Float64 j1_term, j2_term, j3_term;
-  // joint_cmd_pubs_[0].publish(j1_term);
-  // joint_cmd_pubs_[1].publish(j2_term);
-  // joint_cmd_pubs_[2].publish(j3_term);
-  std::cout<<ext_force_<<std::endl;
-  std::cout<<"xd_"<<xd_<<std::endl;
-  // std::cout<<"ext_duration_"<<ext_duration_<<std::endl;
-  KDL::Chain kdl_chain;
-  robot_model_->getTree().getChain(std::string("root"), std::string("end_effector"), kdl_chain);
-  KDL::Frame cog = robot_model_->getCog<KDL::Frame>();
-  KDL::ChainFkSolverPos_recursive fk_solver(kdl_chain);
-  KDL::JntArray q_init(3); 
-  q_init(0) = 1.047;        
-  q_init(1) = 1.047; 
-  q_init(2) = -0.524; 
-  KDL::Frame fk_ee;
-  if (!inited)
+  if (dt >= 0.05)
   {
-    int a = fk_solver.JntToCart(q_init, fk_ee);
-    inited = true;
-  }
-  else
-    int a = fk_solver.JntToCart(q_result_, fk_ee);
- 
-  KDL::Frame target_pose_cog;
-  target_pose_cog.p = KDL::Vector(0.6, 1.63, 0.00);           // 位移部分
-  target_pose_cog.M = KDL::Rotation::Identity();
-  
-  // KDL::Frame target_pose;
-  // target_pose = cog * target_pose_cog;
-  // target_pose.M = fk_ee.M;
-  KDL::ChainIkSolverPos_LMA ik_solver(kdl_chain);
+    Eigen::AngleAxisd rotation_vector(rpy_.z(), Eigen::Vector3d::UnitZ());
+    Eigen::Matrix3d R = rotation_vector.toRotationMatrix(); 
+    Eigen::Vector3d Fext = Eigen::Vector3d::Zero();
+    Fext(1) = ext_force_.force.x;
+    //xd_ddot_ = (R.inverse() * Fext - Ka * (xd_ - xref_) - Ca * xd_dot_) / Ma;
+    xd_ddot_ = (Fext - Ka * (xd_ - xref_) - Ca * xd_dot_) / Ma;
+    xd_ += xd_dot_ * dt;
+    xd_dot_ += xd_ddot_ * dt;
+    geometry_msgs::Pose ee_pose;
 
 
-  // std::cout << "q" << aerial_robot_model::kdlToEigen(target_pose.M) << aerial_robot_model::kdlToEigen(target_pose.p)<<std::endl;
-    int status = ik_solver.CartToJnt(q_init, target_pose_cog, q_result_);
-    if (status >= 0) {
-        std::cout << "IK 成功，角度解为：" << std::endl;
-        for (unsigned int i = 0; i < 3; ++i) {
-            std::cout << "q" << i << " = " << q_result_(i) << " rad" << std::endl;
-        }
-    } else {
-        std::cerr << "IK 求解失败，错误代码：" << status << std::endl;
+    // joint_cmd_pubs_[0].publish(j1_term);
+    // joint_cmd_pubs_[1].publish(j2_term);
+    // joint_cmd_pubs_[2].publish(j3_term);
+
+    // std::cout<<"ext_duration_"<<ext_duration_<<std::endl;
+    KDL::Chain kdl_chain;
+    robot_model_->getTree().getChain(std::string("root"), std::string("end_effector"), kdl_chain);
+    KDL::Frame cog = robot_model_->getCog<KDL::Frame>();
+    KDL::Frame target_pose_cog;
+    target_pose_cog.p = KDL::Vector(xd_(0), xd_(1), 0.00);
+    target_pose_cog.M = KDL::Rotation::Identity();
+
+    // KDL::Frame target_pose;
+    // target_pose = cog * target_pose_cog;
+    // target_pose.M = KDL::Rotation::Identity();
+
+    // ee_pose.position.x = target_pose.p(0);
+    // ee_pose.position.y = target_pose.p(1);  
+    ee_pose.position.x = xd_(0);
+    ee_pose.position.y = xd_(1);  
+     std::cout << "q" << aerial_robot_model::kdlToEigen(cog.M) << aerial_robot_model::kdlToEigen(cog.p)<<std::endl;
+    if ( ee_pose.position.x < 0.6)
+    {
+      std::cout<<"ee_"<<ee_pose<<std::endl;
+      std::cout<<"ee_"<<xd_(0)<<xd_(1)<<std::endl;
+      std::cout << "q" << aerial_robot_model::kdlToEigen(cog.M) << aerial_robot_model::kdlToEigen(cog.p)<<std::endl;
     }
-  time_ = ros::Time::now();
+   
+    ee_pos_pub_.publish(ee_pose);
+    time_ = ros::Time::now();
+  }
+
+  //std::cout << "q" << aerial_robot_model::kdlToEigen(target_pose.M) << aerial_robot_model::kdlToEigen(target_pose.p)<<std::endl;
+
+  // KDL::ChainFkSolverPos_recursive fk_solver(kdl_chain);
+  // KDL::JntArray q_init(3); 
+  // q_init(0) = 1.047;        
+  // q_init(1) = 1.047; 
+  // q_init(2) = -0.524; 
+  // KDL::Frame fk_ee;
+  // if (!inited)
+  // {
+  //   int a = fk_solver.JntToCart(q_init, fk_ee);
+  //   inited = true;
+  // }
+  // else
+  //   int a = fk_solver.JntToCart(q_result_, fk_ee);
+ 
+  // KDL::Frame target_pose_cog;
+  // target_pose_cog.p = KDL::Vector(0.6, 1.63, 0.00);           // 位移部分
+  // target_pose_cog.M = KDL::Rotation::Identity();
+  
+  // // KDL::Frame target_pose;
+  // // target_pose = cog * target_pose_cog;
+  // // target_pose.M = fk_ee.M;
+  // KDL::ChainIkSolverPos_LMA ik_solver(kdl_chain);
+
+
+  // // std::cout << "q" << aerial_robot_model::kdlToEigen(target_pose.M) << aerial_robot_model::kdlToEigen(target_pose.p)<<std::endl;
+  //   int status = ik_solver.CartToJnt(q_init, target_pose_cog, q_result_);
+  //   if (status >= 0) {
+  //       std::cout << "IK 成功，角度解为：" << std::endl;
+  //       for (unsigned int i = 0; i < 3; ++i) {
+  //           std::cout << "q" << i << " = " << q_result_(i) << " rad" << std::endl;
+  //       }
+  //   } else {
+  //       std::cerr << "IK 求解失败，错误代码：" << status << std::endl;
+  //   }
+
 }
 
 // void HydrusTiltedImpedanceController::controlCore()
