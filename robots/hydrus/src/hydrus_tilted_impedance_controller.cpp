@@ -134,13 +134,13 @@ void HydrusTiltedImpedanceController::controlCore()
     // ee_pose.position.y = target_pose.p(1);  
     ee_pose.position.x = xd_(0);
     ee_pose.position.y = xd_(1);  
-     std::cout << "q" << aerial_robot_model::kdlToEigen(cog.M) << aerial_robot_model::kdlToEigen(cog.p)<<std::endl;
-    if ( ee_pose.position.x < 0.6)
-    {
-      std::cout<<"ee_"<<ee_pose<<std::endl;
-      std::cout<<"ee_"<<xd_(0)<<xd_(1)<<std::endl;
-      std::cout << "q" << aerial_robot_model::kdlToEigen(cog.M) << aerial_robot_model::kdlToEigen(cog.p)<<std::endl;
-    }
+     //std::cout << "q" << aerial_robot_model::kdlToEigen(cog.M) << aerial_robot_model::kdlToEigen(cog.p)<<std::endl;
+    // if ( ee_pose.position.x < 0.6)
+    // {
+    //   std::cout<<"ee_"<<ee_pose<<std::endl;
+    //   std::cout<<"ee_"<<xd_(0)<<xd_(1)<<std::endl;
+    //   std::cout << "q" << aerial_robot_model::kdlToEigen(cog.M) << aerial_robot_model::kdlToEigen(cog.p)<<std::endl;
+    // }
    
     ee_pos_pub_.publish(ee_pose);
     time_ = ros::Time::now();

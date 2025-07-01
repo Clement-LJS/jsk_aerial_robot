@@ -12,7 +12,7 @@ controller:
 
   z:
     p_gain: 3.6
-    i_gain: 6.0 # old: 1.55
+    i_gain: 10.0 # old: 1.55
     d_gain: 5.0 # old: 3.4
     limit_err_p: 1.0
     limit_sum: 25.0 # N for clamping thrust force
