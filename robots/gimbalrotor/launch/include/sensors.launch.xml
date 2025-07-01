@@ -11,7 +11,7 @@
         <!-- fc & IMU & GPS -->
         <include file="$(find spinal)/launch/bridge.launch" >
           <arg name="mode" value="serial" />
-          <arg name="serial_port" value="/dev/flight_controller" />
+          <arg name="serial_port" value="/dev/ttyUSB0" />
           <arg name="serial_baud" value="921600" />
         </include>
       </group>
