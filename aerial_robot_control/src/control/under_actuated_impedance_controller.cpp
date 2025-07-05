@@ -64,6 +64,7 @@ void UnderActuatedImpedanceController::initialize(ros::NodeHandle nh,
   flight_cmd_pub_ = nh_.advertise<spinal::FourAxisCommand>("four_axes/command", 1);
   flight_impedance_cmd_pub_ = nh_.advertise<spinal::FourAxisCommandImpedance>("four_axes/imp_command", 1);
   p_matrix_pseudo_inverse_inertia_pub_ = nh_.advertise<spinal::PMatrixPseudoInverseWithInertia>("p_matrix_pseudo_inverse_inertia", 1);
+  imp_command_pub_ = nh_.advertise<aerial_robot_msgs::ImpedanceControl>("imp_cmd", 1);
   joint_state_sub_ = nh_.subscribe("joint_states", 1, &UnderActuatedImpedanceController::jointStateCallback, this);
   joint_cmd_sub_ = nh_.subscribe("joints_ctrl", 1, &UnderActuatedImpedanceController::jointCmdCallback, this);
   pos_cmd_sub_ = nh_.subscribe("pos_cmds", 1, &UnderActuatedImpedanceController::posCmdCallback, this);
@@ -101,6 +102,7 @@ void UnderActuatedImpedanceController::initialize(ros::NodeHandle nh,
 
   //message
   target_base_thrust_.resize(motor_num_);
+  target_z_thrust_.resize(motor_num_);
   target_roll_thrust_.resize(motor_num_);
   target_pitch_thrust_.resize(motor_num_);
   target_yaw_thrust_.resize(motor_num_);

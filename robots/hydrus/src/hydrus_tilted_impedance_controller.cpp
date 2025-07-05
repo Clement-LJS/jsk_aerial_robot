@@ -142,7 +142,7 @@ void HydrusTiltedImpedanceController::controlCore()
     //   std::cout << "q" << aerial_robot_model::kdlToEigen(cog.M) << aerial_robot_model::kdlToEigen(cog.p)<<std::endl;
     // }
    
-    ee_pos_pub_.publish(ee_pose);
+    //ee_pos_pub_.publish(ee_pose);
     time_ = ros::Time::now();
   }
 
