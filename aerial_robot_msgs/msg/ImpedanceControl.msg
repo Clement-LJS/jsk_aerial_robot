@@ -1,5 +1,5 @@
 Header header
 
-geometry_msgs/Wrench full_command
-geometry_msgs/Wrench pd_command
-geometry_msgs/Wrench imp_command
+geometry_msgs/Wrench full_cmd
+geometry_msgs/Wrench pd_cmd
+geometry_msgs/Wrench imp_cmd

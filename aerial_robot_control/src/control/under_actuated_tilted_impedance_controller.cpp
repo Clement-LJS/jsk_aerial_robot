@@ -231,16 +231,27 @@ void UnderActuatedTiltedImpedanceController::controlCore()
 
   tau_cmd = (I * Id.inverse() - Eigen::Matrix3d::Identity()) * est_external_wrench_clamped_.segment(3, 3) + (-Kd * delta_v.segment(3, 3) - Kp * delta_p.segment(3, 3)) + aerial_robot_model::skew(omega) * I * omega;
   //tau_cmd = (-Kd * delta_v.segment(3, 3) - Kp * delta_p.segment(3, 3)) + aerial_robot_model::skew(omega) * I * omega;
-<<<<<<< HEAD
-=======
-  // imp_cmd_.full_cmd.force.x = (1 / mx - 1 / uav_mass) * est_external_wrench_clamped_[0] + (-Kdx * delta_v(0) - Kpx * delta_p(0));
-  // imp_cmd_.full_cmd.force.y = (1 / my - 1 / uav_mass) * est_external_wrench_clamped_[1] + (-Kdx * delta_v(1) - Kpx * delta_p(1));
-  // imp_cmd_.full_cmd.force.z = (1 / mz - 1 / uav_mass) * est_external_wrench_clamped_[2] + (-Kdx * delta_v(2) - Kpx * delta_p(2));
-  // imp_cmd_.full_cmd.torque.x = (I * Id.inverse() - Eigen::Matrix3d::Identity()) * est_external_wrench_clamped_.segment(3, 3) + (-Kd * delta_v.segment(3, 3) - Kp * delta_p.segment(3, 3));
-  // imp_cmd_.full_cmd.torque.y = (I * Id.inverse() - Eigen::Matrix3d::Identity()) * est_external_wrench_clamped_.segment(3, 3) + (-Kd * delta_v.segment(3, 3) - Kp * delta_p.segment(3, 3));
-  // imp_cmd_.full_cmd.torque.z = (I * Id.inverse() - Eigen::Matrix3d::Identity()) * est_external_wrench_clamped_.segment(3, 3) + (-Kd * delta_v.segment(3, 3) - Kp * delta_p.segment(3, 3));
-  
->>>>>>> 080e3464002d95e313d407ecd333759cd9358b9e
+  imp_cmd_.full_cmd.force.x = (1 / mx - 1 / uav_mass) * est_external_wrench_clamped_[0] + (-Kdx * delta_v(0) - Kpx * delta_p(0));
+  imp_cmd_.full_cmd.force.y = (1 / my - 1 / uav_mass) * est_external_wrench_clamped_[1] + (-Kdx * delta_v(1) - Kpx * delta_p(1));
+  imp_cmd_.full_cmd.force.z = (1 / mz - 1 / uav_mass) * est_external_wrench_clamped_[2] + (-Kdx * delta_v(2) - Kpx * delta_p(2));
+  imp_cmd_.pd_cmd.force.x = (-Kdx * delta_v(0) - Kpx * delta_p(0));
+  imp_cmd_.pd_cmd.force.y = (-Kdx * delta_v(1) - Kpx * delta_p(1));
+  imp_cmd_.pd_cmd.force.z = (-Kdx * delta_v(2) - Kpx * delta_p(2));
+  imp_cmd_.imp_cmd.force.x = (1 / mx - 1 / uav_mass) * est_external_wrench_clamped_[0];
+  imp_cmd_.imp_cmd.force.y = (1 / my - 1 / uav_mass) * est_external_wrench_clamped_[1];
+  imp_cmd_.imp_cmd.force.z = (1 / mz - 1 / uav_mass) * est_external_wrench_clamped_[2];
+  Eigen::Vector3d full_cmd = (I * Id.inverse() - Eigen::Matrix3d::Identity()) * est_external_wrench_clamped_.segment(3, 3) + (-Kd * delta_v.segment(3, 3) - Kp * delta_p.segment(3, 3));
+  Eigen::Vector3d pd_cmd = (-Kd * delta_v.segment(3, 3) - Kp * delta_p.segment(3, 3));
+  Eigen::Vector3d imp_cmd = (I * Id.inverse() - Eigen::Matrix3d::Identity()) * est_external_wrench_clamped_.segment(3, 3);
+  imp_cmd_.full_cmd.torque.x = full_cmd(0);
+  imp_cmd_.full_cmd.torque.y = full_cmd(1);
+  imp_cmd_.full_cmd.torque.z = full_cmd(2);
+  imp_cmd_.pd_cmd.torque.x = pd_cmd(0);
+  imp_cmd_.pd_cmd.torque.y = pd_cmd(1);
+  imp_cmd_.pd_cmd.torque.z = pd_cmd(2);
+  imp_cmd_.imp_cmd.torque.x = imp_cmd(0);
+  imp_cmd_.imp_cmd.torque.y = imp_cmd(1);
+  imp_cmd_.imp_cmd.torque.z = imp_cmd(2);
   target_wrench_cog_(2) = target_acc_w.length() * uav_mass;
   // std::cout<<"tar"<<tau_cmd<<std::endl;
   // std::cout<<"dtheta"<<Kp * delta_p.segment(3, 3)<<std::endl;
@@ -300,6 +311,9 @@ void UnderActuatedTiltedImpedanceController::controlCore()
   //std::cout<<"P"<<robot_model_->calcWrenchMatrixOnCoG()<<std::endl;
   candidate_yaw_term_ = target_thrust_yaw_term_(0);
   candidate_yaw_term_ = 0.0;
+
+  // message for impedance control target command
+  imp_command_pub_.publish(imp_cmd_);
 }
 
 void UnderActuatedTiltedImpedanceController::clampEstExternalWrench()
