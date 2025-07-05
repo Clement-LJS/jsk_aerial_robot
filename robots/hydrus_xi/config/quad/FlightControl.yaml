@@ -68,14 +68,14 @@ controller:
     x_y_p: 2.3
     x_y_zeta: 0.8
 
-    z_p: 6.0
-    z_zeta: 0.55
+    z_p: 5.0
+    z_zeta: 0.2
 
-    roll_pitch_p: 10.0
-    roll_pitch_zeta: 0.95
+    roll_pitch_p: 9.5
+    roll_pitch_zeta: 0.8
 
-    yaw_p: 10.0
-    yaw_zeta: 0.35
+    yaw_p: 6.0
+    yaw_zeta: 0.15
 
     joints_p: 13.0
     joints_d: 2.0

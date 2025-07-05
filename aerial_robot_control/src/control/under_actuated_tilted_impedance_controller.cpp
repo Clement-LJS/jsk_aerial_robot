@@ -209,7 +209,7 @@ void UnderActuatedTiltedImpedanceController::controlCore()
 
   double rate = pid_controllers_.at(Z).result() / (aerial_robot_estimation::G - 0.3);
   target_thrust_z_term = rate * target_thrust_z_term;
-  std::cout<<target_thrust_z_term<<std::endl;
+  std::cout<<delta_p(2)<<std::endl;
   if(navigator_->getForceLandingFlag())
   {
     target_pitch_ = 0;
@@ -287,7 +287,7 @@ void UnderActuatedTiltedImpedanceController::controlCore()
   for(int i = 0; i < motor_num_; i++)
     {
       target_base_thrust_.at(i) = target_thrust_z_term(i) + target_thrust_roll_term_(i) + target_thrust_pitch_term_(i) + target_thrust_yaw_term_(i);
-      target_z_thrust_.at(i) = target_thrust_z_term_(i);
+      target_z_thrust_.at(i) = target_thrust_z_term(i);
       target_roll_thrust_.at(i) = target_thrust_roll_term_(i);
       target_pitch_thrust_.at(i) = target_thrust_pitch_term_(i);
       target_yaw_thrust_.at(i) = target_thrust_yaw_term_(i);
