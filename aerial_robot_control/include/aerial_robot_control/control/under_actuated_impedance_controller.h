@@ -39,6 +39,7 @@
 #include <aerial_robot_control/control/utils/care.h>
 #include <aerial_robot_control/LQIConfig.h>
 #include <aerial_robot_msgs/FourAxisGain.h>
+#include <aerial_robot_msgs/ImpedanceControl.h>
 #include <dynamic_reconfigure/server.h>
 #include <spinal/FourAxisCommandImpedance.h>
 #include <spinal/PMatrixPseudoInverseWithInertia.h>
@@ -72,7 +73,9 @@ namespace aerial_robot_control
     ros::Publisher rpy_gain_pub_; // for spinal
     ros::Publisher four_axis_gain_pub_;
     ros::Publisher p_matrix_pseudo_inverse_inertia_pub_;
+    ros::Publisher imp_command_pub_; 
     ros::Subscriber external_wrench_sub_;
+     
     bool verbose_;
     boost::shared_ptr<dynamic_reconfigure::Server<aerial_robot_control::LQIConfig> > lqi_server_;
     dynamic_reconfigure::Server<aerial_robot_control::LQIConfig>::CallbackType dynamic_reconf_func_lqi_;
@@ -80,6 +83,7 @@ namespace aerial_robot_control
     double target_roll_, target_pitch_;
     double candidate_yaw_term_;
     std::vector<float> target_base_thrust_;
+    std::vector<float> target_z_thrust_;
     std::vector<float> target_roll_thrust_;
     std::vector<float> target_pitch_thrust_;
     std::vector<float> target_yaw_thrust_;
@@ -122,6 +126,7 @@ namespace aerial_robot_control
     std::vector<ros::Publisher> pos_pubs_;
     geometry_msgs::Point pos_cmd_;
     std_msgs::UInt8 mode_;
+    aerial_robot_msgs::ImpedanceControl imp_cmd_;
 
     geometry_msgs::WrenchStamped external_wrench_;
     //private functions

@@ -15,6 +15,7 @@ add_message_files(FILES
   AerialRobotStatus.msg
   FlightNav.msg
   PoseControlPid.msg
+  ImpedanceControl.msg
   Pid.msg
   State.msg
   States.msg

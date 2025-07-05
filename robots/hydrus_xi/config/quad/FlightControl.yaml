@@ -12,7 +12,11 @@ controller:
 
   z:
     p_gain: 3.6
+<<<<<<< HEAD
     i_gain: 6.0 # old: 1.55
+=======
+    i_gain: 5.0 # old: 1.55
+>>>>>>> 080e3464002d95e313d407ecd333759cd9358b9e
     d_gain: 5.0 # old: 3.4
     limit_err_p: 1.0
     limit_sum: 25.0 # N for clamping thrust force
@@ -69,13 +73,13 @@ controller:
     x_y_zeta: 0.8
 
     z_p: 6.0
-    z_zeta: 0.65
+    z_zeta: 0.55
 
-    roll_pitch_p: 13
-    roll_pitch_zeta: 1.10
+    roll_pitch_p: 10.0
+    roll_pitch_zeta: 0.95
 
-    yaw_p: 18.0
-    yaw_zeta: 0.6
+    yaw_p: 10.0
+    yaw_zeta: 0.35
 
     joints_p: 13.0
     joints_d: 2.0
