@@ -60,16 +60,16 @@ controller:
 
     mdx: 0.5
     mdy: 2.0
-    mdz: 2.0
+    mdz: 1.0
     Idx: 0.4
     Idy: 0.8
     Idz: 0.8
 
-    x_y_p: 2.3
-    x_y_zeta: 0.8
+    x_y_p: 2.0
+    x_y_zeta: 0.6
 
-    z_p: 5.0
-    z_zeta: 0.2
+    z_p: 4.5
+    z_zeta: 0.1
 
     roll_pitch_p: 9.5
     roll_pitch_zeta: 0.8

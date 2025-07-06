@@ -590,6 +590,10 @@ void HydrusTiltedImpedanceController::rosParamInit()
   UnderActuatedImpedanceController::rosParamInit();
   
   ros::NodeHandle param_nh(nh_, "controller/impedance");
+  getParam<double>(param_nh, "mdx", mdx_, 1.0);
+  getParam<double>(param_nh, "mdy", mdy_, 1.0);
+  getParam<double>(param_nh, "mdz", mdz_, 1.0);
+  getParam<double>(param_nh, "x_y_p", x_y_p_, 30.0);
   getParam<double>(param_nh, "x_y_p", x_y_p_, 30.0);
   getParam<double>(param_nh, "z_p", z_p_, 30.0);
   getParam<double>(param_nh, "roll_pitch_p", roll_pitch_p_, 30.0);

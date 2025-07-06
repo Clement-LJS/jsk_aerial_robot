@@ -85,9 +85,9 @@ void UnderActuatedTiltedImpedanceController::controlCore()
 
   // Inerial params
   double uav_mass = robot_model_->getMass();
-  double mx = 0.5 * uav_mass;
-  double my = 2.0 * uav_mass;
-  double mz = 2.0 * uav_mass;
+  double mx = mdx_ * uav_mass;
+  double my = mdy_ * uav_mass;
+  double mz = mdz_ * uav_mass;
   Eigen::Matrix3d I = robot_model_->getInertia<Eigen::Matrix3d>();
 
   Eigen::Matrix3d Id = 2 * I;
@@ -201,7 +201,7 @@ void UnderActuatedTiltedImpedanceController::controlCore()
   Eigen::VectorXd allocate_scales = f / g.norm();
   Eigen::VectorXd target_thrust_z_term = allocate_scales * target_acc_w.length();
   // std::cout<<"est_external_wrench_clamped_"<<est_external_wrench_clamped_<<std::endl; 
-  // std::cout<<"mdx"<<mdx_<<std::endl;
+  std::cout<<"mx"<<mx<<std::endl;
   // std::cout<<"--------------------------"<<std::endl;
  
   target_pitch_ = atan2(target_acc_dash.x(), target_acc_dash.z());
@@ -209,7 +209,7 @@ void UnderActuatedTiltedImpedanceController::controlCore()
 
   double rate = pid_controllers_.at(Z).result() / (aerial_robot_estimation::G - 0.3);
   target_thrust_z_term = rate * target_thrust_z_term;
-  std::cout<<delta_p(2)<<std::endl;
+  //std::cout<<delta_p(2)<<std::endl;
   if(navigator_->getForceLandingFlag())
   {
     target_pitch_ = 0;
