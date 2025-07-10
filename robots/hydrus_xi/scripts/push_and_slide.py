@@ -39,7 +39,6 @@ if __name__ == "__main__":
     duration = rospy.get_param("~duration", 0.05)
     joint_pub = rospy.Publisher("/hydrus_xi/joints_ctrl", JointState, queue_size=1)
     mode_pub = rospy.Publisher("/hydrus_xi/imp_mode", UInt8, queue_size=1)
-    cog_sub = rospy.Subscriber("/hydrus_xi/uav/cog/odom", Odometry, odam_callback)
     wrench_sub = rospy.Subscriber("/hydrus_xi/estimated_external_wrench", WrenchStamped, wrench_callback)
     wrench_pub = rospy.Publisher("/hydrus_xi/external_wrench", WrenchStamped, queue_size=1)
     pos_pub = rospy.Publisher("/hydrus_xi/pos_cmds", Point, queue_size=1)
@@ -90,12 +89,12 @@ if __name__ == "__main__":
         nav_msg.pos_xy_nav_mode = 4
         nav_msg.target_pos_x = -1.20
         nav_msg.target_vel_x = 0.0
-        nav_msg.target_pos_y = 0.3 * math.cos(math.pi * round / 50)
-        nav_msg.target_vel_y = -0.12 * math.pi * math.sin(math.pi * round / 50)
+        nav_msg.target_pos_y = 0.3 * math.cos(math.pi * round / 100)
+        nav_msg.target_vel_y = -0.06 * math.pi * math.sin(math.pi * round / 100)
         #nav_msg.target_acc_y = -0.048 * math.pi * math.pi * math.cos(math.pi * round / 50)
         nav_msg.pos_z_nav_mode = 4 
-        nav_msg.target_pos_z = 0.6 + 0.3 * math.sin(math.pi * round / 50)
-        nav_msg.target_vel_z = 0.12 * math.pi * math.cos(math.pi * round / 50)
+        nav_msg.target_pos_z = 0.6 + 0.3 * math.sin(math.pi * round / 100)
+        nav_msg.target_vel_z = 0.06 * math.pi * math.cos(math.pi * round / 100)
         #nav_msg.target_acc_z = -0.048 * math.pi * math.pi * math.sin(math.pi * round / 50)
         nav_msg.yaw_nav_mode = 4 
         nav_msg.target_yaw = -math.pi/6

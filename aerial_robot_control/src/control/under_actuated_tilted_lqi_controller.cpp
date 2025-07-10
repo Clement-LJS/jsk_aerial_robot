@@ -73,9 +73,6 @@ void UnderActuatedTiltedLQIController::controlCore()
       target_pitch_ = 0;
       target_roll_ = 0;
     }
-  std::cout<<"target_acc_dash.x()"<<target_acc_dash.x()<<std::endl;
-  std::cout<<"target_acc_dash.y()"<<target_acc_dash.y()<<std::endl;
-  std::cout<<"target_acc_dash.z()"<<target_acc_dash.z()<<std::endl;
 
 
   Eigen::VectorXd f = robot_model_->getStaticThrust();
