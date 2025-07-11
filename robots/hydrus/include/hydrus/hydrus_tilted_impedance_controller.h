@@ -70,6 +70,7 @@ namespace aerial_robot_control
 
     ros::Publisher estimate_external_wrench_pub_;
     ros::Subscriber ext_force_sub_;
+    ros::Subscriber plan_flag_sub_;
 
  
 
@@ -91,6 +92,14 @@ namespace aerial_robot_control
     ros::Duration ext_duration_;
 
     ros::Publisher ee_pos_pub_;
+    ros::Publisher joints_ctrl_pub_;
+    ros::Publisher flight_nav_pub_;
+
+    sensor_msgs::JointState joint_cmd_;
+
+    bool plan_flag_ = false;
+
+    double ma_, ca_, ka_;
 
     void externalWrenchEstimate();
     KDL::JntArray q_result_;
@@ -102,6 +111,7 @@ namespace aerial_robot_control
     Eigen::Matrix3d getOrientationJacobian(std::string name);
     Eigen::MatrixXd getCmatrix(Eigen::MatrixXd delta_M, Eigen::VectorXd delta_xi,  Eigen::VectorXd xi_dot);
     void extForceCallback(const geometry_msgs::WrenchConstPtr& cmd);
+    void planStartCallback(const std_msgs::Empty msg);
 
   };
    

@@ -201,7 +201,7 @@ void UnderActuatedTiltedImpedanceController::controlCore()
   Eigen::VectorXd allocate_scales = f / g.norm();
   Eigen::VectorXd target_thrust_z_term = allocate_scales * target_acc_w.length();
   // std::cout<<"est_external_wrench_clamped_"<<est_external_wrench_clamped_<<std::endl; 
-  std::cout<<"mx"<<mx<<std::endl;
+
   // std::cout<<"--------------------------"<<std::endl;
  
   target_pitch_ = atan2(target_acc_dash.x(), target_acc_dash.z());

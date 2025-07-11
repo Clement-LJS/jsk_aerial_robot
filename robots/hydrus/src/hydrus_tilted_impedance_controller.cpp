@@ -30,21 +30,29 @@ void HydrusTiltedImpedanceController::initialize(ros::NodeHandle nh,
   pos_cmd_.y = 0.3;
   pos_cmd_.z = 0.0;
 
+ 
+
   xd_ddot_ = Eigen::VectorXd::Zero(3);
   xd_dot_ = Eigen::VectorXd::Zero(3);
   xd_ = Eigen::VectorXd::Zero(3);
   xref_ = Eigen::VectorXd::Zero(3);
+  
+  joint_cmd_.name.resize(3);
+  joint_cmd_.position.resize(3);
+  joint_cmd_.name[0] = "joint1";
+  joint_cmd_.name[1] = "joint2";
+  joint_cmd_.name[2] = "joint3";
   
   // xref_(0) = 0.9047;
   // xref_(1) = 0.5223;
 
   // xd_(0) = 0.9047;
   // xd_(1) = 0.5223;
-  xref_(0) = 0.62;
-  xref_(1) = 1.635;
+  xref_(0) = 1.039;
+  xref_(1) = 0.0;
 
-  xd_(0) = 0.62;
-  xd_(1) = 1.635;
+  xd_(0) = 1.039;
+  xd_(1) = 0.0;
 
   q_result_ = KDL::JntArray(3);
 
@@ -55,8 +63,9 @@ void HydrusTiltedImpedanceController::initialize(ros::NodeHandle nh,
   estimate_external_wrench_pub_ = nh_.advertise<geometry_msgs::WrenchStamped>("estimated_external_wrench", 1);
   ext_force_sub_ = nh_.subscribe("ext_force", 1, &HydrusTiltedImpedanceController::extForceCallback, this);
   ee_pos_pub_ = nh_.advertise<geometry_msgs::Pose>("end_effector_pose", 1);
-
- // = nh.serviceClient<hydrus::EndEffectorIK>("/hydrus/end_effector_ik");
+  joints_ctrl_pub_ = nh_.advertise<sensor_msgs::JointState>("joints_ctrl", 1);
+  flight_nav_pub_ = nh_.advertise<aerial_robot_msgs::FlightNav>("uav/nav", 1);
+  plan_flag_sub_ = nh_.subscribe("plan_start", 1, &HydrusTiltedImpedanceController::planStartCallback, this);
   wrench_estimate_thread_ = boost::thread([this]()
                                           {
                                             ros::Rate loop_rate(100.0);
@@ -96,17 +105,18 @@ void HydrusTiltedImpedanceController::controlCore()
 
 
   // Admittance control
-  double Ma = 5;
-  double Ca = 2*0.35*sqrt(250);
-  double Ka = 50;
+  double Ma = ma_;
+  double Ca = ca_;
+  double Ka = ka_;
 
   double dt = (ros::Time::now() - time_).toSec();
-  if (dt >= 0.05)
+  if (plan_flag_ && dt >= 0.05)
   {
     Eigen::AngleAxisd rotation_vector(rpy_.z(), Eigen::Vector3d::UnitZ());
     Eigen::Matrix3d R = rotation_vector.toRotationMatrix(); 
     Eigen::Vector3d Fext = Eigen::Vector3d::Zero();
-    Fext(1) = ext_force_.force.x;
+    //Fext(0) = ext_force_.force.x;
+    Fext(0) = est_external_wrench_(0);
     //xd_ddot_ = (R.inverse() * Fext - Ka * (xd_ - xref_) - Ca * xd_dot_) / Ma;
     xd_ddot_ = (Fext - Ka * (xd_ - xref_) - Ca * xd_dot_) / Ma;
     xd_ += xd_dot_ * dt;
@@ -118,13 +128,30 @@ void HydrusTiltedImpedanceController::controlCore()
     // joint_cmd_pubs_[1].publish(j2_term);
     // joint_cmd_pubs_[2].publish(j3_term);
 
-    // std::cout<<"ext_duration_"<<ext_duration_<<std::endl;
-    KDL::Chain kdl_chain;
-    robot_model_->getTree().getChain(std::string("root"), std::string("end_effector"), kdl_chain);
-    KDL::Frame cog = robot_model_->getCog<KDL::Frame>();
-    KDL::Frame target_pose_cog;
-    target_pose_cog.p = KDL::Vector(xd_(0), xd_(1), 0.00);
-    target_pose_cog.M = KDL::Rotation::Identity();
+    std::cout<<"xd_"<<xd_<<std::endl;
+    std::cout<<"ma_"<<ma_<<std::endl;
+    joint_cmd_.position[0] = 1.5708 - std::acos(xd_(0)/1.2);
+    joint_cmd_.position[1] = 2 * std::acos(xd_(0)/1.2);
+    joint_cmd_.position[2] = -std::acos(xd_(0)/1.2);
+    //std::cout<<"joint_cmd_"<<joint_cmd_<<std::endl;
+    //joints_ctrl_pub_.publish(joint_cmd_);
+    aerial_robot_msgs::FlightNav nav_msg;
+    nav_msg.header.frame_id = std::string("/world");
+    nav_msg.header.stamp = ros::Time::now();
+
+    nav_msg.yaw_nav_mode = nav_msg.POS_VEL_MODE;
+    nav_msg.target_yaw = -std::acos(xd_(0)/1.2);
+    //flight_nav_pub_.publish(nav_msg);
+
+
+    // joint_cmd_.position[1] = 1.57;
+
+    // KDL::Chain kdl_chain;
+    // robot_model_->getTree().getChain(std::string("root"), std::string("end_effector"), kdl_chain);
+    // KDL::Frame cog = robot_model_->getCog<KDL::Frame>();
+    // KDL::Frame target_pose_cog;
+    // target_pose_cog.p = KDL::Vector(xd_(0), xd_(1), 0.00);
+    // target_pose_cog.M = KDL::Rotation::Identity();
 
     // KDL::Frame target_pose;
     // target_pose = cog * target_pose_cog;
@@ -132,8 +159,8 @@ void HydrusTiltedImpedanceController::controlCore()
 
     // ee_pose.position.x = target_pose.p(0);
     // ee_pose.position.y = target_pose.p(1);  
-    ee_pose.position.x = xd_(0);
-    ee_pose.position.y = xd_(1);  
+    // ee_pose.position.x = xd_(0);
+    // ee_pose.position.y = xd_(1);  
      //std::cout << "q" << aerial_robot_model::kdlToEigen(cog.M) << aerial_robot_model::kdlToEigen(cog.p)<<std::endl;
     // if ( ee_pose.position.x < 0.6)
     // {
@@ -606,6 +633,9 @@ void HydrusTiltedImpedanceController::rosParamInit()
   getParam<double>(param_nh, "yaw_zeta", yaw_zeta_, 0.5);
   getParam<double>(param_nh, "joints_d", joints_d_, 5.0);
   getParam<double>(param_nh, "pos_d", pos_d_, 4.0);
+  getParam<double>(param_nh, "ma", ma_, 5.0);
+  getParam<double>(param_nh, "ca", ca_, 20.0);
+  getParam<double>(param_nh, "ka", ka_, 20.0);
 
   momentum_observer_matrix_ = Eigen::MatrixXd::Identity(6,6);
   momentum_observer_matrix_.topRows(3) *= 8.0;
@@ -696,7 +726,10 @@ void HydrusTiltedImpedanceController::extForceCallback(const geometry_msgs::Wren
 {
   std::cout<<"*cmd"<<*cmd<<std::endl;
   ext_force_ = *cmd;
-
+}
+void HydrusTiltedImpedanceController::planStartCallback(const std_msgs::Empty msg)
+{
+  plan_flag_ = true;
 }
 
 

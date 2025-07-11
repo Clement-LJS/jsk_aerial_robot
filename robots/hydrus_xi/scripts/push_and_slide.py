@@ -27,11 +27,16 @@ def wrench_callback(msg):
     global external_wrench
     external_wrench = msg
 
+def joint_callback(msg):
+    global joint_states
+    joint_states = msg
+
 if __name__ == "__main__":
 
     rospy.init_node("push_and_slide")
     cog2world = TransformStamped()
     external_wrench = WrenchStamped()
+    joint_states = JointState()
 
     external_wrench_added = WrenchStamped()
 
@@ -40,6 +45,7 @@ if __name__ == "__main__":
     joint_pub = rospy.Publisher("/hydrus_xi/joints_ctrl", JointState, queue_size=1)
     mode_pub = rospy.Publisher("/hydrus_xi/imp_mode", UInt8, queue_size=1)
     wrench_sub = rospy.Subscriber("/hydrus_xi/estimated_external_wrench", WrenchStamped, wrench_callback)
+    joint_sub = rospy.Subscriber("/hydrus_xi/joint_states", JointState, joint_callback)
     wrench_pub = rospy.Publisher("/hydrus_xi/external_wrench", WrenchStamped, queue_size=1)
     pos_pub = rospy.Publisher("/hydrus_xi/pos_cmds", Point, queue_size=1)
     nav_pub = rospy.Publisher("/hydrus_xi/uav/nav", FlightNav, queue_size=1)
@@ -97,7 +103,8 @@ if __name__ == "__main__":
         nav_msg.target_vel_z = 0.06 * math.pi * math.cos(math.pi * round / 100)
         #nav_msg.target_acc_z = -0.048 * math.pi * math.pi * math.sin(math.pi * round / 50)
         nav_msg.yaw_nav_mode = 4 
-        nav_msg.target_yaw = -math.pi/6
+        nav_msg.target_yaw =  joint_states.position[4] - math.pi/2
+        #nav_msg.target_yaw = -math.pi/6
         nav_pub.publish(nav_msg)
         # external_wrench_added.wrench.torque.z = 0.4 * math.cos(round / 50)
         # external_wrench_added.wrench.force.y = 0.6 * math.cos(round / 50)
