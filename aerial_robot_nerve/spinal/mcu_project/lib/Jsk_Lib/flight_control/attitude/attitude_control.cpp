@@ -761,6 +761,14 @@ void AttitudeController::pwmTestCallback(const spinal::PwmTest& pwm_msg)
             nh_->logwarn("FAIL SAFE!  Invaild PWM value for motor");
             pwm_test_value_[motor_index] = IDLE_DUTY;
           }
+	//changed from here //////////////////////////
+	if(motor_number_ < motor_index)
+	  {
+	    pwm_test_flag_ = false;
+	    target_pwm_[motor_index] = pwm_msg.pwms[i];
+	    nh_->logwarn("Send PWM to external devices.");
+	  }
+	//to here ///////////////////////////////////
       }
     }
   else
