@@ -48,8 +48,8 @@
 #define GPS_FLAG 0
 //2.1.3 Direct Servo Control
 #define SERVO_FLAG 1
-#define DYNAMIXEL 1
-#define KONDO 0
+#define DYNAMIXEL 0
+#define KONDO 1
 //2.1.3.1 Dynamixel Servo Control without external convertor board
 #define DYNAMIXEL_BOARDLESS_CONTROL 0
 
