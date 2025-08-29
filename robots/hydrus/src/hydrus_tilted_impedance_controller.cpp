@@ -36,6 +36,7 @@ void HydrusTiltedImpedanceController::initialize(ros::NodeHandle nh,
   xd_dot_ = Eigen::VectorXd::Zero(3);
   xd_ = Eigen::VectorXd::Zero(3);
   xref_ = Eigen::VectorXd::Zero(3);
+  Fext_ = Eigen::Vector3d::Zero();
   
   joint_cmd_.name.resize(3);
   joint_cmd_.position.resize(3);
@@ -48,17 +49,19 @@ void HydrusTiltedImpedanceController::initialize(ros::NodeHandle nh,
 
   // xd_(0) = 0.9047;
   // xd_(1) = 0.5223;
-  xref_(0) = 1.039;
+  xref_(0) = 1.039; //1.039 // 1.0357
   xref_(1) = 0.0;
 
-  xd_(0) = 1.039;
+  xd_(0) = 1.039; //1.039
   xd_(1) = 0.0;
 
   q_result_ = KDL::JntArray(3);
+  p_ = 0.0;
 
   init_sum_momentum_ = Eigen::VectorXd::Zero(6);
   integrate_term_ = Eigen::VectorXd::Zero(6);
   est_external_wrench_ = Eigen::VectorXd::Zero(6);
+
   prev_est_wrench_timestamp_ = 0;
   estimate_external_wrench_pub_ = nh_.advertise<geometry_msgs::WrenchStamped>("estimated_external_wrench", 1);
   ext_force_sub_ = nh_.subscribe("ext_force", 1, &HydrusTiltedImpedanceController::extForceCallback, this);
@@ -66,6 +69,7 @@ void HydrusTiltedImpedanceController::initialize(ros::NodeHandle nh,
   joints_ctrl_pub_ = nh_.advertise<sensor_msgs::JointState>("joints_ctrl", 1);
   flight_nav_pub_ = nh_.advertise<aerial_robot_msgs::FlightNav>("uav/nav", 1);
   plan_flag_sub_ = nh_.subscribe("plan_start", 1, &HydrusTiltedImpedanceController::planStartCallback, this);
+  end_wrench_sub_ = nh_.subscribe("end_wrench", 1, &HydrusTiltedImpedanceController::endWrenchCallback, this);
   wrench_estimate_thread_ = boost::thread([this]()
                                           {
                                             ros::Rate loop_rate(100.0);
@@ -108,19 +112,75 @@ void HydrusTiltedImpedanceController::controlCore()
   double Ma = ma_;
   double Ca = ca_;
   double Ka = ka_;
+  double M1 = robot_model_->getInertiaMap().at("link1").getMass();
+  double M2 = robot_model_->getInertiaMap().at("link2").getMass();
+  double M3 = robot_model_->getInertiaMap().at("link3").getMass();
+  double M4 = robot_model_->getInertiaMap().at("link4").getMass();
+  double m = M1+M2+M3+M4;
 
+  double q = 0.01; // Process noise covariance
+  double r = 0.01;
+
+  std::cout<<"Fext(0): "<<Fext_(0)<<std::endl;
   double dt = (ros::Time::now() - time_).toSec();
   if (plan_flag_ && dt >= 0.05)
   {
+    double vx = abs(vel_.x());
+      
+    std::cout<<"delta_vx"<<vx<<std::endl;
+    std::cout<<"Fest"<<est_external_wrench_(0)<<std::endl;
+    std::cout<<"contact_count_"<<contact_count_<<std::endl;
+    if (vx < 0.03 && est_external_wrench_(0) < -1.0)
+      contact_count_++;
+    else 
+      contact_count_ = 0;
+
+
+    if (contact_count_ > 20)
+      contact_flag_ = true;
+    // else
+    //   contact_flag_ = false;
+
+    if (contact_flag_)
+      Ka *= 0.3;
+      Ca *= 0.3;
+    
+    std::cout<<"contact_flag_ "<<contact_flag_<<std::endl;
+    std::cout<<"Ka"<<Ka<<std::endl;
+
     Eigen::AngleAxisd rotation_vector(rpy_.z(), Eigen::Vector3d::UnitZ());
     Eigen::Matrix3d R = rotation_vector.toRotationMatrix(); 
-    Eigen::Vector3d Fext = Eigen::Vector3d::Zero();
-    //Fext(0) = ext_force_.force.x;
-    Fext(0) = est_external_wrench_(0);
+
+    Eigen::Vector3d Fref = Eigen::Vector3d::Zero();
+    // ----------first order--------------------
+    double alpha = 0.3;
+    Fext_(0) = alpha * est_external_wrench_(0) + (1 - alpha) * Fext_(0);
+    // ------------------------------
+
+    // ----------Kalman--------------------
+    // double p_pred = p_ + q;
+    // double x_pred = end_external_wrench_.wrench.force.x;
+    // double e = est_external_wrench_(0) - x_pred;
+    // double k = p_pred/(p_pred + r);
+    // Fext_(0) = x_pred + k * e;
+    // p_ = (1 - k) * p_pred;
+    // ------------------------------
+
+    if (Fext_(0) > 0.35)
+      Fext_(0) = 0.35;
+    else if (Fext_(0) < -2.2)
+      Fext_(0) = -2.2;
+    Fref(0) = fref_;
     //xd_ddot_ = (R.inverse() * Fext - Ka * (xd_ - xref_) - Ca * xd_dot_) / Ma;
-    xd_ddot_ = (Fext - Ka * (xd_ - xref_) - Ca * xd_dot_) / Ma;
+    xd_ddot_ = ((Fext_ - Fref) - Ka * (xd_ - xref_) - Ca * xd_dot_) / Ma;
     xd_ += xd_dot_ * dt;
     xd_dot_ += xd_ddot_ * dt;
+    // if (xd_(0) > 0.95)
+    //   xd_(0) = 0.95;
+    if (xd_(0) > 1.08)
+      xd_(0) = 1.08;
+    else if (xd_(0) < 0.94)
+      xd_(0) = 0.94;
     geometry_msgs::Pose ee_pose;
 
 
@@ -130,18 +190,33 @@ void HydrusTiltedImpedanceController::controlCore()
 
     std::cout<<"xd_"<<xd_<<std::endl;
     std::cout<<"ma_"<<ma_<<std::endl;
-    joint_cmd_.position[0] = 1.5708 - std::acos(xd_(0)/1.2);
-    joint_cmd_.position[1] = 2 * std::acos(xd_(0)/1.2);
-    joint_cmd_.position[2] = -std::acos(xd_(0)/1.2);
-    //std::cout<<"joint_cmd_"<<joint_cmd_<<std::endl;
-    //joints_ctrl_pub_.publish(joint_cmd_);
-    aerial_robot_msgs::FlightNav nav_msg;
-    nav_msg.header.frame_id = std::string("/world");
-    nav_msg.header.stamp = ros::Time::now();
+    std::cout<<"fref_"<<fref_<<std::endl;
 
-    nav_msg.yaw_nav_mode = nav_msg.POS_VEL_MODE;
-    nav_msg.target_yaw = -std::acos(xd_(0)/1.2);
-    //flight_nav_pub_.publish(nav_msg);
+    // double theta = std::acos(xd_(0)/1.2);
+    //  std::cout<<"theta"<<theta;
+    // joint_cmd_.position[0] = 2 * theta;
+    // joint_cmd_.position[1] = -2 * theta;
+    // joint_cmd_.position[2] = 2 * theta;
+    // ---------------CoG--------------------
+    double ctheta = (xd_(0)*m-0.6*m+0.3*M4)/(0.3*M3+0.9*M2+1.2*M1);
+    
+    joint_cmd_.position[0] = 1.5708 - std::acos(ctheta);
+    joint_cmd_.position[1] = 2 * std::acos(ctheta);
+    joint_cmd_.position[2] = -std::acos(ctheta);
+    // ---------------CoG--------------------
+    std::cout<<"theta"<<std::acos(ctheta)<<" "<<std::acos(ctheta)/3.14159*180<<std::endl;
+    joints_ctrl_pub_.publish(joint_cmd_);
+    // aerial_robot_msgs::FlightNav nav_msg;
+    // nav_msg.header.frame_id = std::string("/world");
+    // nav_msg.header.stamp = ros::Time::now();
+
+    // nav_msg.yaw_nav_mode = nav_msg.POS_VEL_MODE;
+    // nav_msg.target_yaw = -std::acos(xd_(0)/1.2);
+    // flight_nav_pub_.publish(nav_msg);
+
+    ee_pose.position.x = xd_(0);
+    ee_pose.position.y = Fext_(0);
+    ee_pos_pub_.publish(ee_pose);
 
 
     // joint_cmd_.position[1] = 1.57;
@@ -620,6 +695,7 @@ void HydrusTiltedImpedanceController::rosParamInit()
   getParam<double>(param_nh, "mdx", mdx_, 1.0);
   getParam<double>(param_nh, "mdy", mdy_, 1.0);
   getParam<double>(param_nh, "mdz", mdz_, 1.0);
+  getParam<double>(param_nh, "Idx", Idx_, 1.0);
   getParam<double>(param_nh, "x_y_p", x_y_p_, 30.0);
   getParam<double>(param_nh, "x_y_p", x_y_p_, 30.0);
   getParam<double>(param_nh, "z_p", z_p_, 30.0);
@@ -636,9 +712,12 @@ void HydrusTiltedImpedanceController::rosParamInit()
   getParam<double>(param_nh, "ma", ma_, 5.0);
   getParam<double>(param_nh, "ca", ca_, 20.0);
   getParam<double>(param_nh, "ka", ka_, 20.0);
+  getParam<double>(param_nh, "fref", fref_, -0.3);
 
   momentum_observer_matrix_ = Eigen::MatrixXd::Identity(6,6);
-  momentum_observer_matrix_.topRows(3) *= 8.0;
+  momentum_observer_matrix_(0, 0) *= 5.0;
+  momentum_observer_matrix_(1, 1) *= 5.0;
+  momentum_observer_matrix_(2, 2) *= 5.0;
   momentum_observer_matrix_.bottomRows(3) *= 2.5;
 }
 
@@ -662,6 +741,7 @@ void HydrusTiltedImpedanceController::externalWrenchEstimate()
 
   tf::vectorTFToEigen(imu_handler->getFilteredVelCog(), vel_w);
   tf::vectorTFToEigen(imu_handler->getFilteredOmegaCog(), omega_cog);
+
   Eigen::Matrix3d cog_rot;
   tf::matrixTFToEigen(estimator_->getOrientation(Frame::COG, estimate_mode_), cog_rot);
   Eigen::Matrix3d inertia = robot_model_->getInertia<Eigen::Matrix3d>();
@@ -670,6 +750,9 @@ void HydrusTiltedImpedanceController::externalWrenchEstimate()
   Eigen::VectorXd sum_momentum = Eigen::VectorXd::Zero(6);
   sum_momentum.head(3) = mass * vel_w;
   sum_momentum.tail(3) = inertia * omega_cog;
+  Eigen::VectorXd sum_force = Eigen::VectorXd::Zero(6);
+  //std::cout<<"acc:"<<acc_w<<std::endl;
+  // sum_force.head(3) = mass * acc_w;
 
   Eigen::MatrixXd J_t = Eigen::MatrixXd::Identity(6,6);
   J_t.topLeftCorner(3,3) = cog_rot;
@@ -684,7 +767,7 @@ void HydrusTiltedImpedanceController::externalWrenchEstimate()
       init_sum_momentum_ = sum_momentum; // not good
     }
   double dt = ros::Time::now().toSec() - prev_est_wrench_timestamp_;
-  integrate_term_ += (J_t * target_wrench_cog - N + est_external_wrench_) * dt;
+  integrate_term_ += (J_t * target_wrench_cog - N + est_external_wrench_ - sum_force) * dt;
   est_external_wrench_ = momentum_observer_matrix_ * (sum_momentum - init_sum_momentum_ - integrate_term_);
   Eigen::VectorXd est_external_wrench_cog = est_external_wrench_;
   est_external_wrench_cog.head(3) = cog_rot.inverse() * est_external_wrench_.head(3);
@@ -730,6 +813,11 @@ void HydrusTiltedImpedanceController::extForceCallback(const geometry_msgs::Wren
 void HydrusTiltedImpedanceController::planStartCallback(const std_msgs::Empty msg)
 {
   plan_flag_ = true;
+}
+
+void HydrusTiltedImpedanceController::endWrenchCallback(const geometry_msgs::WrenchStampedConstPtr& cmd)
+{
+  end_external_wrench_ = *cmd;
 }
 
 

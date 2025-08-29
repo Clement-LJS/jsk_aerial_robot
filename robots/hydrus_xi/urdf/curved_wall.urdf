@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- This URDF was automatically created by SolidWorks to URDF Exporter! Originally created by Stephen Brawner (brawner@gmail.com) 
+     Commit Version: 1.6.0-4-g7f85cfe  Build Version: 1.6.7995.38578
+     For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
+<robot
+  name="curved_wall">
+  <link name="curved_wall">
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry>
+          <cylinder length="4" radius="2.0" />
+        </geometry>
+        <material name="0 0 0 1"/>
+      </visual>
+      <collision>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry>
+          <cylinder length="4" radius="2.0"/>
+        </geometry>
+      </collision>
+      <inertial>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <mass value="12"/>
+        <inertia
+            ixx="1.00" ixy="0.0" ixz="0.0"
+            iyy="1.00" iyz="0.0"
+            izz="1.00"/>
+      </inertial>
+    </link>
+
+  <gazebo reference="curved_wall">
+    <material>Gazebo/Black</material>
+    <mu1>0.001</mu1>
+    <mu2>0.001</mu2>
+  </gazebo>
+
+  <gazebo>
+    <static>true</static>
+  </gazebo>
+
+
+
+</robot>

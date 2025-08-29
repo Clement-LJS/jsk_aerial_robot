@@ -90,12 +90,13 @@ void UnderActuatedTiltedImpedanceController::controlCore()
   double mz = mdz_ * uav_mass;
   Eigen::Matrix3d I = robot_model_->getInertia<Eigen::Matrix3d>();
 
-  Eigen::Matrix3d Id = 3 * I;
+  Eigen::Matrix3d Id = Idx_ * I;
   // Eigen::Matrix3d Id = Eigen::Matrix3d::Zero();
   // Id(0, 0) = 0.4;
   // Id(1, 1) = 0.4;
   // Id(2, 2) = 0.8;
   // Control params
+  // std::cout<<"idx: "<<Idx_<<std::endl;
   double Kpx = x_y_p_;
   double Kpy = x_y_p_;
   double Kpz = z_p_;
@@ -107,9 +108,10 @@ void UnderActuatedTiltedImpedanceController::controlCore()
   Eigen::MatrixXd Kd = Eigen::MatrixXd::Zero(3, 3);
   Kp.block(0, 0, 2, 2) = roll_pitch_p_ * Eigen::Matrix2d::Identity();
   Kp(2, 2) = yaw_p_;
+ 
   Zeta.block(0, 0, 2, 2) = roll_pitch_zeta_ * Eigen::Matrix2d::Identity();
   Zeta(2, 2) = yaw_zeta_;
-  Kd = 2 * Zeta * (Kp * Id).sqrt();
+  Kd = 2 * Zeta * Kp.sqrt();
  
   tf::Matrix3x3 cog = estimator_->getOrientation(Frame::COG, estimate_mode_);
   Eigen::Matrix3d R = Eigen::Matrix3d::Zero();
@@ -229,7 +231,7 @@ void UnderActuatedTiltedImpedanceController::controlCore()
   // acc(5) = target_ang_acc_.z();
   Eigen::Vector3d tau_cmd = Eigen::Vector3d::Zero();
 
-  tau_cmd = (I * Id.inverse() - Eigen::Matrix3d::Identity()) * est_external_wrench_clamped_.segment(3, 3) + (-Kd * delta_v.segment(3, 3) - Kp * delta_p.segment(3, 3)) + aerial_robot_model::skew(omega) * I * omega;
+  tau_cmd = (I * Id.inverse() - Eigen::Matrix3d::Identity()) * est_external_wrench_clamped_.segment(3, 3) + I * (-Kd * delta_v.segment(3, 3) - Kp * delta_p.segment(3, 3)) + aerial_robot_model::skew(omega) * I * omega;
   //tau_cmd = (-Kd * delta_v.segment(3, 3) - Kp * delta_p.segment(3, 3)) + aerial_robot_model::skew(omega) * I * omega;
   imp_cmd_.full_cmd.force.x = (1 / mx - 1 / uav_mass) * est_external_wrench_clamped_[0] + (-Kdx * delta_v(0) - Kpx * delta_p(0));
   imp_cmd_.full_cmd.force.y = (1 / my - 1 / uav_mass) * est_external_wrench_clamped_[1] + (-Kdx * delta_v(1) - Kpx * delta_p(1));

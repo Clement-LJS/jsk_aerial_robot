@@ -64,6 +64,12 @@ namespace sensor_plugin
       filtered_vel_cog_ = filtered_vel_cog;
     }
 
+    void setFilteredAccCog(const tf::Vector3 filtered_acc_cog)
+    {
+      boost::lock_guard<boost::mutex> lock(acc_mutex_);
+      filtered_acc_cog_ = filtered_acc_cog;
+    }
+
     const tf::Vector3 getFilteredOmegaCog()
     {
       boost::lock_guard<boost::mutex> lock(omega_mutex_);
@@ -76,6 +82,12 @@ namespace sensor_plugin
       return filtered_vel_cog_;
     }
 
+    const tf::Vector3 getFilteredAccCog()
+    {
+      boost::lock_guard<boost::mutex> lock(acc_mutex_);
+      return filtered_acc_cog_;
+    }
+
   protected:
 
     void ImuCallback(const spinal::ImuConstPtr& imu_msg) override;
@@ -83,7 +95,9 @@ namespace sensor_plugin
     // work around to obtain filter states
     boost::mutex omega_mutex_;
     boost::mutex vel_mutex_;
+    boost::mutex acc_mutex_;
     tf::Vector3 filtered_vel_cog_;
+    tf::Vector3 filtered_acc_cog_;
     tf::Vector3 filtered_omega_cog_;
     IirFilter lpf_omega_; // for gyro
 
