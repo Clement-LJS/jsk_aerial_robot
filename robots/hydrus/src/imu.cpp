@@ -57,6 +57,7 @@ namespace sensor_plugin
 
     // debug
     omega_filter_pub_ = indexed_nhp_.advertise<geometry_msgs::Vector3Stamped>(string("filter_angular_velocity"), 1);
+  
   }
 
 
@@ -114,7 +115,11 @@ namespace sensor_plugin
     setFilteredVelCog(estimator_->getVel(Frame::BASELINK, estimate_mode)
                       + estimator_->getOrientation(Frame::BASELINK, estimate_mode)
                       * (filtered_omega.cross(cog2baselink_tf.inverse().getOrigin())));
-
+    tf::Vector3 acc;
+    acc[0] = estimator_->getState(State::X_BASE, estimate_mode)[2];
+    acc[1] = estimator_->getState(State::Y_BASE, estimate_mode)[2];
+    acc[2] = estimator_->getState(State::Z_BASE, estimate_mode)[2];
+    setFilteredAccCog(acc);
     estimateProcess();
     updateHealthStamp();
   }

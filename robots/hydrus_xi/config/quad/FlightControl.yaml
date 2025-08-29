@@ -12,6 +12,7 @@ controller:
 
   z:
     p_gain: 3.6
+
     i_gain: 3.5 # old: 1.55
     d_gain: 5.0 # old: 3.4
     limit_err_p: 1.0
@@ -58,28 +59,32 @@ controller:
     gyro_moment_compensation: true
     clamp_gain: true
 
-    mdx: 0.5
-    mdy: 2.0
-    mdz: 1.0
-    Idx: 0.4
-    Idy: 0.4
-    Idz: 0.8
 
-    ma: 5.0
-    ca: 15.0
-    ka: 10.0
+    mdx: 1.5
+    mdy: 3.0
+    mdz: 3.0
+    Idx: 2.0
+    # Idy: 0.4
+    # Idz: 0.8
 
-    x_y_p: 2.2
-    x_y_zeta: 0.7
+    ma: 16.0
+    ca: 64.0
+    ka: 64.0
+
+    x_y_p: 2.5
+    x_y_zeta: 0.45
+    fref: -1.0
+
 
     z_p: 4.5
-    z_zeta: 0.1
+    z_zeta: 0.4
 
-    roll_pitch_p: 9.0
-    roll_pitch_zeta: 0.85
 
-    yaw_p: 6.0
-    yaw_zeta: 0.15
+    roll_pitch_p: 85.0
+    roll_pitch_zeta: 0.6
+
+    yaw_p: 8.0
+    yaw_zeta: 0.2
 
     joints_p: 13.0
     joints_d: 2.0

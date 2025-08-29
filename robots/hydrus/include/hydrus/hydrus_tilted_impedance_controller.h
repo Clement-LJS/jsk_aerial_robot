@@ -71,6 +71,7 @@ namespace aerial_robot_control
     ros::Publisher estimate_external_wrench_pub_;
     ros::Subscriber ext_force_sub_;
     ros::Subscriber plan_flag_sub_;
+    ros::Subscriber end_wrench_sub_;
 
  
 
@@ -85,6 +86,7 @@ namespace aerial_robot_control
     Eigen::MatrixXd momentum_observer_matrix_;
 
     Eigen::Vector3d xd_ddot_, xd_dot_, xd_, xref_;
+    Eigen::Vector3d Fext_;
 
     ros::Time time_; 
 
@@ -98,8 +100,14 @@ namespace aerial_robot_control
     sensor_msgs::JointState joint_cmd_;
 
     bool plan_flag_ = false;
+    bool contact_flag_ = false;
+    int contact_count_ = 0;
+    double p_;
+
+    geometry_msgs::WrenchStamped end_external_wrench_;
 
     double ma_, ca_, ka_;
+    double fref_;
 
     void externalWrenchEstimate();
     KDL::JntArray q_result_;
@@ -112,6 +120,7 @@ namespace aerial_robot_control
     Eigen::MatrixXd getCmatrix(Eigen::MatrixXd delta_M, Eigen::VectorXd delta_xi,  Eigen::VectorXd xi_dot);
     void extForceCallback(const geometry_msgs::WrenchConstPtr& cmd);
     void planStartCallback(const std_msgs::Empty msg);
+    void endWrenchCallback(const geometry_msgs::WrenchStampedConstPtr& cmd);
 
   };
    
