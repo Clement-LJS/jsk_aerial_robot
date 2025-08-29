@@ -121,7 +121,6 @@ void HydrusTiltedImpedanceController::controlCore()
   double q = 0.01; // Process noise covariance
   double r = 0.01;
 
-  std::cout<<"Fext(0): "<<Fext_(0)<<std::endl;
   double dt = (ros::Time::now() - time_).toSec();
   if (plan_flag_ && dt >= 0.05)
   {
