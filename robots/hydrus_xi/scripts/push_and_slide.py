@@ -60,15 +60,15 @@ if __name__ == "__main__":
     joints.position = [math.pi/3, math.pi/3, -math.pi/6]
     nav_msg = FlightNav()
 
-    joint_pub.publish(joints)
+    #joint_pub.publish(joints)
     nav_pub.publish(nav_msg) # go to the origin point
     
     time.sleep(5)
     print("preparation 1")
     nav_msg.pos_xy_nav_mode = 4 # pos_vel mode
-    nav_msg.target_pos_x = -1.5
+    nav_msg.target_pos_x = 0.0
     nav_msg.target_vel_x = -0.05
-    nav_msg.target_pos_y = 0.3
+    nav_msg.target_pos_y = 0.3 - 0.3
     nav_msg.target_vel_y = -0.05
     nav_msg.pos_z_nav_mode = 4 
     nav_msg.target_pos_z = 0.6
@@ -81,7 +81,7 @@ if __name__ == "__main__":
  
     time.sleep(4)
     print("preparation 2")
-    nav_msg.target_pos_x = -1.20
+    nav_msg.target_pos_x = 0.3
     nav_pub.publish(nav_msg)
     time.sleep(5)
     print("preparation 3")
@@ -93,18 +93,18 @@ if __name__ == "__main__":
 
         round += 1
         nav_msg.pos_xy_nav_mode = 4
-        nav_msg.target_pos_x = -1.20
+        nav_msg.target_pos_x = 0.3
         nav_msg.target_vel_x = 0.0
         nav_msg.target_pos_y = 0.3 * math.cos(math.pi * round / 100)
         nav_msg.target_vel_y = -0.06 * math.pi * math.sin(math.pi * round / 100)
         #nav_msg.target_acc_y = -0.048 * math.pi * math.pi * math.cos(math.pi * round / 50)
         nav_msg.pos_z_nav_mode = 4 
-        nav_msg.target_pos_z = 0.6 + 0.3 * math.sin(math.pi * round / 100)
+        nav_msg.target_pos_z = 0.6 + 0.2 * math.sin(math.pi * round / 100)
         nav_msg.target_vel_z = 0.06 * math.pi * math.cos(math.pi * round / 100)
         #nav_msg.target_acc_z = -0.048 * math.pi * math.pi * math.sin(math.pi * round / 50)
         nav_msg.yaw_nav_mode = 4 
-        nav_msg.target_yaw =  joint_states.position[4] - math.pi/2
-        #nav_msg.target_yaw = -math.pi/6
+        #nav_msg.target_yaw =  joint_states.position[4] - math.pi/2
+        nav_msg.target_yaw = -math.pi/6
         nav_pub.publish(nav_msg)
         # external_wrench_added.wrench.torque.z = 0.4 * math.cos(round / 50)
         # external_wrench_added.wrench.force.y = 0.6 * math.cos(round / 50)

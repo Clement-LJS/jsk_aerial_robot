@@ -90,7 +90,7 @@ void UnderActuatedTiltedImpedanceController::controlCore()
   double mz = mdz_ * uav_mass;
   Eigen::Matrix3d I = robot_model_->getInertia<Eigen::Matrix3d>();
 
-  Eigen::Matrix3d Id = 3 * I;
+  Eigen::Matrix3d Id = 2 * I;
   // Eigen::Matrix3d Id = Eigen::Matrix3d::Zero();
   // Id(0, 0) = 0.4;
   // Id(1, 1) = 0.4;
