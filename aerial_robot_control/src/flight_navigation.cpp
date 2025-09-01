@@ -703,13 +703,15 @@ void BaseNavigator::update()
 
         if(xy_control_mode_ == POS_CONTROL_MODE)
           {
-            if (fabs(delta.z()) > z_convergent_thresh_ || fabs(delta.x()) > xy_convergent_thresh_ || fabs(delta.y()) > xy_convergent_thresh_)
+            if (fabs(delta.z()) > z_convergent_thresh_ )
               hover_convergent_start_time_ = ros::Time::now().toSec();
           }
         else
           {
             if (fabs(delta.z()) > z_convergent_thresh_) hover_convergent_start_time_ = ros::Time::now().toSec();
+            std::cout << "fabs(delta.z(): " << fabs(delta.z())<< std::endl;
           }
+
         if (ros::Time::now().toSec() - hover_convergent_start_time_ > hover_convergent_duration_)
           {
             hover_convergent_start_time_ = ros::Time::now().toSec();
@@ -1052,7 +1054,7 @@ void BaseNavigator::rosParamInit()
 
   getParam<double>(nh, "trajectory_reset_duration", trajectory_reset_duration_, 0.5);
   getParam<double>(nh, "teleop_reset_duration", teleop_reset_duration_, 0.5);
-  getParam<double>(nh, "z_convergent_thresh", z_convergent_thresh_, 0.05);
+  getParam<double>(nh, "z_convergent_thresh", z_convergent_thresh_, 0.15); // 0.05
   getParam<double>(nh, "xy_convergent_thresh", xy_convergent_thresh_, 0.15);
   getParam<double>(nh, "land_pos_convergent_thresh", land_pos_convergent_thresh_, 0.02);
   getParam<double>(nh, "land_vel_convergent_thresh", land_vel_convergent_thresh_, 0.05);

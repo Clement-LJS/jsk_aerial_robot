@@ -220,9 +220,12 @@ void UnderActuatedTiltedImpedanceController::controlCore()
 
   Eigen::Matrix3d target_R = (Eigen::AngleAxisd(navigator_->getTargetRPY().z(), Eigen::Vector3d::UnitZ()) * Eigen::AngleAxisd(target_pitch_, Eigen::Vector3d::UnitY()) * Eigen::AngleAxisd(target_roll_, Eigen::Vector3d::UnitX())).toRotationMatrix();
   Eigen::Matrix3d eR = (target_R.transpose() * R - R.transpose() * target_R) / 2;
-  delta_p(3) = (eR(2, 1) - eR(1, 2)) / 2;
-  delta_p(4) = (eR(0, 2) - eR(2, 0)) / 2;
-  delta_p(5) = (eR(1, 0) - eR(0, 1)) / 2;
+  // delta_p(3) = (eR(2, 1) - eR(1, 2)) / 2;
+  // delta_p(4) = (eR(0, 2) - eR(2, 0)) / 2;
+  // delta_p(5) = (eR(1, 0) - eR(0, 1)) / 2;
+  delta_p(3) = rpy_.x() - target_roll_;
+  delta_p(4) = rpy_.y() - target_pitch_;
+  delta_p(5) = rpy_.z() - navigator_->getTargetRPY().z();
   delta_v(3) = omega_.x() - target_omega_cog.x();
   delta_v(4) = omega_.y() - target_omega_cog.y();
   delta_v(5) = omega_.z() - target_omega_cog.z();
@@ -265,7 +268,6 @@ void UnderActuatedTiltedImpedanceController::controlCore()
   Eigen::MatrixXd P_rot_inv = aerial_robot_model::pseudoinverse(P.bottomRows(3));
 
   // Eigen::VectorXd target_total_thrust = P_inv.col(3) * u(0) + P_inv.col(4) * u(1) + P_inv.col(5) * u(2);
-
   target_thrust_roll_term_ = P_rot_inv.col(0) * tau_cmd(0);
   target_thrust_pitch_term_ = P_rot_inv.col(1) * tau_cmd(1);
   target_thrust_yaw_term_ =  P_rot_inv.col(2) * tau_cmd(2); 
