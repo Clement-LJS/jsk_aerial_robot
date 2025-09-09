@@ -252,13 +252,6 @@ void UnderActuatedTiltedImpedanceController::controlCore()
   delta_p(3) = (eR(2, 1) - eR(1, 2)) / 2;
   delta_p(4) = (eR(0, 2) - eR(2, 0)) / 2;
   delta_p(5) = (eR(1, 0) - eR(0, 1)) / 2;
-  //  Eigen::Vector3d euler;
-  // euler(1) = -asin(R(2,0)); // pitch
-  // euler(0) = atan2(R(2,1), R(2,2)); // roll
-  // euler(2) = atan2(R(1,0), R(0,0)); 
-  // delta_p(3) = euler(0) - target_roll_;
-  // delta_p(4) = euler(1) - target_pitch_;
-  // delta_p(5) = euler(2) - navigator_->getTargetRPY().z();
   delta_v(3) = omega_.x() - target_omega_cog.x();
   delta_v(4) = omega_.y() - target_omega_cog.y();
   delta_v(5) = omega_.z() - target_omega_cog.z();
@@ -280,6 +273,7 @@ void UnderActuatedTiltedImpedanceController::controlCore()
   imp_cmd_.full_cmd.force.x = (1 / mx - 1 / uav_mass) * est_external_wrench_clamped_[0] + (-Kdx * delta_v(0) - Kpx * delta_p(0));
   imp_cmd_.full_cmd.force.y = (1 / my - 1 / uav_mass) * est_external_wrench_clamped_[1] + (-Kdx * delta_v(1) - Kpx * delta_p(1));
   imp_cmd_.full_cmd.force.z = (1 / mz - 1 / uav_mass) * est_external_wrench_clamped_[2] + (-Kdx * delta_v(2) - Kpx * delta_p(2));
+
   imp_cmd_.pd_cmd.force.x = (-Kdx * delta_v(0) - Kpx * delta_p(0));
   imp_cmd_.pd_cmd.force.y = (-Kdx * delta_v(1) - Kpx * delta_p(1));
   imp_cmd_.pd_cmd.force.z = (-Kdx * delta_v(2) - Kpx * delta_p(2));
@@ -295,7 +289,6 @@ void UnderActuatedTiltedImpedanceController::controlCore()
   Eigen::MatrixXd P = robot_model_->calcWrenchMatrixOnCoG();
   
   tao_ = P*target_thrust_roll_term_+P*target_thrust_pitch_term_+P*target_thrust_yaw_term_+P*target_thrust_z_term;
-
   Eigen::Vector3d full_cmd = (I * Id.inverse() - Eigen::Matrix3d::Identity()) * est_external_wrench_clamped_.segment(3, 3) + (-Kd * delta_v.segment(3, 3) - Kp * delta_p.segment(3, 3));
   Eigen::Vector3d pd_cmd = (-Kd * delta_v.segment(3, 3) - Kp * delta_p.segment(3, 3));
   Eigen::Vector3d imp_cmd = (I * Id.inverse() - Eigen::Matrix3d::Identity()) * est_external_wrench_clamped_.segment(3, 3);

@@ -61,13 +61,14 @@ if __name__ == "__main__":
     nav_msg = FlightNav()
 
     #joint_pub.publish(joints)
-    nav_pub.publish(nav_msg) # go to the origin point
+   
     
     time.sleep(1)
     print("preparation 1")
     nav_msg.pos_xy_nav_mode = 4 # pos_vel mode
 
-    nav_msg.target_pos_x = -1.30
+
+    nav_msg.target_pos_x = -1.5
     nav_msg.target_vel_x = 0.0
     nav_msg.target_pos_y = 0.0
     nav_msg.target_vel_y = 0.0
@@ -79,9 +80,9 @@ if __name__ == "__main__":
     nav_msg.target_yaw = -joint_states.position[5] - joint_states.position[6]
     nav_msg.target_omega_z = -0.05
 
-    nav_pub.publish(nav_msg)
+   # nav_pub.publish(nav_msg)
  
-    time.sleep(6)
+   # time.sleep(6)
     print("preparation 2")
 
     for i in range(10):
@@ -94,7 +95,7 @@ if __name__ == "__main__":
         nav_msg.pos_z_nav_mode = 4 
         nav_msg.target_pos_z = 0.9
         nav_msg.target_vel_z = 0.0
-        nav_pub.publish(nav_msg)
+        #nav_pub.publish(nav_msg)
         time.sleep(0.5)
 
     print("preparation 3")
@@ -118,6 +119,7 @@ if __name__ == "__main__":
         # nav_msg.target_vel_z = 0.0
         nav_msg.target_pos_z = 0.6 + 0.3 * math.cos(math.pi * round / 160)
         nav_msg.target_vel_z = -0.0375 * math.pi * math.sin(math.pi * round / 160)
+
         #nav_msg.target_acc_z = -0.048 * math.pi * math.pi * math.sin(math.pi * round / 50)
         nav_msg.yaw_nav_mode = 4 
         nav_msg.target_yaw = -joint_states.position[5] - joint_states.position[6]
