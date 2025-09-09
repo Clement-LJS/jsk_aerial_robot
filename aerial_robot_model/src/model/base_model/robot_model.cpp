@@ -188,7 +188,7 @@ namespace aerial_robot_model {
           }
       }
 
-      if (current_seg.getName().find("end_effector") != std::string::npos)
+      if (current_seg.getName().find("end_effector") != std::string::npos || current_seg.getName().find("end_frame") != std::string::npos)
       {
           inertia_map_.insert(std::make_pair(current_seg.getName(), current_seg_inertia));
       }

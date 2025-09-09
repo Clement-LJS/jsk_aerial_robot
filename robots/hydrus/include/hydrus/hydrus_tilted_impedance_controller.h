@@ -100,8 +100,7 @@ namespace aerial_robot_control
     sensor_msgs::JointState joint_cmd_;
 
     bool plan_flag_ = false;
-    bool contact_flag_ = false;
-    int contact_count_ = 0;
+
     double p_;
 
     geometry_msgs::WrenchStamped end_external_wrench_;

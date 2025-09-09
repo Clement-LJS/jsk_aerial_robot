@@ -124,19 +124,11 @@ void HydrusTiltedImpedanceController::controlCore()
   double dt = (ros::Time::now() - time_).toSec();
   if (plan_flag_ && dt >= 0.05)
   {
-    double vx = abs(vel_.x());
+ 
       
     std::cout<<"delta_vx"<<vx<<std::endl;
     std::cout<<"Fest"<<est_external_wrench_(0)<<std::endl;
-    std::cout<<"contact_count_"<<contact_count_<<std::endl;
-    if (vx < 0.03 && est_external_wrench_(0) < -1.0)
-      contact_count_++;
-    else 
-      contact_count_ = 0;
 
-
-    if (contact_count_ > 20)
-      contact_flag_ = true;
     // else
     //   contact_flag_ = false;
 
@@ -695,6 +687,8 @@ void HydrusTiltedImpedanceController::rosParamInit()
   getParam<double>(param_nh, "mdy", mdy_, 1.0);
   getParam<double>(param_nh, "mdz", mdz_, 1.0);
   getParam<double>(param_nh, "Idx", Idx_, 1.0);
+  getParam<double>(param_nh, "Idy", Idy_, 1.0);
+  getParam<double>(param_nh, "Idz", Idz_, 1.0);
   getParam<double>(param_nh, "x_y_p", x_y_p_, 30.0);
   getParam<double>(param_nh, "x_y_p", x_y_p_, 30.0);
   getParam<double>(param_nh, "z_p", z_p_, 30.0);

@@ -63,7 +63,9 @@ controller:
     mdx: 1.5
     mdy: 3.0
     mdz: 1.0
-    Idx: 2.0
+    Idx: 1.0
+    Idy: 1.0
+    Idz: 3.0
     # Idy: 0.4
     # Idz: 0.8
 
@@ -82,11 +84,11 @@ controller:
     z_zeta: 0.5
 
 
-    roll_pitch_p: 40.0
-    roll_pitch_zeta: 0.9
+    roll_pitch_p: 35.0
+    roll_pitch_zeta: 0.3
 
-    yaw_p: 5.0
-    yaw_zeta: 0.2
+    yaw_p: 10.0
+    yaw_zeta: 0.5
 
     joints_p: 13.0
     joints_d: 2.0

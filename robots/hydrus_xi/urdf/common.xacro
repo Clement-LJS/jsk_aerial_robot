@@ -108,7 +108,7 @@
       </visual>
   </link>
 
-  <!-- <joint name="end_eff" type="fixed">
+  <joint name="end_eff" type="fixed">
       <parent link="end_effector"/>
       <child link="end_frame"/>
       <origin rpy="0 0 0" xyz="0.2 0 0"/>
@@ -120,13 +120,7 @@
           <sphere radius="0.01"/>
         </geometry>
       </collision>
-      <visual>
-        <origin rpy="0 1.57 0" xyz="0 0 0"/>
-        <geometry>
-          <sphere radius="0.01"/>
-        </geometry>
-      </visual>
-  </link> -->
+  </link>
 
 
   <gazebo reference="end_effector">

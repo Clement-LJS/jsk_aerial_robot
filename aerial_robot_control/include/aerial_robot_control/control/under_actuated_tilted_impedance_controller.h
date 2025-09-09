@@ -61,10 +61,15 @@ namespace aerial_robot_control
     Eigen::VectorXd est_external_wrench_;
     Eigen::VectorXd est_external_wrench_clamped_;
     Eigen::VectorXd target_wrench_cog_;
+    Eigen::VectorXd tao_;
 
     double target_acc_x_, target_acc_y_, target_acc_z_;
     double mdx_, mdy_, mdz_, Idx_, Idy_, Idz_;
     double x_y_p_, z_p_, roll_pitch_p_, yaw_p_, joints_p_, pos_p_, x_y_zeta_, z_zeta_, roll_pitch_zeta_, yaw_zeta_, joints_d_, pos_d_;
+    
+    bool contact_flag_ = false;
+    int contact_count_ = 0;
+
     const Eigen::VectorXd getTargetWrenchCog()
     {
       std::lock_guard<std::mutex> lock(wrench_mutex_);
