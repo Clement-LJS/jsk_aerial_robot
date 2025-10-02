@@ -1069,7 +1069,6 @@ void AttitudeController::pwmConversion()
             }
         }
     }
-
   for(int i = 0; i < motor_number_; i++)
   {
     // std::cout<<i<<std::endl;
@@ -1078,7 +1077,7 @@ void AttitudeController::pwmConversion()
     //target_thrust_[i] =  (1 + base_thrust_decreasing_rate) * base_thrust_term_[i];
     // std::cout<<target_thrust_[i]<<std::endl;
 
-    // std::cout<<roll_thrust_term_[i]<<std::endl;
+   
     // std::cout<<pitch_thrust_term_[i]<<std::endl;
 
     // std::cout<<yaw_thrust_term_[i]<<std::endl;

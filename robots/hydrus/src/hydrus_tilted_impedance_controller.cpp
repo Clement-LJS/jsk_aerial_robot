@@ -126,8 +126,7 @@ void HydrusTiltedImpedanceController::controlCore()
   {
  
       
-    std::cout<<"delta_vx"<<vx<<std::endl;
-    std::cout<<"Fest"<<est_external_wrench_(0)<<std::endl;
+
 
     // else
     //   contact_flag_ = false;
