@@ -1,0 +1,5 @@
+rotorid_test.py 
+- used to test different motor id 
+
+rotor_rotate.py 
+used to rotate rotor (with keyboard command) 

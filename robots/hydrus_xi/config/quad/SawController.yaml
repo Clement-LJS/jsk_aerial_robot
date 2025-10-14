@@ -1,0 +1,4 @@
+pulley_velocity_controller: 
+  type: effort_controllers/JointVelocityController 
+  joint: saw_pulley_joint
+  pid: {p: 10.0, i: 0.01, d: 0.1}

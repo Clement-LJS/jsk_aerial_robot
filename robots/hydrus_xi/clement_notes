@@ -1,0 +1,75 @@
+cd ~/ros
+cd ./jsk_aerial_robot_ws/
+source ./devel/setup.bash
+roslaunch hydrus_xi bringup.launch real_machine:=false simulation:=true headless:=false control_mode:=0 type:=quad
+
+cd ~/ros
+cd ./jsk_aerial_robot_ws/
+source ./devel/setup.bash
+rosrun aerial_robot_base keyboard_command.py 
+
+cd ~/ros/jsk_aerial_robot_ws
+source ./devel/setup.bash 
+rostopic list
+rostopic echo /hydrus_xi/joint_states
+
+rostopic pub -1 /hydrus_xi/joints_ctrl sensor_msgs/JointState "header:
+  seq: 0
+  stamp: {secs: 0, nsecs: 0}
+  frame_id: ''
+name: ['joint1', 'joint2', 'joint3']
+position: [1.2, 1.2, 1.2]
+velocity: [0]
+effort: [0]" 
+
+rostopic pub -1 /hydrus_xi/uav/nav aerial_robot_msgs/FlightNav "header:
+
+#######################################################
+
+robots/hydrus_xi/config/quad/servo.yaml 
+- change simulation (init value) for initial gazebo spawn angles 
+
+hydrus_xi/urdf
+
+hydrus_xi/robots/quad/default.urdf.xacro (saw link added here) 
+
+######################################################
+
+to do (7/16) 
+pulley_link is [fixed joint] 
+- if change to revolute joint, requires a controller. (need to publish a joint state via /joint_states) that state must be used by [robot_state_publisher] to compute the transform 
+
+
+
+1. --change to continuous joint (can rotate infinitely, like a wheel or propeller) 
+note:: make sure the controller is: 
+       >> loaded for saw_pulley_joint 
+       >>>> effort_controllers/JointVelocityController
+       >>>> effort_controllers/JointPositionController (but don't use this if you want infinite rotation)
+
+2. example: in controller.yaml 
+pulley_controller: 
+  type: effort_controllers/JointVelocityController 
+  joint: saw_pulley_joint 
+
+3. then publish it to: 
+rostopic pub /pulley_controller/command std_msgs/Float64 "data: 1.0"
+
+
+--
+7/16 Summary 
+--
+1. add controller for pulley (yaml...) 
+2. connect to the drone (neuron, spinal etc...) 
+3. run real_experiment with hardware drone 
+
+if possible: 
+1. also do this for beetle 
+
+
+
+
+
+
+
+
