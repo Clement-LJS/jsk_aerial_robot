@@ -762,7 +762,7 @@ void AttitudeController::pwmTestCallback(const spinal::PwmTest& pwm_msg)
             pwm_test_value_[motor_index] = IDLE_DUTY;
           }
 	//changed from here //////////////////////////
-	if(motor_number_ < motor_index)
+	if(motor_number_ / rotor_coef_ -1 < motor_index)
 	  {
 	    pwm_test_flag_ = false;
 	    target_pwm_[motor_index] = pwm_msg.pwms[i];
