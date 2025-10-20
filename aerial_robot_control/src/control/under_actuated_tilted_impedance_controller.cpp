@@ -56,6 +56,9 @@ void UnderActuatedTiltedImpedanceController::initialize(ros::NodeHandle nh,
   target_wrench_cog_ = Eigen::VectorXd::Zero(6);
   est_external_wrench_clamped_ = Eigen::VectorXd::Zero(6);
   tao_ = Eigen::VectorXd::Zero(6);
+  omega_x_ = 0.0;
+  omega_y_ = 0.0;
+  omega_z_ = 0.0;
 }
 
 void UnderActuatedTiltedImpedanceController::sendFourAxisCommand()
@@ -246,7 +249,7 @@ void UnderActuatedTiltedImpedanceController::controlCore()
   // if (rate > 1.0)
   //   rate = 1.0;
   target_thrust_z_term = rate * target_thrust_z_term;
-  std::cout<<"rate "<<rate<<std::endl;
+  //std::cout<<"rate "<<rate<<std::endl;
 
   if(navigator_->getForceLandingFlag())
   {
@@ -261,8 +264,14 @@ void UnderActuatedTiltedImpedanceController::controlCore()
   delta_p(5) = (eR(1, 0) - eR(0, 1)) / 2;
   // delta_p(3) = rpy_.x() - target_roll_;
   // delta_p(4) = rpy_.y() - target_pitch_;
-  delta_p(5) = rpy_.z() - navigator_->getTargetRPY().z();
-
+  // delta_p(5) = rpy_.z() - navigator_->getTargetRPY().z();
+  double alpha = 0.7;
+  // filtered_omega_(0) = alpha * omega_.x() + (1 - alpha) * filtered_omega_(0);
+  // filtered_omega_(1) = alpha * omega_.y() + (1 - alpha) * filtered_omega_(1);
+  // filtered_omega_(2) = alpha * omega_.z() + (1 - alpha) * filtered_omega_(2);
+  omega_x_ = alpha * omega_.x() + (1 - alpha) * omega_x_;
+  omega_y_ = alpha * omega_.y() + (1 - alpha) * omega_y_;
+  omega_z_ = alpha * omega_.z() + (1 - alpha) * omega_z_;
   delta_v(3) = omega_.x() - target_omega_cog.x();
   delta_v(4) = omega_.y() - target_omega_cog.y();
   delta_v(5) = omega_.z() - target_omega_cog.z();
@@ -302,22 +311,22 @@ void UnderActuatedTiltedImpedanceController::controlCore()
   
   tao_ = P*target_thrust_roll_term_+P*target_thrust_pitch_term_+P*target_thrust_yaw_term_+P*target_thrust_z_term;
   Eigen::Vector3d full_cmd = (I * Id.inverse() - Eigen::Matrix3d::Identity()) * est_external_wrench_clamped_.segment(3, 3) + (-Kd * delta_v.segment(3, 3) - Kp * delta_p.segment(3, 3));
-  Eigen::Vector3d pd_cmd = (-Kd * delta_v.segment(3, 3) - Kp * delta_p.segment(3, 3));
+  Eigen::Vector3d pd_cmd = I*(-Kd * delta_v.segment(3, 3) - Kp * delta_p.segment(3, 3));
+  Eigen::Vector3d p_cmd = I*( - Kp * delta_p.segment(3, 3));
+  
+  Eigen::Vector3d d_cmd = I*(-Kd * delta_v.segment(3, 3));
+  
+  
   Eigen::Vector3d imp_cmd = (I * Id.inverse() - Eigen::Matrix3d::Identity()) * est_external_wrench_clamped_.segment(3, 3);
-  // imp_cmd_.full_cmd.torque.x = full_cmd(0);
-  // imp_cmd_.full_cmd.torque.y = full_cmd(1);
-  imp_cmd_.full_cmd.torque.x = (eR(2, 1) - eR(1, 2)) / 2;
-  imp_cmd_.full_cmd.torque.y = (eR(0, 2) - eR(2, 0)) / 2;
+  imp_cmd_.full_cmd.torque.x = full_cmd(0);
+  imp_cmd_.full_cmd.torque.y = full_cmd(1);
   imp_cmd_.full_cmd.torque.z = full_cmd(2);
-  // imp_cmd_.pd_cmd.torque.x = pd_cmd(0);
-  // imp_cmd_.pd_cmd.torque.y = pd_cmd(1);
-  imp_cmd_.pd_cmd.torque.x = rpy_.x() - target_roll_;
-  imp_cmd_.pd_cmd.torque.y = rpy_.y() - target_pitch_;
-
-  imp_cmd_.pd_cmd.torque.z = pd_cmd(2);
-  imp_cmd_.imp_cmd.torque.x = imp_cmd(0);
-  imp_cmd_.imp_cmd.torque.y = imp_cmd(1);
-  imp_cmd_.imp_cmd.torque.z = imp_cmd(2);
+  imp_cmd_.pd_cmd.torque.x = p_cmd(0);
+  imp_cmd_.pd_cmd.torque.y = p_cmd(1);
+  imp_cmd_.pd_cmd.torque.z = p_cmd(2);
+  imp_cmd_.imp_cmd.torque.x = d_cmd(0);
+  imp_cmd_.imp_cmd.torque.y = d_cmd(1);
+  imp_cmd_.imp_cmd.torque.z = d_cmd(2);
 
   // std::cout<<"tar"<<tau_cmd<<std::endl;
   // std::cout<<"dtheta"<<Kp * delta_p.segment(3, 3)<<std::endl;
@@ -341,9 +350,7 @@ void UnderActuatedTiltedImpedanceController::controlCore()
   t(2) = target_acc_w.length() * uav_mass;
   target_wrench_cog_.segment(0, 3) = add_force + t;
   target_wrench_cog_.segment(3, 3) = tau_cmd;
-  imp_cmd_.pd_cmd.force.x = add_force[0]/uav_mass;
-  imp_cmd_.pd_cmd.force.y = add_force[1]/uav_mass;
-  imp_cmd_.pd_cmd.force.z = add_force[2]/uav_mass; 
+
   // std::cout<<"tau_cmd "<<tau_cmd<<std::endl;
   // std::cout<<"P "<<(P*target_thrust_roll_term_+P*target_thrust_pitch_term_+P*target_thrust_yaw_term_+P*target_thrust_z_term)<<std::endl;
   // std::cout<<"P "<<P*target_thrust_z_term<<std::endl;

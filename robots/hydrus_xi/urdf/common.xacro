@@ -16,8 +16,8 @@
   <xacro:property name="rotor_radius" value=".0178"/>
 
   <!-- mass [Kg] -->
-  <xacro:property name="rotor_mass" value="0.13"/> <!-- exclude from center mass -->
-  <xacro:property name="bat_mass" value="0.2"/> <!-- 1300mAh --> 
+  <xacro:property name="rotor_mass" value="0.02"/> <!-- exclude from center mass -->
+  <xacro:property name="bat_mass" value="0.05"/> <!-- 1300mAh --> 
 
   <!-- dynamics -->
   <m_f_rate value="-0.0182" /> <!-- MN4010KV475_Afro_15inch -->
@@ -76,7 +76,7 @@
   <link name="end_effector">
     <inertial>
       <origin xyz="0 0 0" rpy="0 0 1.57"/>
-      <mass value="0.001"/>
+      <mass value="0.07"/>
       <inertia
           ixx="1e-6" ixy="0.0" ixz="0.0"
           iyy="1e-6" iyz="0.0"

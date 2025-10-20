@@ -706,9 +706,12 @@ void HydrusTiltedImpedanceController::rosParamInit()
   getParam<double>(param_nh, "ka", ka_, 20.0);
   getParam<double>(param_nh, "fref", fref_, -0.3);
 
+  getParam<double>(param_nh, "kot", kot_, 5.0);
+  getParam<double>(param_nh, "kor", kor_, 2.5);
+
   momentum_observer_matrix_ = Eigen::MatrixXd::Identity(6,6);
-  momentum_observer_matrix_(0, 0) *= 5.0;
-  momentum_observer_matrix_(1, 1) *= 5.0;
+  momentum_observer_matrix_(0, 0) *= kot_;
+  momentum_observer_matrix_(1, 1) *= kot_;
   momentum_observer_matrix_(2, 2) *= 5.0;
   momentum_observer_matrix_.bottomRows(3) *= 2.5;
 }

@@ -41,8 +41,9 @@ if __name__ == "__main__":
     external_wrench_added = WrenchStamped()
 
     link_num = rospy.get_param("~link_num", 4)
-    duration = rospy.get_param("~duration", 0.05)
+    duration = rospy.get_param("~duration", 0.005)
     joint_pub = rospy.Publisher("/hydrus_xi/joints_ctrl", JointState, queue_size=1)
+    odam_sub = rospy.Subscriber("/hydrus_xi/uav/cog", Odometry, odam_callback)
     mode_pub = rospy.Publisher("/hydrus_xi/imp_mode", UInt8, queue_size=1)
     wrench_sub = rospy.Subscriber("/hydrus_xi/estimated_external_wrench", WrenchStamped, wrench_callback)
     joint_sub = rospy.Subscriber("/hydrus_xi/joint_states", JointState, joint_callback)
@@ -68,19 +69,19 @@ if __name__ == "__main__":
     nav_msg.pos_xy_nav_mode = 4 # pos_vel mode
 
 
-    nav_msg.target_pos_x = -1.5
+    nav_msg.target_pos_x = -0.2
     nav_msg.target_vel_x = 0.0
     nav_msg.target_pos_y = 0.0
     nav_msg.target_vel_y = 0.0
 
     nav_msg.pos_z_nav_mode = 4 
-    nav_msg.target_pos_z = 0.9
+    nav_msg.target_pos_z = 1.2
     nav_msg.target_vel_z = 0.05
     nav_msg.yaw_nav_mode = 4 
     nav_msg.target_yaw = -joint_states.position[5] - joint_states.position[6]
     nav_msg.target_omega_z = -0.05
 
-   # nav_pub.publish(nav_msg)
+    nav_pub.publish(nav_msg)
  
    # time.sleep(6)
     print("preparation 2")
@@ -88,14 +89,14 @@ if __name__ == "__main__":
     for i in range(10):
         nav_msg = FlightNav()
         nav_msg.pos_xy_nav_mode = 4
-        nav_msg.target_pos_x = -1.15
+        nav_msg.target_pos_x = (-0.2 - 0) * (10 - i) / 10
         nav_msg.target_vel_x = 0.0
         nav_msg.yaw_nav_mode = 4 
         nav_msg.target_yaw = -joint_states.position[5] - joint_states.position[6]
         nav_msg.pos_z_nav_mode = 4 
-        nav_msg.target_pos_z = 0.9
+        nav_msg.target_pos_z = 1.2
         nav_msg.target_vel_z = 0.0
-        #nav_pub.publish(nav_msg)
+        nav_pub.publish(nav_msg)
         time.sleep(0.5)
 
     print("preparation 3")
@@ -108,23 +109,23 @@ if __name__ == "__main__":
         round += 1
         nav_msg.pos_xy_nav_mode = 4
 
-        nav_msg.target_pos_x = -1.15
+        nav_msg.target_pos_x = 0.0
 
         nav_msg.target_vel_x = 0.0
-        nav_msg.target_pos_y = 0.3 * math.sin(math.pi * round / 160)
-        nav_msg.target_vel_y = 0.0375 * math.pi * math.cos(math.pi * round / 160)
+        nav_msg.target_pos_y = 0.3 * math.sin(math.pi * round / 2000)
+        nav_msg.target_vel_y = 0.03 * math.pi * math.cos(math.pi * round / 2000)
         #nav_msg.target_acc_y = -0.048 * math.pi * math.pi * math.cos(math.pi * round / 50)
         nav_msg.pos_z_nav_mode = 4 
         # nav_msg.target_pos_z = 0.9
         # nav_msg.target_vel_z = 0.0
-        nav_msg.target_pos_z = 0.6 + 0.3 * math.cos(math.pi * round / 160)
-        nav_msg.target_vel_z = -0.0375 * math.pi * math.sin(math.pi * round / 160)
+        nav_msg.target_pos_z = 0.9 + 0.3 * math.cos(math.pi * round / 2000)
+        nav_msg.target_vel_z = -0.03 * math.pi * math.sin(math.pi * round / 2000)
 
         #nav_msg.target_acc_z = -0.048 * math.pi * math.pi * math.sin(math.pi * round / 50)
         nav_msg.yaw_nav_mode = 4 
         nav_msg.target_yaw = -joint_states.position[5] - joint_states.position[6]
         # nav_msg.target_yaw = 0.57
-
+        #print(cog2world)
         nav_pub.publish(nav_msg)
         # external_wrench_added.wrench.torque.z = 0.4 * math.cos(round / 50)
         # external_wrench_added.wrench.force.y = 0.6 * math.cos(round / 50)

@@ -62,6 +62,7 @@ namespace aerial_robot_control
     Eigen::VectorXd est_external_wrench_clamped_;
     Eigen::VectorXd target_wrench_cog_;
     Eigen::VectorXd tao_;
+    double omega_x_, omega_y_, omega_z_;
 
     double target_acc_x_, target_acc_y_, target_acc_z_;
     double mdx_, mdy_, mdz_, Idx_, Idy_, Idz_;
@@ -69,6 +70,7 @@ namespace aerial_robot_control
     
     bool contact_flag_ = false;
     int contact_count_ = 0;
+    int contact_control_ = 0;
 
     const Eigen::VectorXd getTargetWrenchCog()
     {
