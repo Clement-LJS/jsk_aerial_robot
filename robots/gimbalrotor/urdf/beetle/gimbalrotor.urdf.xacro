@@ -34,7 +34,7 @@
       <visual>
         <origin xyz="0 0 0" rpy="0 0 0"/>
         <geometry>
-          <mesh filename="package://gimbalrotor/urdf/mesh/beetle_hand_base_link.dae"/>
+          <mesh filename="package://gimbalrotor/urdf/beetle/mesh/base_link.dae"/>
         </geometry>
       </visual>
       <collision>
@@ -139,7 +139,7 @@
       <visual>
         <origin xyz="0 0 0" rpy="0 0 0"/>
         <geometry>
-          <mesh filename="package://gimbalrotor/urdf/mesh/beetle_hand_rotor_module.dae"/>
+          <mesh filename="package://gimbalrotor/urdf/beetle/mesh/rotor_module.dae"/>
         </geometry>
       </visual>
     </link>
@@ -268,8 +268,8 @@
     </inertial>
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
-     <geometry>
-    	<mesh filename="package://beetle/urdf/mesh/Assem_new_complete_s5.STL" scale="0.001 0.001 0.001"/>
+      <geometry>
+    	<mesh filename="package://gimbalrotor/urdf/beetle/mesh/Assem_new_complete_s5.STL" scale="0.001 0.001 0.001"/>
       </geometry>
     </visual>
     <collision>
