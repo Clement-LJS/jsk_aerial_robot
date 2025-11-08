@@ -123,7 +123,7 @@
   </node>
 
   ########### Apriltag Detection ###########
-  <node name="image_proc" pkg="image_proc" type="image_proc" output="screen">
+  <!-- <node name="image_proc" pkg="image_proc" type="image_proc" output="screen">
     <remap from="image_raw" to="/$(arg camera_name)/image_raw"/>
     <remap from="camera_info" to="/$(arg camera_name)/camera_info"/>
     <remap from="image_rect_color" to="/$(arg camera_name)/image_rect_color" />
@@ -138,7 +138,7 @@
     <remap from="/tag_detections" to="/beetle1/tag_detections" />
     <remap from="/tag_detections_image" to="/beetle1/tag_detections_image" />
     <param name="publish_tag_detections_image" type="bool" value="true" />
-  </node>
+  </node> -->
 
   ############### Hand state ###############
   <param name="handOpenFlag_0" value="true" />
