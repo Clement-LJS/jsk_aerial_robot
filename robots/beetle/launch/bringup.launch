@@ -109,7 +109,7 @@
   </include>
 
   ########## Camera Configuration ##########
-  <arg name="node_namespace" default="apriltag_ros_continuous_node" />
+  <!-- <arg name="node_namespace" default="apriltag_ros_continuous_node" />
   <arg name="camera_name" default="usb_cam" />
   <arg name="image_topic" default="image_raw" />
   
@@ -120,7 +120,7 @@
     <param name="image_height" value="480" />
     <param name="pixel_format" value="yuyv" />
     <param name="color_format" value="yuv422p" />
-  </node>
+  </node> -->
 
   ########### Apriltag Detection ###########
   <!-- <node name="image_proc" pkg="image_proc" type="image_proc" output="screen">

@@ -10,7 +10,7 @@
   <xacro:gazebo_spinal robot_name="$(arg robot_name)" mag_frame="fc" />
 
   <!-- gazebo plugin for docking mech -->
-  <gazebo>
+  <!-- <gazebo>
     <plugin name="gazebo_grasp_fix_1" filename="libgazebo_grasp_fix.so">
       <arm>
         <arm_name>docking_mech_1</arm_name>
@@ -33,20 +33,20 @@
       <disable_collisions_on_attach>false</disable_collisions_on_attach>
       <contact_topic>__default_topic__</contact_topic>
     </plugin>
-  </gazebo>
+  </gazebo> -->
 
   <gazebo reference="base_link">
     <mu1>0.1</mu1>
     <mu2>0.1</mu2>
   </gazebo>
 
-  <gazebo reference="apriltag_0">
+  <!-- <gazebo reference="apriltag_0">
     <material>Apriltag36_11_00000</material>
   </gazebo>
 
   <gazebo reference="apriltag_1">
     <material>Apriltag36_11_00001</material>
-  </gazebo>
+  </gazebo> -->
   
   <!-- sensors -->
   <xacro:extra_module name = "downward_camera_frame" parent = "base_link">
