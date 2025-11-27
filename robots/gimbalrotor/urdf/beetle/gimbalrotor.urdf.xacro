@@ -256,11 +256,11 @@
     <inertial>
       <!-- <origin xyz="0.32422 0.004298 0.019803"/> -->
       <origin xyz="0.19178 0.000005 0.025771"/>
-      <mass value="0.306000"/>
+      <mass value="0.323850"/>
       <inertia
-  	  ixx="0.0003093" ixy="-0.0002184" ixz="0.0001250"
-    	  iyx="-0.0002184" iyy="0.0023558" iyz="-0.0000268"
-  	  izx="0.0001250" izy="-0.0000268" izz="0.0024254"/>
+  	  ixx="0.0014298" ixy="-0.0023533" ixz="0.0058413"
+    	  iyx="-0.0023533" iyy="0.0384938" iyz="-0.0004491"
+  	  izx="0.0058413" izy="-0.0004491" izz="0.0374743"/>
       <!-- <inertia -->
       <!-- 	  ixx="0.000699" ixy="-0.000004" ixz="0.000769" -->
       <!-- 	  iyy="0.005953" iyz="-0.000005" -->
@@ -269,7 +269,7 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-    	<mesh filename="package://gimbalrotor/urdf/beetle/mesh/Assem_new_complete_s5.STL" scale="0.001 0.001 0.001"/>
+    	<mesh filename="package://gimbalrotor/urdf/beetle/mesh/fullassem_pochitab_3d.STL" scale="0.001 0.001 0.001"/>
       </geometry>
     </visual>
     <collision>
@@ -318,8 +318,8 @@
   <joint name="handbase_hand_joint" type="fixed">
     <child link="hand"/>
     <parent link="handbase"/>
-    <origin xyz=" 0.05918 0.00052 0.08000" rpy="1.57 0 0"/>
-    <axis xyz="1 0 0"/>
+    <origin xyz=" 0.05918 0.00052 0.08000" rpy="0 0 0"/>
+    <axis xyz="0 0 0"/>
   </joint>
 
 </robot>
