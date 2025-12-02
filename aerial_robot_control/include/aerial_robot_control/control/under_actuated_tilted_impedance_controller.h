@@ -55,7 +55,7 @@ namespace aerial_robot_control
   protected:
 
     ros::Publisher desired_baselink_rot_pub_;
-
+    ros::Subscriber contact_flag_sub_;
 
     std::mutex wrench_mutex_;
     Eigen::VectorXd est_external_wrench_;
@@ -89,6 +89,6 @@ namespace aerial_robot_control
     bool optimalGain() override;
     void publishGain() override;
     void rosParamInit() override;
-
+    void contactFlagCallback(const std_msgs::Empty msg);
   };
 };

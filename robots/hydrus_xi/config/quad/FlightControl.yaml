@@ -61,12 +61,12 @@ controller:
     clamp_gain: true
 
 
-    mdx: 3.0
+    mdx: 0.9
     mdy: 3.0
     mdz: 1.0
-    Idx: 3.0
-    Idy: 3.0
-    Idz: 3.0
+    Idx: 10.0
+    Idy: 10.0
+    Idz: 5.0
 
     # Idy: 0.4
     # Idz: 0.8
@@ -76,20 +76,20 @@ controller:
     ka: 16.0
     fref: -1.0
 
-    kot: 10.0 
-    kor: 2.5
+    kot: 3.0 
+    kor: 1.0
 
-    x_y_p: 1.4
-    x_y_zeta: 1.1
+    x_y_p: 3.0
+    x_y_zeta: 0.80
 
-    z_p: 2.0
-    z_zeta: 0.9
+    z_p: 1.5
+    z_zeta: 0.7
 
-    roll_pitch_p: 30.0
-    roll_pitch_zeta: 1.25
+    roll_pitch_p: 45.0
+    roll_pitch_zeta: 1.15
 
     yaw_p: 10.0
-    yaw_zeta: 0.6
+    yaw_zeta: 0.8
 
     joints_p: 13.0
     joints_d: 2.0

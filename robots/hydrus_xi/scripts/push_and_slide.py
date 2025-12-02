@@ -5,6 +5,7 @@ import time
 import rospy
 import math
 import tf2_ros
+from std_msgs.msg import Empty
 from std_msgs.msg import UInt8
 from geometry_msgs.msg import Point
 from aerial_robot_msgs.msg import FlightNav
@@ -50,11 +51,12 @@ if __name__ == "__main__":
     wrench_pub = rospy.Publisher("/hydrus_xi/external_wrench", WrenchStamped, queue_size=1)
     pos_pub = rospy.Publisher("/hydrus_xi/pos_cmds", Point, queue_size=1)
     nav_pub = rospy.Publisher("/hydrus_xi/uav/nav", FlightNav, queue_size=1)
+    contact_pub = rospy.Publisher("/hydrus_xi/contact_flag", Empty, queue_size=1)
     time.sleep(1)
 
 #[-0.07, 0.79, -0.39]
 #[1.0, 1.5, -0.59]
-
+    contact_msg = Empty()
     mode = UInt8()
     mode.data = 1
     joints = JointState()
@@ -64,24 +66,25 @@ if __name__ == "__main__":
     #joint_pub.publish(joints)
    
     
-    time.sleep(1)
+    
     print("preparation 1")
     nav_msg.pos_xy_nav_mode = 4 # pos_vel mode
 
 
     nav_msg.target_pos_x = -0.2
     nav_msg.target_vel_x = 0.0
-    nav_msg.target_pos_y = 0.0
+    nav_msg.target_pos_y = -0.086
     nav_msg.target_vel_y = 0.0
 
     nav_msg.pos_z_nav_mode = 4 
     nav_msg.target_pos_z = 1.2
     nav_msg.target_vel_z = 0.05
     nav_msg.yaw_nav_mode = 4 
-    nav_msg.target_yaw = -joint_states.position[5] - joint_states.position[6]
+    nav_msg.target_yaw = -0.445
     nav_msg.target_omega_z = -0.05
 
     nav_pub.publish(nav_msg)
+    time.sleep(2)
  
    # time.sleep(6)
     print("preparation 2")
@@ -89,10 +92,10 @@ if __name__ == "__main__":
     for i in range(10):
         nav_msg = FlightNav()
         nav_msg.pos_xy_nav_mode = 4
-        nav_msg.target_pos_x = (-0.2 - 0) * (10 - i) / 10
+        nav_msg.target_pos_x = -(-0.2 - 0.14) * (i+1) / 10 - 0.2
         nav_msg.target_vel_x = 0.0
         nav_msg.yaw_nav_mode = 4 
-        nav_msg.target_yaw = -joint_states.position[5] - joint_states.position[6]
+        nav_msg.target_yaw = -0.445
         nav_msg.pos_z_nav_mode = 4 
         nav_msg.target_pos_z = 1.2
         nav_msg.target_vel_z = 0.0
@@ -101,7 +104,7 @@ if __name__ == "__main__":
 
     print("preparation 3")
     round = 0
-
+    time.sleep(5)
     while not rospy.is_shutdown():
 
         nav_msg = FlightNav()
@@ -109,24 +112,25 @@ if __name__ == "__main__":
         round += 1
         nav_msg.pos_xy_nav_mode = 4
 
-        nav_msg.target_pos_x = 0.0
+        nav_msg.target_pos_x = 0.14
 
         nav_msg.target_vel_x = 0.0
-        nav_msg.target_pos_y = 0.3 * math.sin(math.pi * round / 2000)
-        nav_msg.target_vel_y = 0.03 * math.pi * math.cos(math.pi * round / 2000)
+        nav_msg.target_pos_y = -0.3 * math.sin(math.pi * round / 1200) - 0.086
+        nav_msg.target_vel_y = -0.05 * math.pi * math.cos(math.pi * round / 1200)
         #nav_msg.target_acc_y = -0.048 * math.pi * math.pi * math.cos(math.pi * round / 50)
         nav_msg.pos_z_nav_mode = 4 
         # nav_msg.target_pos_z = 0.9
         # nav_msg.target_vel_z = 0.0
-        nav_msg.target_pos_z = 0.9 + 0.3 * math.cos(math.pi * round / 2000)
-        nav_msg.target_vel_z = -0.03 * math.pi * math.sin(math.pi * round / 2000)
+        nav_msg.target_pos_z = 0.9 + 0.3 * math.cos(math.pi * round / 1200)
+        nav_msg.target_vel_z = -0.05 * math.pi * math.sin(math.pi * round / 1200)
 
         #nav_msg.target_acc_z = -0.048 * math.pi * math.pi * math.sin(math.pi * round / 50)
         nav_msg.yaw_nav_mode = 4 
-        nav_msg.target_yaw = -joint_states.position[5] - joint_states.position[6]
-        # nav_msg.target_yaw = 0.57
+        #nav_msg.target_yaw = -joint_states.position[5] - joint_states.position[6]
+        nav_msg.target_yaw = -0.445
         #print(cog2world)
         nav_pub.publish(nav_msg)
+        #contact_pub.publish(contact_msg)
         # external_wrench_added.wrench.torque.z = 0.4 * math.cos(round / 50)
         # external_wrench_added.wrench.force.y = 0.6 * math.cos(round / 50)
         wrench_pub.publish(external_wrench_added)
