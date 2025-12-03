@@ -254,22 +254,17 @@
 
   <link name="hand">
     <inertial>
-      <!-- <origin xyz="0.32422 0.004298 0.019803"/> -->
       <origin xyz="0.19178 0.000005 0.025771"/>
-      <mass value="0.323850"/>
+      <mass value="0.423690"/>
       <inertia
-  	  ixx="0.0014298" ixy="-0.0023533" ixz="0.0058413"
-    	  iyx="-0.0023533" iyy="0.0384938" iyz="-0.0004491"
-  	  izx="0.0058413" izy="-0.0004491" izz="0.0374743"/>
-      <!-- <inertia -->
-      <!-- 	  ixx="0.000699" ixy="-0.000004" ixz="0.000769" -->
-      <!-- 	  iyy="0.005953" iyz="-0.000005" -->
-      <!-- 	  izz="0.00541"/> -->
+  	  ixx="0.0010323" ixy="-0.0001415" ixz="0.0051142"
+    	  iyx="-0.0001415" iyy="0.0454125" iyz="-0.0000028"
+  	  izx="0.0051142" izy="-0.0000028" izz="0.0446821"/>
     </inertial>
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-    	<mesh filename="package://gimbalrotor/urdf/beetle/mesh/fullassem_pochitab_3d.STL" scale="0.001 0.001 0.001"/>
+    	<mesh filename="package://gimbalrotor/urdf/beetle/mesh/fullassem_pochitab.STL" scale="0.001 0.001 0.001"/>
       </geometry>
     </visual>
     <collision>
