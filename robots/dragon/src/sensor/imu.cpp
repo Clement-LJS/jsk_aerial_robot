@@ -48,6 +48,7 @@ namespace sensor_plugin
                   string sensor_name, int index)
   {
     Imu::initialize(nh, robot_model, estimator, std::string("sensor_plugin/imu"), index);
+/*<<<<<<< HEAD
 
     //low pass filter
     double sample_freq, cutoff_freq;
@@ -117,6 +118,8 @@ namespace sensor_plugin
 
     estimateProcess();
     updateHealthStamp();
+=======
+>>>>>>> pr-577 */
   }
 
 };

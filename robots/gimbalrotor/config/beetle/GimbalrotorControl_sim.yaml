@@ -4,6 +4,7 @@ controller:
   torque_allocation_matrix_inv_pub_interval: 0.05
   wrench_allocation_matrix_pub_interval: 0.1
   gimbal_calc_in_fc : false
+  wrench_estimate_flag : true
 
   xy:
     p_gain: 2.0
