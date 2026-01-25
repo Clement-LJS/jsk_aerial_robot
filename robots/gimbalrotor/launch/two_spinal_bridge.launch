@@ -1,0 +1,44 @@
+<?xml version="1.0"?>
+<launch>
+  <group ns="spinal_dynamixel">
+    <arg name="dynamixel_mode" default="serial" />
+
+    <arg name="dynamixel_serial_port" default="/dev/spinal_dynamixel" />
+    <arg name="dynamixel_serial_baud" default="921600" />
+
+    <arg name="dynamixel_udp_port" default="12345" />
+    <arg name="dynamixel_udp_addr" default="192.168.25.238" />
+
+    <node pkg="rosserial_server" type="serial_node" name="rosserial_server" output="screen" if="$(eval arg('dynamixel_mode') == 'serial')">
+      <param name="port" value="$(arg dynamixel_serial_port)" />
+      <param name="baud" value="$(arg dynamixel_serial_baud)" />
+    </node>
+
+    <node pkg="rosserial_server" type="udp_socket_node" name="rosserial_server" output="screen" if="$(eval arg('dynamixel_mode') == 'udp')">
+      <param name="client_port" value="$(arg dynamixel_udp_port)" />
+      <param name="server_port" value="$(arg dynamixel_udp_port)" />
+      <param name="client_addr" value="$(arg dynamixel_udp_addr)" />
+    </node>
+  </group>
+
+  <!-- <group ns="spinal_kondo"> -->
+    <arg name="mode" default="serial" />
+
+    <arg name="serial_port" default="/dev/spinal_kondo" />
+    <arg name="serial_baud" default="921600" />
+
+    <arg name="udp_port" default="12345" />
+    <arg name="udp_addr" default="192.168.25.238" />
+
+    <node pkg="rosserial_server" type="serial_node" name="rosserial_server" output="screen" if="$(eval arg('mode') == 'serial')">
+      <param name="port" value="$(arg serial_port)" />
+      <param name="baud" value="$(arg serial_baud)" />
+    </node>
+
+    <node pkg="rosserial_server" type="udp_socket_node" name="rosserial_server" output="screen" if="$(eval arg('mode') == 'udp')">
+      <param name="client_port" value="$(arg udp_port)" />
+      <param name="server_port" value="$(arg udp_port)" />
+      <param name="client_addr" value="$(arg udp_addr)" />
+    </node>
+  <!-- </group>   -->
+</launch>
