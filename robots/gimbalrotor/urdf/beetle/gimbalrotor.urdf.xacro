@@ -241,7 +241,7 @@
     </link>
   </xacro:macro>
 
-    ## link
+  ## link
   <link name="handbase">
     <inertial>
       <origin xyz="0.0 0.0 0.0" rpy="0 0 0"/>
@@ -275,6 +275,38 @@
     </collision>
   </link>
 
+
+
+<!-- hand link  -->  
+  <link name="hand_2">
+    <inertial>
+      <origin xyz="0.19178 0.000005 0.025771"/>
+      <mass value="0.4100000"/>
+      <inertia
+  	  ixx="0.00092717" ixy="0.00124965" ixz="0.00000526"
+  	  iyy="0.01037553" iyz="0.00000148"
+  	  izz="0.01112688"/>
+      <!-- <inertia -->
+      <!-- 	  ixx="0.000699" ixy="-0.000004" ixz="0.000769" -->
+      <!-- 	  iyy="0.005953" iyz="-0.000005" -->
+      <!-- 	  izz="0.00541"/> -->
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+    	<mesh filename="package://gimbalrotor/urdf/beetle/mesh/hand9_handmech_USD.STL" scale="1 1 1"/>
+      </geometry>
+    </visual>
+    <collision>
+      <origin xyz="0.01215 0 0.022" rpy="0 0 0"/>
+      <geometry>
+  	<box size="0.283 0.071 0.118"/>
+      </geometry>
+    </collision>
+  </link>
+
+
+  
   <!-- <link name="hand_2"> -->
   <!--   <inertial> -->
   <!--     <origin xyz="0.19178 0.000005 0.025771"/> -->
@@ -313,8 +345,16 @@
   <joint name="handbase_hand_joint" type="fixed">
     <child link="hand"/>
     <parent link="handbase"/>
-    <origin xyz=" 0.05918 0.00052 0.08000" rpy="0 0 0"/>
+    <origin xyz="0.05918 0.00052 0.08000" rpy="0 0 0"/>
     <axis xyz="0 0 0"/>
   </joint>
 
+  <joint name="handbase_hand_joint_2" type="fixed">
+    <child link="hand_2"/>
+    <parent link="handbase"/>
+    <origin xyz="-0.05918 0.00052 0.08000" rpy="0 0 3.1415"/>
+    <axis xyz="1 0 0"/>
+  </joint>
+
+  
 </robot>
