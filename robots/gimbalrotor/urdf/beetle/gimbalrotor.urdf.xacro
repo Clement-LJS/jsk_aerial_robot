@@ -254,12 +254,12 @@
 
   <link name="hand">
     <inertial>
-      <origin xyz="0.19178 0.000005 0.025771"/>
+      <origin xyz="0.316540 0.000030 0.036560"/>
       <mass value="0.423690"/>
       <inertia
   	  ixx="0.0010323" ixy="-0.0001415" ixz="0.0051142"
-    	  iyx="-0.0001415" iyy="0.0454125" iyz="-0.0000028"
-  	  izx="0.0051142" izy="-0.0000028" izz="0.0446821"/>
+    	  iyy="0.0454125" iyz="-0.0000028"
+  	  izz="0.0446821"/>
     </inertial>
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
@@ -280,12 +280,12 @@
 <!-- hand link  -->  
   <link name="hand_2">
     <inertial>
-      <origin xyz="0.19178 0.000005 0.025771"/>
-      <mass value="0.4100000"/>
+      <origin xyz="0.00033 0.056240 0.08802"/>
+      <mass value="0.3100000"/>
       <inertia
-  	  ixx="0.00092282" ixy="0.00105812" ixz="0.00000494"
-  	  iyy="0.01081461" iyz="0.00000144"
-  	  izz="0.01156281"/>
+  	  ixx="0.009713" ixy="-0.00000686" ixz="0.00000217"
+  	  iyy="0.00776047" iyz="0.00266476"
+  	  izz="0.00211585"/>
       <!-- <inertia -->
       <!-- 	  ixx="0.000699" ixy="-0.000004" ixz="0.000769" -->
       <!-- 	  iyy="0.005953" iyz="-0.000005" -->
@@ -294,7 +294,7 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-    	<mesh filename="package://gimbalrotor/urdf/beetle/mesh/hand9_handmech_USD.STL" scale="1 1 1"/>
+    	<mesh filename="package://gimbalrotor/urdf/beetle/mesh/hand9_handmech_USD.STL" scale="0.001 0.001 0.001"/>
       </geometry>
     </visual>
     <collision>
@@ -352,8 +352,8 @@
   <joint name="handbase_hand_joint_2" type="fixed">
     <child link="hand_2"/>
     <parent link="handbase"/>
-    <origin xyz="-0.05918 0.00052 0.08000" rpy="0 0 3.1415"/>
-    <axis xyz="1 0 0"/>
+    <origin xyz="-0.05918 0.00052 0.08000" rpy="1.5708 0 4.7124"/>
+    <axis xyz="0 0 0"/>
   </joint>
 
   
