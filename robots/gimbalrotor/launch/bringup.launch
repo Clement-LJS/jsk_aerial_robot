@@ -100,4 +100,9 @@
     <arg name="spawn_yaw" value="$(arg spawn_yaw)" />
   </include>
 
+    ############### Hand state ###############
+  <param name="handOpenFlag_0" value="true" />
+  <param name="handOpenFlag_1" value="true" />
+  <!-- <rosparam file="$(arg config_dir)/HandFlag.yaml" command="load" /> -->
+  
 </launch>
