@@ -354,7 +354,28 @@
     <axis xyz="0 1 0"/>
     <limit effort="10" velocity="1.0" lower="-1.57" upper="1.57"/>
     <dynamics damping="0.1" friction="0.01"/>
-  </joint> 
+  </joint>
+
+  <joint name="wire_joint" type="revolute">
+    <parent link="base_link"/>
+    <child link="virtual_wire"/>
+    <limit effort="10" velocity="1.0" lower="-1.57" upper="1.57"/>
+    <dynamics damping="0.1" friction="0.01"/>
+    <origin rpy="0 0 0" xyz="0 0 0"/>
+    <axis xyz="0 0 1"/>
+  </joint>
+
+  <link name="virtual_wire">
+    <inertial>      
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="0.00001"/>
+      <inertia
+          ixx="0.00001" ixy="0.0" ixz="0.0"
+          iyy="0.00001" iyz="0.0"
+          izz="0.00001"/>
+    </inertial>
+  </link>
+
   
   <transmission name="pitch_joint">
     <type>transmission_interface/SimpleTransmission</type>
@@ -362,6 +383,17 @@
       <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
     </joint>
     <actuator name="pitch_joint">
+      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+      <mechanicalReduction>1</mechanicalReduction>
+    </actuator>
+  </transmission>
+
+  <transmission name="wire_joint">
+    <type>transmission_interface/SimpleTransmission</type>
+    <joint name="wire_joint">
+      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+    </joint>
+    <actuator name="wire_joint">
       <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
       <mechanicalReduction>1</mechanicalReduction>
     </actuator>
