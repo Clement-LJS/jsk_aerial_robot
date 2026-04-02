@@ -38,6 +38,9 @@ servo_controller:
 
  joints:
    state_sub_topic: spinal_dynamixel/servo/states
+   pos_pub_topic: spinal_dynamixel/servo/target_states
+   torque_pub_topic: spinal_dynamixel/servo/target_current
+   servo_enable_pub_topic: spinal_dynamixel/servo/torque_enable
    angle_sgn: -1
    angle_scale: 0.00076699
    zero_point_offset: 2047
