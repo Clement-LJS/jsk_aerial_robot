@@ -26,7 +26,7 @@ msg = """
 Perched Pitch-Joint Control using URDF geometry
 --------------------------------------------------
 Keyboard:
-  z : lock current perch pose in world
+  z : lock current perch pose in world (NO publish)
   i : pitch joint +
   k : pitch joint -
   x : reset target joint to locked joint angle
@@ -34,12 +34,13 @@ Keyboard:
   q : quit
 
 Behavior:
-  - Only the pitch joint is commanded by keyboard
-  - Drone target POSITION is sent to /uav/nav (POS_MODE)
-  - Drone target ATTITUDE is sent to /final_target_baselink_rpy
-  - Pitch joint is sent to /joints_ctrl continuously
-  - The robot pitches about the perch / pitch-joint mechanism,
-    not about the CoG
+  - Nothing is published before any key action
+  - z only locks the current perch reference
+  - i / k / x enable command publishing
+  - Only pitch is changed in final_target_baselink_rpy
+  - Locked roll and locked yaw are preserved
+  - Position is sent through /uav/nav
+  - Joint is sent through /joints_ctrl
 --------------------------------------------------
 """
 
@@ -55,8 +56,12 @@ target_joint_angle = 0.0
 locked_joint_angle = 0.0
 
 perch_locked = False
+command_enabled = False
+
 world_perch_point = None
 world_perch_rot = None
+
+locked_base_rpy = [0.0, 0.0, 0.0]  # keep roll/yaw fixed, only update pitch
 
 last_text = ""
 quit_flag = False
@@ -98,7 +103,7 @@ def getKeyBlocking():
     return key
 
 
-def printMsg(text, msg_len=200):
+def printMsg(text, msg_len=220):
     sys.stdout.write(text.ljust(msg_len) + "\r")
     sys.stdout.flush()
 
@@ -348,7 +353,9 @@ def keyboard_thread_fn(p_pitch_in_base,
                        joint_min,
                        joint_max):
     global target_joint_angle, locked_joint_angle
-    global perch_locked, world_perch_point, world_perch_rot
+    global perch_locked, command_enabled
+    global world_perch_point, world_perch_rot
+    global locked_base_rpy
     global last_text, quit_flag
 
     while not rospy.is_shutdown() and not quit_flag:
@@ -363,6 +370,8 @@ def keyboard_thread_fn(p_pitch_in_base,
                     current_base_quat[3]
                 )
                 p_wb_lock = list(current_base_pos)
+
+                locked_base_rpy = rot_to_rpy(R_wb_lock)
 
                 theta_lock = current_joint_angle
                 locked_joint_angle = theta_lock
@@ -386,8 +395,17 @@ def keyboard_thread_fn(p_pitch_in_base,
                 world_perch_rot = matmul(R_wb_lock, R_b_perch_lock)
                 perch_locked = True
 
-                last_text = "KEY[z] perch locked at world point ({:.3f}, {:.3f}, {:.3f})".format(
-                    world_perch_point[0], world_perch_point[1], world_perch_point[2]
+                # important: z only locks, does not enable publishing
+                command_enabled = False
+
+                last_text = (
+                    "KEY[z] perch locked only "
+                    "(roll={:.2f} deg, pitch={:.2f} deg, yaw={:.2f} deg). "
+                    "No command published yet.".format(
+                        math.degrees(locked_base_rpy[0]),
+                        math.degrees(locked_base_rpy[1]),
+                        math.degrees(locked_base_rpy[2]),
+                    )
                 )
                 print("\n" + last_text)
 
@@ -395,6 +413,7 @@ def keyboard_thread_fn(p_pitch_in_base,
                 target_joint_angle += joint_step
                 if target_joint_angle > joint_max:
                     target_joint_angle = joint_max
+                command_enabled = True
                 last_text = "KEY[i] pitch joint + => {:.2f} deg".format(math.degrees(target_joint_angle))
                 print("\n" + last_text)
 
@@ -402,25 +421,35 @@ def keyboard_thread_fn(p_pitch_in_base,
                 target_joint_angle -= joint_step
                 if target_joint_angle < joint_min:
                     target_joint_angle = joint_min
+                command_enabled = True
                 last_text = "KEY[k] pitch joint - => {:.2f} deg".format(math.degrees(target_joint_angle))
                 print("\n" + last_text)
 
             elif key == 'x':
                 target_joint_angle = locked_joint_angle if perch_locked else current_joint_angle
+                command_enabled = True
                 last_text = "KEY[x] reset target joint => {:.2f} deg".format(math.degrees(target_joint_angle))
                 print("\n" + last_text)
 
             elif key == 'p':
                 if perch_locked:
-                    last_text = "KEY[p] locked={} joint[deg]={:.2f} perch=({:.3f}, {:.3f}, {:.3f})".format(
-                        perch_locked,
-                        math.degrees(target_joint_angle),
-                        world_perch_point[0], world_perch_point[1], world_perch_point[2]
+                    last_text = (
+                        "KEY[p] locked={} command_enabled={} "
+                        "joint[deg]={:.2f} perch=({:.3f}, {:.3f}, {:.3f})".format(
+                            perch_locked,
+                            command_enabled,
+                            math.degrees(target_joint_angle),
+                            world_perch_point[0], world_perch_point[1], world_perch_point[2]
+                        )
                     )
                 else:
-                    last_text = "KEY[p] locked={} joint[deg]={:.2f} (press z to lock perch)".format(
-                        perch_locked,
-                        math.degrees(target_joint_angle)
+                    last_text = (
+                        "KEY[p] locked={} command_enabled={} "
+                        "joint[deg]={:.2f} (press z to lock perch)".format(
+                            perch_locked,
+                            command_enabled,
+                            math.degrees(target_joint_angle)
+                        )
                     )
                 print("\n" + last_text)
 
@@ -434,7 +463,7 @@ def keyboard_thread_fn(p_pitch_in_base,
 if __name__ == "__main__":
     settings = termios.tcgetattr(sys.stdin)
 
-    rospy.init_node("perched_pitch_from_urdf_nav_rpy_debug")
+    rospy.init_node("perched_pitch_from_urdf_nav_rpy_pitch_only")
     print(msg)
 
     robot_ns = rospy.get_param("~robot_ns", "/gimbalrotor")
@@ -454,9 +483,9 @@ if __name__ == "__main__":
     perch_offset_z = rospy.get_param("~perch_offset_z", 0.06664)
     perch_offset_in_joint_zero = [perch_offset_x, perch_offset_y, perch_offset_z]
 
-    joint_step_deg = rospy.get_param("~joint_step_deg", 1.0)
-    joint_min_deg = rospy.get_param("~joint_min_deg", -60.0)
-    joint_max_deg = rospy.get_param("~joint_max_deg", 60.0)
+    joint_step_deg = rospy.get_param("~joint_step_deg", 0.3)
+    joint_min_deg = rospy.get_param("~joint_min_deg", -30.0)
+    joint_max_deg = rospy.get_param("~joint_max_deg", 30.0)
     publish_rate_hz = rospy.get_param("~publish_rate_hz", 30.0)
 
     joint_step = math.radians(joint_step_deg)
@@ -479,7 +508,7 @@ if __name__ == "__main__":
     rospy.loginfo("Current base pos: [%.3f, %.3f, %.3f]", current_base_pos[0], current_base_pos[1], current_base_pos[2])
     rospy.loginfo("Current joint angle: %.3f deg", math.degrees(current_joint_angle))
 
-    rospy.sleep(1.0)  # let publishers connect
+    rospy.sleep(1.0)
 
     root = load_urdf_root()
     p_pitch_in_base, R_b_pjframe0, joint_axis_local, perch_zero_in_base = compute_urdf_geometry(
@@ -501,6 +530,7 @@ if __name__ == "__main__":
     with state_lock:
         target_joint_angle = current_joint_angle
         locked_joint_angle = current_joint_angle
+        command_enabled = False
 
     kb_thread = threading.Thread(
         target=keyboard_thread_fn,
@@ -526,75 +556,89 @@ if __name__ == "__main__":
             with state_lock:
                 tj = target_joint_angle
                 plocked = perch_locked
+                enabled = command_enabled
                 wpp = world_perch_point
                 wpr = world_perch_rot
                 text = last_text
+                lock_rpy = list(locked_base_rpy)
 
+            # absolutely publish nothing before command is enabled
+            if (not enabled) or (not plocked) or (wpp is None) or (wpr is None):
+                if text:
+                    printMsg("{} | no publish yet".format(text))
+                rate.sleep()
+                continue
+
+            # 1) joint command
             joint_msg = JointState()
             joint_msg.header.stamp = now
             joint_msg.name = [pitch_joint_name]
             joint_msg.position = [tj]
             joints_pub.publish(joint_msg)
 
-            if plocked and wpp is not None and wpr is not None:
-                R_b_perch = compute_base_to_perch_orientation(
-                    R_b_pjframe0,
-                    joint_axis_local,
-                    tj
-                )
+            # 2) compute pose from perch geometry
+            R_b_perch = compute_base_to_perch_orientation(
+                R_b_pjframe0,
+                joint_axis_local,
+                tj
+            )
 
-                R_wb_target = matmul(wpr, transpose(R_b_perch))
+            R_wb_target_full = matmul(wpr, transpose(R_b_perch))
 
-                p_bp = compute_base_to_perch_position(
-                    p_pitch_in_base,
-                    R_b_pjframe0,
-                    joint_axis_local,
-                    perch_offset_in_joint_zero,
-                    tj
-                )
+            p_bp = compute_base_to_perch_position(
+                p_pitch_in_base,
+                R_b_pjframe0,
+                joint_axis_local,
+                perch_offset_in_joint_zero,
+                tj
+            )
 
-                p_wb_target = vec_sub(wpp, matvec(R_wb_target, p_bp))
-                rpy = rot_to_rpy(R_wb_target)
+            p_wb_target = vec_sub(wpp, matvec(R_wb_target_full, p_bp))
+            full_rpy = rot_to_rpy(R_wb_target_full)
 
-                rpy_msg = Vector3Stamped()
-                rpy_msg.header.stamp = now
-                rpy_msg.header.frame_id = "world"
-                rpy_msg.vector.x = rpy[0]
-                rpy_msg.vector.y = rpy[1]
-                rpy_msg.vector.z = rpy[2]
-                baselink_rpy_pub.publish(rpy_msg)
+            # only pitch changes; roll and yaw stay locked
+            cmd_roll = lock_rpy[0]
+            cmd_pitch = full_rpy[1]
+            cmd_yaw = lock_rpy[2]
 
-                nav_msg = FlightNav()
-                nav_msg.header.stamp = now
-                nav_msg.control_frame = FlightNav.WORLD_FRAME
-                nav_msg.target = FlightNav.COG
+            # 3) baselink attitude
+            rpy_msg = Vector3Stamped()
+            rpy_msg.header.stamp = now
+            rpy_msg.header.frame_id = "world"
+            rpy_msg.vector.x = cmd_roll
+            rpy_msg.vector.y = cmd_pitch
+            rpy_msg.vector.z = cmd_yaw
+            baselink_rpy_pub.publish(rpy_msg)
 
-                nav_msg.pos_xy_nav_mode = FlightNav.POS_MODE
-                nav_msg.target_pos_x = p_wb_target[0]
-                nav_msg.target_pos_y = p_wb_target[1]
+            # 4) position
+            nav_msg = FlightNav()
+            nav_msg.header.stamp = now
+            nav_msg.control_frame = FlightNav.WORLD_FRAME
+            nav_msg.target = FlightNav.COG
 
-                nav_msg.pos_z_nav_mode = FlightNav.POS_MODE
-                nav_msg.target_pos_z = p_wb_target[2]
+            nav_msg.pos_xy_nav_mode = FlightNav.POS_MODE
+            nav_msg.target_pos_x = p_wb_target[0]
+            nav_msg.target_pos_y = p_wb_target[1]
 
-                nav_msg.yaw_nav_mode = 0
-                nav_pub.publish(nav_msg)
+            nav_msg.pos_z_nav_mode = FlightNav.POS_MODE
+            nav_msg.target_pos_z = p_wb_target[2]
 
-                if text:
-                    printMsg(
-                        "{} | joint[deg]={:.2f} | drone_rpy[deg]=({:.2f}, {:.2f}, {:.2f}) | target_pos=({:.3f}, {:.3f}, {:.3f})".format(
-                            text,
-                            math.degrees(tj),
-                            math.degrees(rpy[0]),
-                            math.degrees(rpy[1]),
-                            math.degrees(rpy[2]),
-                            p_wb_target[0], p_wb_target[1], p_wb_target[2]
-                        )
+            # yaw is controlled by final_target_baselink_rpy
+            nav_msg.yaw_nav_mode = 0
+
+            nav_pub.publish(nav_msg)
+
+            if text:
+                printMsg(
+                    "{} | joint[deg]={:.2f} | cmd_rpy[deg]=({:.2f}, {:.2f}, {:.2f}) | target_pos=({:.3f}, {:.3f}, {:.3f})".format(
+                        text,
+                        math.degrees(tj),
+                        math.degrees(cmd_roll),
+                        math.degrees(cmd_pitch),
+                        math.degrees(cmd_yaw),
+                        p_wb_target[0], p_wb_target[1], p_wb_target[2]
                     )
-            else:
-                if text:
-                    printMsg("{} | joint[deg]={:.2f} | waiting for z lock".format(
-                        text, math.degrees(tj)
-                    ))
+                )
 
             rate.sleep()
 
