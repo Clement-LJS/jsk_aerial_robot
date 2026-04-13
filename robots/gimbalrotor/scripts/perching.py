@@ -409,7 +409,7 @@ def keyboard_thread_fn(p_pitch_in_base,
                 )
                 print("\n" + last_text)
 
-            elif key == 'i':
+            elif key == 'k':
                 target_joint_angle += joint_step
                 if target_joint_angle > joint_max:
                     target_joint_angle = joint_max
@@ -417,7 +417,7 @@ def keyboard_thread_fn(p_pitch_in_base,
                 last_text = "KEY[i] pitch joint + => {:.2f} deg".format(math.degrees(target_joint_angle))
                 print("\n" + last_text)
 
-            elif key == 'k':
+            elif key == 'i':
                 target_joint_angle -= joint_step
                 if target_joint_angle < joint_min:
                     target_joint_angle = joint_min

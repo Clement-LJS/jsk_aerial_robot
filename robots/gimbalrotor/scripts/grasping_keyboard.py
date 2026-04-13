@@ -7,274 +7,286 @@ import select
 import termios
 import tty
 
+from std_msgs.msg import Bool
 from spinal.msg import ServoControlCmd, ServoStates
 
 
-msg = """
-Instruction:
---------------------------------------------------
-1. First type: open  or  close
-   This defines your intended main direction.
+HELP_MSG = """
+Keyboard control:
+----------------------------------------
+o : move OPEN direction
+c : move CLOSE direction
+q : quit
+Ctrl+C : quit
+----------------------------------------
 
-2. Then use keyboard:
-   i : move in the intended direction
-   k : move in the opposite direction
-   q : quit
-
-Example:
-- if you typed "open"
-    i -> open direction
-    k -> opposite direction
-
-- if you typed "close"
-    i -> close direction
-    k -> opposite direction
---------------------------------------------------
+Behavior:
+- OPEN always uses the fixed open direction
+- CLOSE always uses the fixed close direction
+- torque/load limit is checked for both directions
+- if CLOSE torque limit is reached:
+    publish /isGrasping = True
+- otherwise:
+    publish /isGrasping = False
 """
 
-def getKey(settings):
+
+def getKey(settings, timeout=0.1):
+    """
+    Read one key with timeout.
+    Returns '' if no key was pressed.
+    """
     tty.setraw(sys.stdin.fileno())
-    select.select([sys.stdin], [], [], 0)
-    key = sys.stdin.read(1)
+    rlist, _, _ = select.select([sys.stdin], [], [], timeout)
+    key = ''
+    if rlist:
+        key = sys.stdin.read(1)
     termios.tcsetattr(sys.stdin, termios.TCSADRAIN, settings)
     return key
 
-def printMsg(text, msg_len=80):
+
+def printMsg(text, msg_len=100):
     print(text.ljust(msg_len) + "\r", end="")
+    sys.stdout.flush()
 
 
 class ManualServoKeyboardControl:
     def __init__(self):
         rospy.init_node("manual_servo_keyboard_control")
 
-        # ---------------------------------
-        # Servo config
-        # ---------------------------------
+        # =========================================================
+        # Local settings only (no rosparam)
+        # =========================================================
+
         self.target_servo_index = 0
-        self.servoMoveRange = rospy.get_param("~servo_move_range", 100)
+        self.servo_move_range = 100
 
-        # ---------------------------------
-        # Safety torque/load thresholds
-        # Tune these if needed
-        # ---------------------------------
-        # If moving in negative-load direction, do not continue
-        # when load is already too negative.
-        self.negative_load_limit = rospy.get_param("~negative_load_limit", -180)
-
-        # If moving in positive-load direction, do not continue
-        # when load is already too positive.
-        self.positive_load_limit = rospy.get_param("~positive_load_limit", 100)
-
-        # ---------------------------------
-        # Servo state (only servo index 0)
-        # ---------------------------------
-        self.currentServoLoad_0 = 0.0
-        self.currentServoPosition_0 = 0.0
-        self.targetServoPosition_0 = 0.0
-        self.last_callback_time = rospy.get_time()
-        self.received_state = False
-
-        # ---------------------------------
-        # User-defined motion meaning
-        # open_direction_sign:
-        #   +1 means open = current + step
-        #   -1 means open = current - step
-        #
-        # close will be the opposite sign.
-        # If your real hardware moves opposite to your expectation,
-        # just swap this sign.
-        # ---------------------------------
-        self.open_direction_sign = rospy.get_param("~open_direction_sign", -1)
+        # Direction definition:
+        # +1 means target = current + step
+        # -1 means target = current - step
+        self.open_direction_sign = -1
         self.close_direction_sign = -self.open_direction_sign
 
-        self.user_mode = None  # "open" or "close"
+        # Torque/load safety limits
+        self.negative_load_limit = -180
+        self.positive_load_limit = 100
 
-        # ---------------------------------
-        # ROS
-        # ---------------------------------
+        # Topics
+        self.state_topic = '/gimbalrotor/spinal_dynamixel/servo/states'
+        self.command_topic = '/gimbalrotor/spinal_dynamixel/servo/target_states'
+        self.is_grasping_topic = '/isGrasping'
+
+        # =========================================================
+        # State variables
+        # =========================================================
+        self.current_servo_load = 0.0
+        self.current_servo_position = 0.0
+        self.target_servo_position = 0.0
+
+        self.last_callback_time = rospy.get_time()
+        self.received_state = False
+        self.is_grasping = False
+
+        # =========================================================
+        # ROS interfaces
+        # =========================================================
         self.sub = rospy.Subscriber(
-            '/gimbalrotor/spinal_dynamixel/servo/states',
+            self.state_topic,
             ServoStates,
             self.callback,
             queue_size=10
         )
+
         self.pub = rospy.Publisher(
-            '/gimbalrotor/spinal_dynamixel/servo/target_states',
+            self.command_topic,
             ServoControlCmd,
+            queue_size=10
+        )
+
+        self.grasp_pub = rospy.Publisher(
+            self.is_grasping_topic,
+            Bool,
             queue_size=10
         )
 
         rospy.loginfo("manual_servo_keyboard_control started")
         rospy.loginfo("Target servo index: %d", self.target_servo_index)
-        rospy.loginfo("servoMoveRange: %d", self.servoMoveRange)
+        rospy.loginfo("servo_move_range: %d", self.servo_move_range)
         rospy.loginfo("open_direction_sign: %d", self.open_direction_sign)
         rospy.loginfo("close_direction_sign: %d", self.close_direction_sign)
         rospy.loginfo("negative_load_limit: %.2f", self.negative_load_limit)
         rospy.loginfo("positive_load_limit: %.2f", self.positive_load_limit)
+        rospy.loginfo("state_topic: %s", self.state_topic)
+        rospy.loginfo("command_topic: %s", self.command_topic)
+        rospy.loginfo("is_grasping_topic: %s", self.is_grasping_topic)
 
     def callback(self, data):
         self.last_callback_time = rospy.get_time()
 
-        index0_data = next((servo for servo in data.servos if servo.index == 0), None)
+        target_servo_data = next(
+            (servo for servo in data.servos if servo.index == self.target_servo_index),
+            None
+        )
 
-        if index0_data is not None:
-            self.currentServoLoad_0 = index0_data.load
-            self.currentServoPosition_0 = index0_data.angle
+        if target_servo_data is not None:
+            self.current_servo_load = target_servo_data.load
+            self.current_servo_position = target_servo_data.angle
             self.received_state = True
 
     def check_subscription(self):
         current_time = rospy.get_time()
         if current_time - self.last_callback_time > 5.0:
-            rospy.logwarn("No servo data received for more than 5 seconds.")
+            rospy.logwarn_throttle(2.0, "No servo data received for more than 5 seconds.")
             return False
         return True
 
-    def choose_mode(self):
-        while not rospy.is_shutdown():
-            print("\nType mode: open / close")
-            try:
-                targetInput = input().strip().lower()
-            except KeyboardInterrupt:
-                rospy.loginfo("Interrupted from keyboard.")
-                rospy.signal_shutdown("")
-                return False
-
-            if targetInput == "open":
-                self.user_mode = "open"
-                rospy.loginfo("User mode set to OPEN")
-                return True
-
-            elif targetInput == "close":
-                self.user_mode = "close"
-                rospy.loginfo("User mode set to CLOSE")
-                return True
-
-            else:
-                print("Incorrect input. Please enter open or close.")
-
-        return False
-
-    def get_main_direction(self):
-        if self.user_mode == "open":
-            return self.open_direction_sign
-        elif self.user_mode == "close":
-            return self.close_direction_sign
-        else:
-            return 0
+    def publish_is_grasping(self, value):
+        self.is_grasping = value
+        msg = Bool()
+        msg.data = value
+        self.grasp_pub.publish(msg)
 
     def torque_blocked(self, move_sign):
         """
         move_sign:
             +1 -> target = current + step
             -1 -> target = current - step
-
-        We use load sign to block motion if torque is already too high
-        in that direction.
         """
+        load = self.current_servo_load
 
-        load = self.currentServoLoad_0
-
-        # If commanding more in the negative direction,
-        # block when load is already too negative.
         if move_sign < 0:
             if load <= self.negative_load_limit:
                 return True, "Blocked: negative torque/load limit reached"
 
-        # If commanding more in the positive direction,
-        # block when load is already too positive.
         elif move_sign > 0:
             if load >= self.positive_load_limit:
                 return True, "Blocked: positive torque/load limit reached"
 
         return False, ""
 
-    def move_servo_step(self, move_sign):
+    def move_servo_step(self, move_sign, action_name):
         blocked, reason = self.torque_blocked(move_sign)
-        if blocked:
-            rospy.logwarn("%s | current load = %.2f", reason, self.currentServoLoad_0)
-            return
 
-        self.targetServoPosition_0 = int(
-            self.currentServoPosition_0 + move_sign * self.servoMoveRange
+        if blocked:
+            rospy.logwarn("%s | current load = %.2f", reason, self.current_servo_load)
+
+            if action_name == "close":
+                self.publish_is_grasping(True)
+                rospy.loginfo("Published /isGrasping = True")
+            else:
+                self.publish_is_grasping(False)
+
+            return False
+
+        self.publish_is_grasping(False)
+
+        self.target_servo_position = int(
+            self.current_servo_position + move_sign * self.servo_move_range
         )
 
         cmd = ServoControlCmd()
-        cmd.index = [0]
-        cmd.angles = [int(self.targetServoPosition_0)]
+        cmd.index = [self.target_servo_index]
+        cmd.angles = [int(self.target_servo_position)]
         self.pub.publish(cmd)
 
         rospy.loginfo(
-            "Publish servo[0] target: %d | current_pos: %.2f | current_load: %.2f",
-            int(self.targetServoPosition_0),
-            self.currentServoPosition_0,
-            self.currentServoLoad_0
+            "Publish servo[%d] target: %d | action: %s | current_pos: %.2f | current_load: %.2f | isGrasping: %s",
+            self.target_servo_index,
+            int(self.target_servo_position),
+            action_name,
+            self.current_servo_position,
+            self.current_servo_load,
+            str(self.is_grasping)
         )
 
-    def run(self):
-        if not self.choose_mode():
-            return
+        return True
 
-        print(msg)
-        settings = termios.tcgetattr(sys.stdin)
+    def wait_for_first_servo_state(self, settings):
+        """
+        Wait for first servo state, but still allow quitting with q or Ctrl+C.
+        """
+        rospy.loginfo("Waiting for servo state on %s ...", self.state_topic)
+        printMsg("Waiting for first servo data... press q or Ctrl+C to quit")
 
-        # Wait for first servo state
-        rospy.loginfo("Waiting for servo state on /gimbalrotor/spinal_dynamixel/servo/states ...")
-        wait_rate = rospy.Rate(20)
         while not rospy.is_shutdown() and not self.received_state:
-            wait_rate.sleep()
+            key = getKey(settings, timeout=0.1)
+
+            if key == 'q':
+                rospy.loginfo("Quit requested while waiting for first servo state.")
+                return False
+
+            if key == '\x03':  # Ctrl+C
+                raise KeyboardInterrupt
 
         if rospy.is_shutdown():
-            return
+            return False
 
         rospy.loginfo(
             "Servo state received. position=%.2f load=%.2f",
-            self.currentServoPosition_0,
-            self.currentServoLoad_0
+            self.current_servo_position,
+            self.current_servo_load
         )
+        print("")
+        return True
+
+    def run(self):
+        print(HELP_MSG)
+        settings = termios.tcgetattr(sys.stdin)
 
         try:
+            if not self.wait_for_first_servo_state(settings):
+                return
+
+            self.publish_is_grasping(False)
+
             while not rospy.is_shutdown():
-                key = getKey(settings)
-                status_msg = ""
+                key = getKey(settings, timeout=0.1)
+                status_msg = "Use o / c / q"
 
-                if not self.check_subscription():
-                    status_msg = "No servo data"
-                    printMsg(status_msg)
-                    rospy.sleep(0.001)
-                    continue
+                if key == '\x03':  # Ctrl+C
+                    raise KeyboardInterrupt
 
-                main_dir = self.get_main_direction()
-                opposite_dir = -main_dir
-
-                if key == 'i':
-                    self.move_servo_step(main_dir)
-                    if self.user_mode == "open":
-                        status_msg = "i pressed: move OPEN direction"
-                    else:
-                        status_msg = "i pressed: move CLOSE direction"
-
-                elif key == 'k':
-                    self.move_servo_step(opposite_dir)
-                    if self.user_mode == "open":
-                        status_msg = "k pressed: move CLOSE direction"
-                    else:
-                        status_msg = "k pressed: move OPEN direction"
-
-                elif key == 'q' or key == '\x03':
+                if key == 'q':
                     rospy.loginfo("Quit keyboard control")
                     break
 
-                else:
-                    status_msg = "Use i / k / q"
+                if not self.check_subscription():
+                    status_msg = "No servo data | press q to quit"
+                    printMsg(status_msg)
+                    rospy.sleep(0.01)
+                    continue
+
+                if key == 'o':
+                    moved = self.move_servo_step(self.open_direction_sign, "open")
+                    if moved:
+                        status_msg = "o pressed: move OPEN direction"
+                    else:
+                        status_msg = "OPEN blocked by torque/load limit"
+
+                elif key == 'c':
+                    moved = self.move_servo_step(self.close_direction_sign, "close")
+                    if moved:
+                        status_msg = "c pressed: move CLOSE direction"
+                    else:
+                        status_msg = "CLOSE blocked -> /isGrasping = True"
 
                 printMsg(status_msg)
-                rospy.sleep(0.001)
+                rospy.sleep(0.01)
+
+        except KeyboardInterrupt:
+            rospy.loginfo("Keyboard interrupt received. Exiting...")
 
         except Exception as e:
-            print(repr(e))
+            rospy.logerr("Exception: %s", repr(e))
 
         finally:
+            try:
+                self.publish_is_grasping(False)
+            except Exception:
+                pass
+
             termios.tcsetattr(sys.stdin, termios.TCSADRAIN, settings)
+            print("")
 
 
 if __name__ == "__main__":
@@ -282,4 +294,7 @@ if __name__ == "__main__":
         controller = ManualServoKeyboardControl()
         controller.run()
     except rospy.ROSInterruptException:
-        sys.exit(1)
+        pass
+    except KeyboardInterrupt:
+        pass
+    sys.exit(0)
