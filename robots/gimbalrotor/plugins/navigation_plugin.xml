@@ -2,4 +2,10 @@
   <class name="aerial_robot_navigation/gimbalrotor_navigation" type="aerial_robot_navigation::GimbalrotorNavigator" base_class_type="aerial_robot_navigation::BaseNavigator">
     <description>plugin for gimbalrotor navigation </description>
   </class>
+  <class name="aerial_robot_navigation/gimbalrotor_multilink_navigation" type="aerial_robot_navigation::GimbalrotorMultilinkNavigator" base_class_type="aerial_robot_navigation::BaseNavigator">
+    <description>
+      Multilink-style navigator for gimbalrotor.
+      Main body attitude is controlled for thrust, while pitch joint compensates body pitch to keep the hand horizontal.
+    </description>
+  </class>
 </library>

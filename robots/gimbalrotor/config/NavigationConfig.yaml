@@ -33,3 +33,30 @@ navigation:
   # desire tilt
   baselink_rot_pub_interval: 0.2
   baselink_rot_change_thresh: 1.0 # 0.2 hz -> 0.04; 0.01 hz-> 0.02
+
+
+  # gimbalrotor_multilink related	 
+  joint_cmd_pub_interval: 0.02
+  pitch_joint_name: "pitch_joint"
+
+  # Usually -1.0.
+  # If the hand tilts more instead of staying horizontal, change to +1.0.
+  pitch_joint_compensation_sign: 1.0
+
+  # Offset if your mechanical zero is not perfectly horizontal.
+  pitch_joint_offset: 0.0
+
+  # Joint safety limit in rad.
+  pitch_joint_limit: 1.57
+
+  # During takeoff, pitch joint should be zero.
+  takeoff_pitch_joint_angle: 0.0
+
+  # Landing / halt safety shape.
+  landing_pitch_joint_angle: 0.0
+
+  # About 4.9 deg.
+  pitch_joint_land_thresh: 0.085
+
+  # Enable automatic hand-horizontal compensation.
+  keep_hand_horizontal: true

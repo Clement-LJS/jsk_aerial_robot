@@ -352,8 +352,8 @@
     <!-- location of the pitch axis -->
     <origin xyz="0.22074 0.02932 0" rpy="0 0 0"/>  <!-- 0.02932 is pulley origin -->
     <axis xyz="0 1 0"/>
-    <limit effort="10" velocity="1.0" lower="-1.57" upper="1.57"/>
-    <dynamics damping="0.1" friction="0.01"/>
+    <limit effort="10" velocity="0.1" lower="-1.57" upper="1.57"/>
+    <dynamics damping="0.9" friction="0.05"/>
   </joint>
 
   <joint name="wire_joint" type="revolute">
