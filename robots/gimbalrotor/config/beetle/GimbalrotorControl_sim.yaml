@@ -6,6 +6,10 @@ controller:
   gimbal_calc_in_fc : false
   wrench_estimate_flag : true
 
+  compensate_multilink_inertia: true
+  inertia_dot_lpf_rate: 0.15
+  nonlinear_ang_acc_limit: 5.0
+
   xy:
     p_gain: 2.0
     i_gain: 0.05

@@ -24,7 +24,9 @@ include_directories(
   ${catkin_INCLUDE_DIRS}
   )
 
-add_library(gimbalrotor_controller src/control/gimbalrotor_controller.cpp)
+add_library(gimbalrotor_controller
+  src/control/gimbalrotor_controller.cpp
+  src/control/gimbalrotor_multilink_controller.cpp)
 target_link_libraries(gimbalrotor_controller ${catkin_LIBRARIES})
 
 add_library(gimbalrotor_robot_model
