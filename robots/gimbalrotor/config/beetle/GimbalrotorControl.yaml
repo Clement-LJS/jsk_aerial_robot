@@ -1,4 +1,4 @@
-aerial_robot_control_name: aerial_robot_control/gimbalrotor_multilink_controller
+aerial_robot_control_name: aerial_robot_control/gimbalrotor_impedance_controller
 
 controller:
   torque_allocation_matrix_inv_pub_interval: 0.05
@@ -62,3 +62,63 @@ controller:
 
     need_d_control: true
 
+  impedance:
+    use_impedance: true
+
+    external_wrench_topic: estimated_external_wrench
+    is_cutting_topic: isCutting
+
+    # Use "world" if estimated_external_wrench is already world frame.
+    # Use "cog" if the wrench is body/CoG frame.
+    external_wrench_frame: world
+
+    # Start with saw frame.
+    tool_link_name: saw
+
+    # Keep zero first.
+    # Later adjust if tool-X is not the feed direction.
+    tool_frame_roll: 0.0
+    tool_frame_pitch: 0.0
+    tool_frame_yaw: 0.0
+
+    # For first test, make this small.
+    # If you command the target manually while cutting and override is always 1,
+    # increase this slightly later.
+    target_override_threshold: 0.03
+
+    # First test: ONLY feed-axis compliance.
+    # Do not enable Y/Z yet.
+    axis_enable_x: 1.0
+    axis_enable_y: 0.0
+    axis_enable_z: 0.0
+
+    # Tool-X / feed axis
+    # Very safe: high damping, small displacement, slow velocity.
+    mass_x: 8.0
+    damping_x: 80.0
+    stiffness_x: 80.0
+    force_ref_x: 0.0
+    force_limit_x: 0.5
+    displacement_limit_x: 0.010
+    velocity_limit_x: 0.020
+
+    # Tool-Y / lateral axis disabled
+    mass_y: 8.0
+    damping_y: 120.0
+    stiffness_y: 200.0
+    force_ref_y: 0.0
+    force_limit_y: 0.5
+    displacement_limit_y: 0.003
+    velocity_limit_y: 0.010
+
+    # Tool-Z / normal axis disabled
+    mass_z: 8.0
+    damping_z: 120.0
+    stiffness_z: 200.0
+    force_ref_z: 0.0
+    force_limit_z: 0.5
+    displacement_limit_z: 0.003
+    velocity_limit_z: 0.010
+
+    # Strong smoothing for first test.
+    force_lpf_alpha: 0.1

@@ -92,12 +92,28 @@ void GimbalrotorImpedanceController::initialize(
       navigator,
       ctrl_loop_rate);
 
-  gimbalrotor_robot_model_for_impedance_ =
-      boost::dynamic_pointer_cast<GimbalrotorRobotModel>(robot_model);
+  /*
+   * Explicitly cast to GimbalrotorMultilinkRobotModel.
+   *
+   * The robot_model is passed as base class:
+   *   boost::shared_ptr<aerial_robot_model::RobotModel>
+   *
+   * But the actual plugin should be:
+   *   gimbalrotor_multilink_robot_model
+   *
+   * This cast confirms that.
+   */
+  gimbalrotor_multilink_robot_model_for_impedance_ =
+      boost::dynamic_pointer_cast<GimbalrotorMultilinkRobotModel>(robot_model);
 
-  if(!gimbalrotor_robot_model_for_impedance_)
+  if(!gimbalrotor_multilink_robot_model_for_impedance_)
     {
-      ROS_ERROR("[GimbalrotorImpedanceController] Failed to cast robot_model to GimbalrotorRobotModel.");
+      ROS_ERROR("[GimbalrotorImpedanceController] Failed to cast robot_model to GimbalrotorMultilinkRobotModel.");
+      ROS_ERROR("[GimbalrotorImpedanceController] Check robot_model_plugin_name. It should be gimbalrotor_multilink_robot_model.");
+    }
+  else
+    {
+      ROS_INFO("[GimbalrotorImpedanceController] Using GimbalrotorMultilinkRobotModel.");
     }
 
   rosParamInit();
@@ -487,7 +503,7 @@ void GimbalrotorImpedanceController::controlCore()
       R_world_tool * dx_tool_;
 
   /*
-   * Correct desired behavior:
+   * Desired behavior:
    *
    *   target_command = live_normal_target + impedance_offset
    *
@@ -584,16 +600,25 @@ Eigen::Vector3d GimbalrotorImpedanceController::tfToEigenVector(
 bool GimbalrotorImpedanceController::getToolRotationWorld(
     Eigen::Matrix3d& R_world_tool)
 {
-  if(!gimbalrotor_robot_model_for_impedance_)
+  if(!gimbalrotor_multilink_robot_model_for_impedance_)
     {
+      ROS_ERROR_THROTTLE(
+          1.0,
+          "[GimbalrotorImpedanceController] Multilink robot model pointer is null.");
       return false;
     }
 
+  /*
+   * Current joint positions.
+   *
+   * This includes pitch_joint / other movable body joints
+   * because the loaded robot model is GimbalrotorMultilinkRobotModel.
+   */
   const KDL::JntArray joint_positions =
-      gimbalrotor_robot_model_for_impedance_->getJointPositions();
+      gimbalrotor_multilink_robot_model_for_impedance_->getJointPositions();
 
   KDL::TreeFkSolverPos_recursive fk_solver(
-      gimbalrotor_robot_model_for_impedance_->getTree());
+      gimbalrotor_multilink_robot_model_for_impedance_->getTree());
 
   /*
    * FK to baselink.
@@ -604,7 +629,7 @@ bool GimbalrotorImpedanceController::getToolRotationWorld(
       fk_solver.JntToCart(
           joint_positions,
           f_baselink,
-          gimbalrotor_robot_model_for_impedance_->getBaselinkName());
+          gimbalrotor_multilink_robot_model_for_impedance_->getBaselinkName());
 
   if(base_result < 0)
     {
@@ -619,6 +644,10 @@ bool GimbalrotorImpedanceController::getToolRotationWorld(
    *
    * Default:
    *   tool_link_name = saw
+   *
+   * You can also use:
+   *   hand_assem_link
+   * if you want the compliance frame attached to hand assembly.
    */
   KDL::Frame f_tool;
 
@@ -639,15 +668,21 @@ bool GimbalrotorImpedanceController::getToolRotationWorld(
 
   /*
    * Construct CoG frame rotation.
+   *
+   * Same logic as your gimbalrotor/multilink robot model:
+   *
+   *   R_world_cog = R_world_baselink * R_cog_desired^-1
    */
   const KDL::Rotation cog_frame =
       f_baselink.M
-      * gimbalrotor_robot_model_for_impedance_
+      * gimbalrotor_multilink_robot_model_for_impedance_
             ->getCogDesireOrientation<KDL::Rotation>()
             .Inverse();
 
   /*
    * Rotation from CoG to tool link.
+   *
+   *   R_cog_tool = R_world_cog^-1 * R_world_tool_link
    */
   const KDL::Rotation R_cog_tool_kdl =
       cog_frame.Inverse() * f_tool.M;
@@ -661,7 +696,12 @@ bool GimbalrotorImpedanceController::getToolRotationWorld(
   /*
    * Optional fixed correction:
    *
-   * tool link frame -> desired cutting tool frame
+   *   tool link frame -> desired cutting tool frame
+   *
+   * Desired convention:
+   *   X_tool = cutting feed direction
+   *   Y_tool = lateral direction
+   *   Z_tool = blade normal direction
    */
   const Eigen::Matrix3d R_toollink_tool =
       rpyToRot(tool_frame_roll_,
@@ -678,6 +718,11 @@ bool GimbalrotorImpedanceController::getToolRotationWorld(
   Eigen::Matrix3d R_world_cog;
   tf::matrixTFToEigen(R_world_cog_tf, R_world_cog);
 
+  /*
+   * Final tool frame rotation in world:
+   *
+   *   R_world_tool = R_world_cog * R_cog_tool_link * R_toollink_tool
+   */
   R_world_tool =
       R_world_cog
       * R_cog_tool

@@ -3,7 +3,7 @@
 #pragma once
 
 #include <gimbalrotor/control/gimbalrotor_multilink_controller.h>
-#include <gimbalrotor/model/gimbalrotor_robot_model.h>
+#include <gimbalrotor/model/gimbalrotor_multilink_robot_model.h>
 
 #include <ros/ros.h>
 
@@ -68,7 +68,15 @@ private:
   ros::Subscriber external_wrench_sub_;
   ros::Subscriber is_cutting_sub_;
 
-  boost::shared_ptr<GimbalrotorRobotModel> gimbalrotor_robot_model_for_impedance_;
+  /*
+   * Multilink robot model pointer.
+   *
+   * This controller is specifically for:
+   *   gimbalrotor + pitch_joint / saw / multilink body
+   *
+   * Therefore we explicitly require GimbalrotorMultilinkRobotModel.
+   */
+  boost::shared_ptr<GimbalrotorMultilinkRobotModel> gimbalrotor_multilink_robot_model_for_impedance_;
 
   bool use_impedance_;
 
@@ -112,7 +120,7 @@ private:
   /*
    * World-frame offset memory.
    *
-   * This is the important anti-drift part.
+   * This prevents target drift while still allowing live motion commands.
    *
    * Each cycle:
    *   current_nav_target may already include previous impedance offset.
@@ -129,7 +137,7 @@ private:
 
   /*
    * If current navigator target differs from previous modified target by more
-   * than this value, we assume an external navigation command updated the target.
+   * than this value, assume an external navigation command updated the target.
    *
    * Then we do NOT subtract prev_dx_world_.
    */
