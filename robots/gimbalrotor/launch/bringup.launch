@@ -104,5 +104,11 @@
   <param name="handOpenFlag_0" value="true" />
   <param name="handOpenFlag_1" value="true" />
   <!-- <rosparam file="$(arg config_dir)/HandFlag.yaml" command="load" /> -->
+
+  ######### Wall model #########
+  <group if="$(eval arg('simulation'))">
+    <param name="opening/robot_description" command="$(find xacro)/xacro $(find gimbalrotor)/urdf/wall.urdf" />
+    <node pkg="gazebo_ros" type="spawn_model" name="valve_spawn" args="-param opening/robot_description -urdf -x 2.5 -y 0 -z 5 -model opening" />
+  </group>
   
 </launch>

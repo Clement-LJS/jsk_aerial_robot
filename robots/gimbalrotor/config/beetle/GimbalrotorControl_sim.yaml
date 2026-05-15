@@ -1,4 +1,4 @@
-aerial_robot_control_name: aerial_robot_control/gimbalrotor_controller
+aerial_robot_control_name: aerial_robot_control/gimbalrotor_impedance_controller
 
 controller:
   torque_allocation_matrix_inv_pub_interval: 0.05
@@ -61,3 +61,55 @@ controller:
     limit_d: 20.0
 
     need_d_control: true
+
+  impedance:
+    use_impedance: true
+
+    external_wrench_topic: estimated_external_wrench
+    is_cutting_topic: isCutting
+
+    external_wrench_frame: world
+
+    tool_link_name: saw
+
+    tool_frame_roll: 0.0
+    tool_frame_pitch: 0.0
+    tool_frame_yaw: 0.0
+
+    # If your navigation command jumps by more than this,
+    # controller assumes the user sent a new target.
+    target_override_threshold: 0.05
+
+    # Start safely: only feed-axis compliance.
+    axis_enable_x: 1.0
+    axis_enable_y: 0.0
+    axis_enable_z: 0.0
+
+    mass_x: 5.0
+    damping_x: 40.0
+    stiffness_x: 30.0
+    force_ref_x: 0.0
+    force_limit_x: 1.0
+    displacement_limit_x: 0.03
+    velocity_limit_x: 0.05
+
+    # unused while axis y/z disabled, but keep valid
+    mass_y: 5.0
+    damping_y: 80.0
+    stiffness_y: 150.0
+    force_ref_y: 0.0
+    force_limit_y: 1.0
+    displacement_limit_y: 0.005
+    velocity_limit_y: 0.02
+
+    mass_z: 5.0
+    damping_z: 80.0
+    stiffness_z: 150.0
+    force_ref_z: 0.0
+    force_limit_z: 1.0
+    displacement_limit_z: 0.005
+    velocity_limit_z: 0.02
+
+    force_lpf_alpha: 0.2
+
+
