@@ -22,7 +22,19 @@ GimbalrotorMultilinkNavigator::GimbalrotorMultilinkNavigator():
   eq_cog_world_(false),
   keep_hand_horizontal_(true),
   level_flag_(false),
-  landing_or_halt_mode_(false)
+  landing_or_halt_mode_(false),
+
+  /*
+   * New parameters.
+   *
+   * These prevent the pitch joint / hand link from moving much faster
+   * than the aerial body can follow.
+   */
+  pitch_joint_max_velocity_(0.25),
+  pitch_joint_lpf_rate_(0.2),
+  pitch_joint_use_estimated_body_pitch_(false),
+  prev_pitch_joint_cmd_(0.0),
+  prev_pitch_joint_cmd_initialized_(false)
 {
   curr_target_baselink_rot_.setRPY(0, 0, 0);
   final_target_baselink_rot_.setRPY(0, 0, 0);
@@ -36,17 +48,30 @@ void GimbalrotorMultilinkNavigator::initialize(
     double loop_du)
 {
   BaseNavigator::initialize(nh, nhp, robot_model, estimator, loop_du);
+
   target_baselink_rpy_pub_ = nh_.advertise<spinal::DesireCoord>("desire_coordinate", 1);
   joint_control_pub_ = nh_.advertise<sensor_msgs::JointState>("joints_ctrl", 1);
 
-  final_target_baselink_rot_sub_ = nh_.subscribe("final_target_baselink_rot", 1, &GimbalrotorMultilinkNavigator::targetBaselinkRotCallback, this);
+  final_target_baselink_rot_sub_ = nh_.subscribe("final_target_baselink_rot",
+                                                 1,
+                                                 &GimbalrotorMultilinkNavigator::targetBaselinkRotCallback,
+                                                 this);
 
-  final_target_baselink_rpy_sub_ = nh_.subscribe("final_target_baselink_rpy", 1, &GimbalrotorMultilinkNavigator::targetBaselinkRPYCallback, this);
+  final_target_baselink_rpy_sub_ = nh_.subscribe("final_target_baselink_rpy",
+                                                 1,
+                                                 &GimbalrotorMultilinkNavigator::targetBaselinkRPYCallback,
+                                                 this);
 
   prev_rotation_stamp_ = ros::Time::now().toSec();
   prev_joint_stamp_ = ros::Time::now().toSec();
 
-  /*Takeoff / initialization: pitch joint should start from zero.*/
+  /*
+   * Takeoff / initialization:
+   * pitch joint should start from safe zero or configured takeoff angle.
+   */
+  prev_pitch_joint_cmd_ = takeoff_pitch_joint_angle_;
+  prev_pitch_joint_cmd_initialized_ = true;
+
   publishPitchJointCommand(takeoff_pitch_joint_angle_);
 }
 
@@ -76,7 +101,15 @@ void GimbalrotorMultilinkNavigator::reset()
   tf::quaternionTFToKDL(curr_target_baselink_rot_, rot);
   robot_model_->setCogDesireOrientation(rot);
 
-  /*Reset returns the transformable part to safe zero angle.*/
+  /*
+   * Reset pitch joint command filter memory.
+   */
+  prev_pitch_joint_cmd_ = takeoff_pitch_joint_angle_;
+  prev_pitch_joint_cmd_initialized_ = true;
+
+  /*
+   * Reset returns the transformable part to safe zero angle.
+   */
   publishPitchJointCommand(takeoff_pitch_joint_angle_);
 }
 
@@ -96,6 +129,9 @@ void GimbalrotorMultilinkNavigator::halt()
 
   target_omega_.setValue(0, 0, 0);
 
+  prev_pitch_joint_cmd_ = landing_pitch_joint_angle_;
+  prev_pitch_joint_cmd_initialized_ = true;
+
   publishPitchJointCommand(landing_pitch_joint_angle_);
 
   ROS_INFO("[GimbalrotorMultilinkNavigator] halt: force pitch joint to zero and stop transformable motion.");
@@ -104,13 +140,19 @@ void GimbalrotorMultilinkNavigator::halt()
 void GimbalrotorMultilinkNavigator::targetBaselinkRotCallback(
     const geometry_msgs::QuaternionStampedConstPtr& msg)
 {
-  /*Receive desired MAIN BODY orientation as quaternion.*/
+  /*
+   * Receive desired MAIN BODY orientation as quaternion.
+   */
   tf::quaternionMsgToTF(msg->quaternion, final_target_baselink_rot_);
 
-  /*Static attitude command, so target angular velocity is zero.*/
+  /*
+   * Static attitude command, so target angular velocity is zero.
+   */
   target_omega_.setValue(0, 0, 0);
 
-  /*Same special yaw handling as original gimbalrotor navigator.*/
+  /*
+   * Same special yaw handling as original gimbalrotor navigator.
+   */
   if(getTargetRPY().z() != 0)
     {
       curr_target_baselink_rot_.setRPY(0, 0, getTargetRPY().z());
@@ -132,7 +174,9 @@ void GimbalrotorMultilinkNavigator::targetBaselinkRPYCallback(
                                     msg->vector.y,
                                     msg->vector.z);
 
-  /*Static attitude command, so target angular velocity is zero.*/
+  /*
+   * Static attitude command, so target angular velocity is zero.
+   */
   target_omega_.setValue(0, 0, 0);
 }
 
@@ -183,10 +227,13 @@ void GimbalrotorMultilinkNavigator::baselinkRotationProcess()
 
       if(angle > M_PI) angle -= 2 * M_PI;
 
-      /*Limit rotation step to avoid sudden attitude command jump.*/
+      /*
+       * Limit rotation step to avoid sudden attitude command jump.
+       */
       if(fabs(angle) > baselink_rot_change_thresh_)
         {
-          curr_target_baselink_rot_ *= tf::Quaternion(delta_q.getAxis(), fabs(angle) / angle * baselink_rot_change_thresh_);
+          curr_target_baselink_rot_ *= tf::Quaternion(delta_q.getAxis(),
+                                                      fabs(angle) / angle * baselink_rot_change_thresh_);
         }
       else
         {
@@ -216,28 +263,134 @@ void GimbalrotorMultilinkNavigator::pitchLinkCompensationProcess()
 {
   if(!keep_hand_horizontal_) return;
 
-  /*During landing or halt, compensation must stop. Otherwise the pitch joint may continue moving according to body pitch.*/
+  /*
+   * During landing or halt, compensation must stop.
+   * Otherwise the pitch joint may continue moving according to body pitch.
+   */
   if(landing_or_halt_mode_) return;
 
-  if(ros::Time::now().toSec() - prev_joint_stamp_ < joint_cmd_pub_interval_)
+  const double now = ros::Time::now().toSec();
+  const double dt = now - prev_joint_stamp_;
+
+  if(dt < joint_cmd_pub_interval_)
     {
       return;
     }
 
-  /*Extract current commanded MAIN BODY pitch.*/
-  double body_roll, body_pitch, body_yaw;
-  tf::Matrix3x3(curr_target_baselink_rot_).getRPY(body_roll,
-                                                  body_pitch,
-                                                  body_yaw);
+  /*
+   * Get body pitch.
+   *
+   * Old behavior:
+   *   Use curr_target_baselink_rot_, which is the commanded target body attitude.
+   *
+   * Problem:
+   *   The pitch joint servo can move immediately according to the target,
+   *   while the real drone body attitude is still lagging behind.
+   *
+   * New behavior:
+   *   Optionally use estimated actual body attitude.
+   *   This makes the hand compensate the real current body pitch.
+   */
+  double body_roll = 0.0;
+  double body_pitch = 0.0;
+  double body_yaw = 0.0;
+
+  if(pitch_joint_use_estimated_body_pitch_)
+    {
+      tf::Matrix3x3 actual_body_rot = estimator_->getOrientation(Frame::COG, estimate_mode_);
+      actual_body_rot.getRPY(body_roll, body_pitch, body_yaw);
+    }
+  else
+    {
+      tf::Matrix3x3(curr_target_baselink_rot_).getRPY(body_roll,
+                                                      body_pitch,
+                                                      body_yaw);
+    }
 
   /*
-   * Compensation idea: hand_world_pitch = body_pitch + pitch_joint_angle
-   * To keep hand horizontal: hand_world_pitch = 0
-   * Therefore: pitch_joint_angle = -body_pitch
+   * Compensation idea:
+   *
+   *   hand_world_pitch = body_pitch + pitch_joint_angle
+   *
+   * To keep hand horizontal:
+   *
+   *   hand_world_pitch = 0
+   *
+   * Therefore:
+   *
+   *   pitch_joint_angle = -body_pitch
+   *
    * But sign depends on your URDF joint axis.
+   * If the hand tilts in the wrong direction, set:
+   *
+   *   pitch_joint_compensation_sign: -1.0
    */
-  double pitch_joint_cmd = pitch_joint_compensation_sign_ * body_pitch + pitch_joint_offset_;
+  double raw_pitch_joint_cmd =
+      pitch_joint_compensation_sign_ * body_pitch + pitch_joint_offset_;
 
+  /*
+   * Apply joint limit.
+   */
+  if(raw_pitch_joint_cmd > pitch_joint_limit_)
+    {
+      raw_pitch_joint_cmd = pitch_joint_limit_;
+    }
+  else if(raw_pitch_joint_cmd < -pitch_joint_limit_)
+    {
+      raw_pitch_joint_cmd = -pitch_joint_limit_;
+    }
+
+  /*
+   * Initialize command memory.
+   */
+  if(!prev_pitch_joint_cmd_initialized_)
+    {
+      prev_pitch_joint_cmd_ = getCurrentPitchJointPosition();
+      prev_pitch_joint_cmd_initialized_ = true;
+    }
+
+  /*
+   * Low-pass filter.
+   *
+   * filtered_cmd =
+   *   previous_cmd + alpha * (raw_cmd - previous_cmd)
+   *
+   * alpha small  -> smoother/slower
+   * alpha large  -> faster
+   */
+  double filtered_pitch_joint_cmd =
+      prev_pitch_joint_cmd_
+      + pitch_joint_lpf_rate_ * (raw_pitch_joint_cmd - prev_pitch_joint_cmd_);
+
+  /*
+   * Velocity / rate limit.
+   *
+   * This is the most important part for your problem.
+   * It prevents the hand servo command from moving faster than the drone body.
+   */
+  double max_step = pitch_joint_max_velocity_ * dt;
+
+  if(max_step < 0.0)
+    {
+      max_step = 0.0;
+    }
+
+  double diff = filtered_pitch_joint_cmd - prev_pitch_joint_cmd_;
+
+  if(diff > max_step)
+    {
+      diff = max_step;
+    }
+  else if(diff < -max_step)
+    {
+      diff = -max_step;
+    }
+
+  double pitch_joint_cmd = prev_pitch_joint_cmd_ + diff;
+
+  /*
+   * Apply joint limit again after filtering/rate limiting.
+   */
   if(pitch_joint_cmd > pitch_joint_limit_)
     {
       pitch_joint_cmd = pitch_joint_limit_;
@@ -249,18 +402,30 @@ void GimbalrotorMultilinkNavigator::pitchLinkCompensationProcess()
 
   publishPitchJointCommand(pitch_joint_cmd);
 
-  prev_joint_stamp_ = ros::Time::now().toSec();
+  prev_pitch_joint_cmd_ = pitch_joint_cmd;
+  prev_joint_stamp_ = now;
+
+  ROS_DEBUG_STREAM_THROTTLE(
+      0.5,
+      "[GimbalrotorMultilinkNavigator] pitch compensation"
+      << " use_estimated: " << pitch_joint_use_estimated_body_pitch_
+      << " body_pitch: " << body_pitch
+      << " raw_cmd: " << raw_pitch_joint_cmd
+      << " filtered_cmd: " << filtered_pitch_joint_cmd
+      << " final_cmd: " << pitch_joint_cmd
+      << " dt: " << dt);
 }
 
 void GimbalrotorMultilinkNavigator::landingProcess()
 {
   /*
    * When landing / force landing starts:
-   *   1. Stop target angular velocity.
-   *   2. Stop pitch compensation.
-   *   3. Force pitch joint to zero.
-   *   4. Make main body target level.
-   *   5. Let the existing LAND_STATE / FORCE_LANDING_STATE continue.
+   *
+   * 1. Stop target angular velocity.
+   * 2. Stop pitch compensation.
+   * 3. Force pitch joint to zero.
+   * 4. Make main body target level.
+   * 5. Let the existing LAND_STATE / FORCE_LANDING_STATE continue.
    */
 
   const bool landing =
@@ -278,10 +443,18 @@ void GimbalrotorMultilinkNavigator::landingProcess()
         {
           ROS_INFO("[GimbalrotorMultilinkNavigator] landing: force pitch joint to zero and stop transformable compensation.");
 
-          /*Force pitch joint / hand to zero.*/
+          /*
+           * Force pitch joint / hand to zero.
+           */
+          prev_pitch_joint_cmd_ = landing_pitch_joint_angle_;
+          prev_pitch_joint_cmd_initialized_ = true;
+
           publishPitchJointCommand(landing_pitch_joint_angle_);
 
-          /*Make main body attitude target level. Keep yaw, remove roll and pitch.*/
+          /*
+           * Make main body attitude target level.
+           * Keep yaw, remove roll and pitch.
+           */
           double r, p, y;
           tf::Matrix3x3(curr_target_baselink_rot_).getRPY(r, p, y);
 
@@ -291,9 +464,15 @@ void GimbalrotorMultilinkNavigator::landingProcess()
         }
       else
         {
-          /*Keep publishing zero pitch-joint command while landing. This makes sure the transformable joint does not stop halfway.*/
+          /*
+           * Keep publishing zero pitch-joint command while landing.
+           * This makes sure the transformable joint does not stop halfway.
+           */
           if(ros::Time::now().toSec() - prev_joint_stamp_ > joint_cmd_pub_interval_)
             {
+              prev_pitch_joint_cmd_ = landing_pitch_joint_angle_;
+              prev_pitch_joint_cmd_initialized_ = true;
+
               publishPitchJointCommand(landing_pitch_joint_angle_);
               prev_joint_stamp_ = ros::Time::now().toSec();
             }
@@ -305,6 +484,7 @@ void GimbalrotorMultilinkNavigator::landingProcess()
         {
           ROS_DEBUG("[GimbalrotorMultilinkNavigator] pitch joint is near landing angle.");
         }
+
       return;
     }
 
@@ -372,9 +552,49 @@ void GimbalrotorMultilinkNavigator::rosParamInit()
   getParam<double>(navi_nh, "landing_pitch_joint_angle", landing_pitch_joint_angle_, 0.0);
   getParam<double>(navi_nh, "pitch_joint_land_thresh", pitch_joint_land_thresh_, 0.085);
   getParam<bool>(navi_nh, "keep_hand_horizontal", keep_hand_horizontal_, true);
+
+  /*
+   * New parameters for smooth pitch joint transformation.
+   */
+  getParam<double>(navi_nh, "pitch_joint_max_velocity", pitch_joint_max_velocity_, 0.25);
+  getParam<double>(navi_nh, "pitch_joint_lpf_rate", pitch_joint_lpf_rate_, 0.2);
+  getParam<bool>(navi_nh, "pitch_joint_use_estimated_body_pitch", pitch_joint_use_estimated_body_pitch_, false);
+
+  /*
+   * Safety clamp.
+   */
+  if(pitch_joint_max_velocity_ < 0.0)
+    {
+      pitch_joint_max_velocity_ = 0.0;
+    }
+
+  if(pitch_joint_lpf_rate_ < 0.0)
+    {
+      pitch_joint_lpf_rate_ = 0.0;
+    }
+
+  if(pitch_joint_lpf_rate_ > 1.0)
+    {
+      pitch_joint_lpf_rate_ = 1.0;
+    }
+
+  ROS_INFO_STREAM("[GimbalrotorMultilinkNavigator] baselink_rot_change_thresh: "
+                  << baselink_rot_change_thresh_);
+  ROS_INFO_STREAM("[GimbalrotorMultilinkNavigator] baselink_rot_pub_interval: "
+                  << baselink_rot_pub_interval_);
+  ROS_INFO_STREAM("[GimbalrotorMultilinkNavigator] joint_cmd_pub_interval: "
+                  << joint_cmd_pub_interval_);
+  ROS_INFO_STREAM("[GimbalrotorMultilinkNavigator] pitch_joint_max_velocity: "
+                  << pitch_joint_max_velocity_);
+  ROS_INFO_STREAM("[GimbalrotorMultilinkNavigator] pitch_joint_lpf_rate: "
+                  << pitch_joint_lpf_rate_);
+  ROS_INFO_STREAM("[GimbalrotorMultilinkNavigator] pitch_joint_use_estimated_body_pitch: "
+                  << pitch_joint_use_estimated_body_pitch_);
 }
 
-/* plugin registration */
+/*
+ * Plugin registration
+ */
 #include <pluginlib/class_list_macros.h>
 PLUGINLIB_EXPORT_CLASS(aerial_robot_navigation::GimbalrotorMultilinkNavigator,
                        aerial_robot_navigation::BaseNavigator);

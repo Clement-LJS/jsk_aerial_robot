@@ -31,8 +31,8 @@ navigation:
   gps_waypoint_check_du: 1.0
 
   # desire tilt
-  baselink_rot_pub_interval: 0.2
-  baselink_rot_change_thresh: 1.0 # 0.2 hz -> 0.04; 0.01 hz-> 0.02
+  baselink_rot_pub_interval: 0.1
+  baselink_rot_change_thresh: 0.02 #1.0 # 0.2 hz -> 0.04; 0.01 hz-> 0.02
 
 
   # gimbalrotor_multilink related	 
@@ -60,3 +60,21 @@ navigation:
 
   # Enable automatic hand-horizontal compensation.
   keep_hand_horizontal: true
+
+  # ================================
+  # New parameters
+  # ================================
+
+  # Limit how fast the pitch joint command can change.
+  # This prevents the hand servo from moving much faster than the drone body.
+  pitch_joint_max_velocity: 0.25   # [rad/s] start slow, tune later
+
+  # Low-pass filter for pitch joint command.
+  # 0.0 = do not move, 1.0 = no filtering.
+  # Start with 0.15 ~ 0.30.
+  pitch_joint_lpf_rate: 0.2
+
+  # If true, use estimated actual body pitch.
+  # If false, use commanded target body pitch.
+  # Recommended first test: true.
+  pitch_joint_use_estimated_body_pitch: false

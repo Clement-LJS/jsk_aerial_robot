@@ -80,6 +80,29 @@ protected:
   bool keep_hand_horizontal_;
   bool level_flag_;
   bool landing_or_halt_mode_;
+
+  /*
+   * New parameters for smooth pitch joint transformation.
+   *
+   * Problem:
+   *   The pitch joint servo can physically move faster than the aerial body.
+   *   If we command the pitch joint directly from the body pitch target,
+   *   the hand link transforms first and the drone body lags behind.
+   *
+   * Solution:
+   *   1. Limit pitch joint command velocity.
+   *   2. Low-pass filter the pitch joint command.
+   *   3. Optionally use estimated actual body pitch instead of target body pitch.
+   */
+  double pitch_joint_max_velocity_;              // [rad/s]
+  double pitch_joint_lpf_rate_;                  // [0.0, 1.0]
+  bool pitch_joint_use_estimated_body_pitch_;
+
+  /*
+   * Internal memory for pitch joint command filtering / rate limiting.
+   */
+  double prev_pitch_joint_cmd_;
+  bool prev_pitch_joint_cmd_initialized_;
 };
 
 } // namespace aerial_robot_navigation
