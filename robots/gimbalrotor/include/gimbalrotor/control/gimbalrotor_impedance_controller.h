@@ -9,6 +9,10 @@
 
 #include <geometry_msgs/WrenchStamped.h>
 #include <std_msgs/Bool.h>
+#include <std_msgs/Float64.h>
+#include <std_msgs/UInt8.h>
+
+#include <cstdint>
 
 #include <Eigen/Dense>
 
@@ -30,6 +34,15 @@ namespace aerial_robot_control
 class GimbalrotorImpedanceController : public GimbalrotorMultilinkController
 {
 public:
+
+  enum InteractionMode : uint8_t
+  {
+    NORMAL_FLIGHT = 0,
+    PERCH_COMPLIANCE = 1,
+    PERCHED = 2,
+    CUTTING_COMPLIANCE = 3
+  };
+  
   GimbalrotorImpedanceController();
 
   void initialize(
@@ -51,6 +64,8 @@ private:
   void externalWrenchCallback(const geometry_msgs::WrenchStamped::ConstPtr& msg);
   void isCuttingCallback(const std_msgs::Bool::ConstPtr& msg);
 
+  void interactionModeCallback(const std_msgs::UInt8::ConstPtr& msg);
+  
   bool getToolRotationWorld(Eigen::Matrix3d& R_world_tool);
   Eigen::Matrix3d rpyToRot(double roll, double pitch, double yaw) const;
 
@@ -68,7 +83,10 @@ private:
 private:
   ros::Subscriber external_wrench_sub_;
   ros::Subscriber is_cutting_sub_;
+  ros::Subscriber interaction_mode_sub_;
 
+  ros::Publisher pitch_joint_compliance_offset_pub_;
+  
   /*
    * Multilink robot model pointer.
    *
@@ -80,6 +98,10 @@ private:
   boost::shared_ptr<GimbalrotorMultilinkRobotModel> gimbalrotor_multilink_robot_model_for_impedance_;
 
   bool use_impedance_;
+
+  uint8_t interaction_mode_;
+  std::string interaction_mode_topic_;
+  std::string pitch_joint_compliance_offset_topic_;
 
   /*
    * isCutting meaning:

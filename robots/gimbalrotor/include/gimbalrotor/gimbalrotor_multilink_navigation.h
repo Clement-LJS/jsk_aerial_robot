@@ -11,7 +11,11 @@
 #include <geometry_msgs/QuaternionStamped.h>
 #include <geometry_msgs/Vector3Stamped.h>
 #include <sensor_msgs/JointState.h>
+#include <std_msgs/Float64.h>
+#include <std_msgs/UInt8.h>
 #include <spinal/DesireCoord.h>
+
+#include <cstdint>
 
 #include <tf/tf.h>
 #include <tf_conversions/tf_kdl.h>
@@ -24,6 +28,15 @@ namespace aerial_robot_navigation
 class GimbalrotorMultilinkNavigator : public BaseNavigator
 {
 public:
+
+  enum InteractionMode : uint8_t
+  {
+    NORMAL_FLIGHT = 0,
+    PERCH_COMPLIANCE = 1,
+    PERCHED = 2,
+    CUTTING_COMPLIANCE = 3
+  };
+  
   GimbalrotorMultilinkNavigator();
   virtual ~GimbalrotorMultilinkNavigator() = default;
 
@@ -44,6 +57,9 @@ protected:
   void targetBaselinkRotCallback(const geometry_msgs::QuaternionStampedConstPtr& msg);
   void targetBaselinkRPYCallback(const geometry_msgs::Vector3StampedConstPtr& msg);
 
+  void interactionModeCallback(const std_msgs::UInt8ConstPtr& msg);
+  void pitchJointComplianceOffsetCallback(const std_msgs::Float64ConstPtr& msg);
+  
   void baselinkRotationProcess();
   void pitchLinkCompensationProcess();
   void landingProcess();
@@ -57,6 +73,9 @@ protected:
   ros::Subscriber final_target_baselink_rot_sub_;
   ros::Subscriber final_target_baselink_rpy_sub_;
 
+  ros::Subscriber interaction_mode_sub_;
+  ros::Subscriber pitch_joint_compliance_offset_sub_;
+  
   tf::Quaternion curr_target_baselink_rot_;
   tf::Quaternion final_target_baselink_rot_;
 
@@ -103,6 +122,13 @@ protected:
    */
   double prev_pitch_joint_cmd_;
   bool prev_pitch_joint_cmd_initialized_;
+
+  uint8_t interaction_mode_;
+  double pitch_joint_compliance_offset_;
+  double pitch_joint_compliance_offset_limit_;
+  double branch_alignment_offset_;
+  double cutting_feed_offset_;
+  bool use_pitch_joint_compliance_in_cutting_;
 };
 
 } // namespace aerial_robot_navigation

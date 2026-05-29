@@ -65,6 +65,8 @@ controller:
     need_d_control: true
 
   impedance:
+    interaction_mode_topic: interaction_mode
+    pitch_joint_compliance_offset_topic: pitch_joint_compliance_offset
     use_impedance: true
 
     external_wrench_topic: estimated_external_wrench

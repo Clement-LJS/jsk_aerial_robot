@@ -34,7 +34,15 @@ GimbalrotorMultilinkNavigator::GimbalrotorMultilinkNavigator():
   pitch_joint_lpf_rate_(0.2),
   pitch_joint_use_estimated_body_pitch_(false),
   prev_pitch_joint_cmd_(0.0),
-  prev_pitch_joint_cmd_initialized_(false)
+  prev_pitch_joint_cmd_initialized_(false),
+
+  interaction_mode_(NORMAL_FLIGHT),
+  pitch_joint_compliance_offset_(0.0),
+  pitch_joint_compliance_offset_limit_(0.12),
+  branch_alignment_offset_(0.0),
+  cutting_feed_offset_(0.0),
+  use_pitch_joint_compliance_in_cutting_(true)
+
 {
   curr_target_baselink_rot_.setRPY(0, 0, 0);
   final_target_baselink_rot_.setRPY(0, 0, 0);
@@ -62,6 +70,21 @@ void GimbalrotorMultilinkNavigator::initialize(
                                                  &GimbalrotorMultilinkNavigator::targetBaselinkRPYCallback,
                                                  this);
 
+  interaction_mode_sub_ =
+    nh_.subscribe("interaction_mode",
+                  1,
+                  &GimbalrotorMultilinkNavigator::interactionModeCallback,
+                  this);
+
+  pitch_joint_compliance_offset_sub_ =
+    nh_.subscribe("pitch_joint_compliance_offset",
+                  1,
+                  &GimbalrotorMultilinkNavigator::pitchJointComplianceOffsetCallback,
+                  this);
+
+
+
+  
   prev_rotation_stamp_ = ros::Time::now().toSec();
   prev_joint_stamp_ = ros::Time::now().toSec();
 
@@ -94,6 +117,9 @@ void GimbalrotorMultilinkNavigator::reset()
   level_flag_ = false;
   landing_or_halt_mode_ = false;
 
+  interaction_mode_ = NORMAL_FLIGHT;
+  pitch_joint_compliance_offset_ = 0.0;
+  
   curr_target_baselink_rot_.setRPY(0, 0, 0);
   final_target_baselink_rot_.setRPY(0, 0, 0);
 
@@ -127,6 +153,9 @@ void GimbalrotorMultilinkNavigator::halt()
   landing_or_halt_mode_ = true;
   level_flag_ = true;
 
+  interaction_mode_ = NORMAL_FLIGHT;
+  pitch_joint_compliance_offset_ = 0.0;
+  
   target_omega_.setValue(0, 0, 0);
 
   prev_pitch_joint_cmd_ = landing_pitch_joint_angle_;
@@ -327,6 +356,17 @@ void GimbalrotorMultilinkNavigator::pitchLinkCompensationProcess()
    */
   double raw_pitch_joint_cmd =
       pitch_joint_compensation_sign_ * body_pitch + pitch_joint_offset_;
+
+  if(interaction_mode_ == CUTTING_COMPLIANCE)
+  {
+    raw_pitch_joint_cmd += branch_alignment_offset_;
+    raw_pitch_joint_cmd += cutting_feed_offset_;
+
+    if(use_pitch_joint_compliance_in_cutting_)
+      {
+        raw_pitch_joint_cmd += pitch_joint_compliance_offset_;
+      }
+  }
 
   /*
    * Apply joint limit.
@@ -530,6 +570,63 @@ double GimbalrotorMultilinkNavigator::getCurrentPitchJointPosition()
   return landing_pitch_joint_angle_;
 }
 
+void GimbalrotorMultilinkNavigator::interactionModeCallback(const std_msgs::UInt8ConstPtr& msg)
+{
+  if(msg->data > CUTTING_COMPLIANCE)
+    {
+      ROS_WARN_THROTTLE(
+          1.0,
+          "[GimbalrotorMultilinkNavigator] invalid interaction_mode: %u",
+          static_cast<unsigned int>(msg->data));
+      return;
+    }
+
+  const uint8_t prev_mode = interaction_mode_;
+  interaction_mode_ = msg->data;
+
+  /*
+   * If leaving cutting mode, remove pitch-joint compliance offset.
+   * This prevents old cutting compliance from remaining during flight/perching.
+   */
+
+  if(interaction_mode_ != CUTTING_COMPLIANCE)
+  {
+    pitch_joint_compliance_offset_ = 0.0;
+  }
+  
+  ROS_WARN_THROTTLE(
+      1.0,
+      "[GimbalrotorMultilinkNavigator] interaction_mode: %u",
+      static_cast<unsigned int>(interaction_mode_));
+}
+
+void GimbalrotorMultilinkNavigator::pitchJointComplianceOffsetCallback(
+    const std_msgs::Float64ConstPtr& msg)
+{
+  /*
+   * Ignore pitch-joint compliance unless cutting mode is active.
+   * During normal flight/perching, the hand must stay strictly horizontal.
+   */
+  if(interaction_mode_ != CUTTING_COMPLIANCE)
+    {
+      pitch_joint_compliance_offset_ = 0.0;
+      return;
+    }
+
+  double offset = msg->data;
+
+  if(offset > pitch_joint_compliance_offset_limit_)
+    {
+      offset = pitch_joint_compliance_offset_limit_;
+    }
+  else if(offset < -pitch_joint_compliance_offset_limit_)
+    {
+      offset = -pitch_joint_compliance_offset_limit_;
+    }
+
+  pitch_joint_compliance_offset_ = offset;
+}
+
 void GimbalrotorMultilinkNavigator::rosParamInit()
 {
   BaseNavigator::rosParamInit();
@@ -553,6 +650,11 @@ void GimbalrotorMultilinkNavigator::rosParamInit()
   getParam<double>(navi_nh, "pitch_joint_land_thresh", pitch_joint_land_thresh_, 0.085);
   getParam<bool>(navi_nh, "keep_hand_horizontal", keep_hand_horizontal_, true);
 
+  getParam<double>(navi_nh, "pitch_joint_compliance_offset_limit", pitch_joint_compliance_offset_limit_, 0.12);
+  getParam<double>(navi_nh, "branch_alignment_offset", branch_alignment_offset_, 0.0);
+  getParam<double>(navi_nh, "cutting_feed_offset", cutting_feed_offset_, 0.0);
+  getParam<bool>(navi_nh, "use_pitch_joint_compliance_in_cutting", use_pitch_joint_compliance_in_cutting_, true);
+  
   /*
    * New parameters for smooth pitch joint transformation.
    */
@@ -578,6 +680,29 @@ void GimbalrotorMultilinkNavigator::rosParamInit()
       pitch_joint_lpf_rate_ = 1.0;
     }
 
+  if(pitch_joint_compliance_offset_limit_ < 0.0)
+    {
+      pitch_joint_compliance_offset_limit_ = 0.0;
+    }
+
+  if(branch_alignment_offset_ > pitch_joint_limit_)
+    {
+      branch_alignment_offset_ = pitch_joint_limit_;
+    }
+  else if(branch_alignment_offset_ < -pitch_joint_limit_)
+    {
+      branch_alignment_offset_ = -pitch_joint_limit_;
+    }
+
+  if(cutting_feed_offset_ > pitch_joint_limit_)
+    {
+      cutting_feed_offset_ = pitch_joint_limit_;
+    }
+  else if(cutting_feed_offset_ < -pitch_joint_limit_)
+    {
+      cutting_feed_offset_ = -pitch_joint_limit_;
+    }
+  
   ROS_INFO_STREAM("[GimbalrotorMultilinkNavigator] baselink_rot_change_thresh: "
                   << baselink_rot_change_thresh_);
   ROS_INFO_STREAM("[GimbalrotorMultilinkNavigator] baselink_rot_pub_interval: "
@@ -590,6 +715,21 @@ void GimbalrotorMultilinkNavigator::rosParamInit()
                   << pitch_joint_lpf_rate_);
   ROS_INFO_STREAM("[GimbalrotorMultilinkNavigator] pitch_joint_use_estimated_body_pitch: "
                   << pitch_joint_use_estimated_body_pitch_);
+
+  ROS_INFO_STREAM("[GimbalrotorMultilinkNavigator] pitch_joint_compliance_offset_limit: "
+		  << pitch_joint_compliance_offset_limit_);
+  ROS_INFO_STREAM("[GimbalrotorMultilinkNavigator] branch_alignment_offset: "
+		  << branch_alignment_offset_);
+  ROS_INFO_STREAM("[GimbalrotorMultilinkNavigator] cutting_feed_offset: "
+		  << cutting_feed_offset_);
+  ROS_INFO_STREAM("[GimbalrotorMultilinkNavigator] use_pitch_joint_compliance_in_cutting: "
+		  << use_pitch_joint_compliance_in_cutting_);
+
+
+
+
+
+
 }
 
 /*
