@@ -57,6 +57,7 @@
 #include <tf2_ros/transform_broadcaster.h>
 #include <utility>
 #include <vector>
+#include <cmath>
 
 using namespace std;
 
@@ -252,14 +253,93 @@ namespace aerial_robot_estimation
       return tf::Matrix3x3::getIdentity();
     }
 
+    // void setOrientation(int frame, int estimate_mode, tf::Matrix3x3 rot)
+    // {
+    //   boost::lock_guard<boost::mutex> lock(state_mutex_);
+
+    //   if(frame == Frame::COG)
+    //     cog_rots_.at(estimate_mode) = rot;
+    //   else if(frame == Frame::BASELINK)
+    //     base_rots_.at(estimate_mode) = rot;
+    // }
+
     void setOrientation(int frame, int estimate_mode, tf::Matrix3x3 rot)
     {
       boost::lock_guard<boost::mutex> lock(state_mutex_);
 
+      if(frame != Frame::COG && frame != Frame::BASELINK)
+        return;
+
+      if(estimate_mode != EGOMOTION_ESTIMATE &&
+        estimate_mode != EXPERIMENT_ESTIMATE &&
+        estimate_mode != GROUND_TRUTH)
+        return;
+
+      /* Normalize candidate rotation. Matrix3x3 can drift numerically, so convert to quaternion and normalize.*/
+      tf::Quaternion q_candidate;
+      rot.getRotation(q_candidate);
+
+      if(!std::isfinite(q_candidate.x()) ||
+        !std::isfinite(q_candidate.y()) ||
+        !std::isfinite(q_candidate.z()) ||
+        !std::isfinite(q_candidate.w()))
+        {
+          ROS_ERROR_THROTTLE(
+              0.1,
+              "[StateEstimator] reject non-finite orientation: frame=%d mode=%d",
+              frame, estimate_mode);
+          return;
+        }
+
+      q_candidate.normalize();
+      tf::Matrix3x3 candidate_rot(q_candidate);
+
+      /* First valid sample: accept and store it. */
+      if(!orientation_filter_initialized_[frame][estimate_mode])
+        {
+          orientation_filter_initialized_[frame][estimate_mode] = true;
+          prev_valid_orientation_[frame][estimate_mode] = candidate_rot;
+        }
+      else
+        {
+          const tf::Matrix3x3 prev_rot =
+              prev_valid_orientation_[frame][estimate_mode];
+
+          /* Rotation difference: R_delta = R_prev^{-1} * R_new 
+          If the robot is hovering, a one-cycle near-pi jump is impossible.*/
+          tf::Matrix3x3 delta_rot = prev_rot.inverse() * candidate_rot;
+
+          tf::Quaternion q_delta;
+          delta_rot.getRotation(q_delta);
+          q_delta.normalize();
+
+          double angle = q_delta.getAngle();
+
+          const double pi = 3.14159265358979323846;
+          
+          /* q and -q represent the same rotation. getAngle() can return an equivalent large angle. Keep the smaller representation. */
+          if(angle > pi)
+            angle = 2.0 * pi - angle;
+
+          if(reject_orientation_jump_ && angle > max_orientation_jump_)
+            {
+              ROS_ERROR_THROTTLE(
+                  0.1,
+                  "[StateEstimator] reject orientation jump: frame=%d mode=%d angle=%.3f rad",
+                  frame, estimate_mode, angle);
+
+              candidate_rot = prev_rot;
+            }
+          else
+            {
+              prev_valid_orientation_[frame][estimate_mode] = candidate_rot;
+            }
+        }
+
       if(frame == Frame::COG)
-        cog_rots_.at(estimate_mode) = rot;
+        cog_rots_.at(estimate_mode) = candidate_rot;
       else if(frame == Frame::BASELINK)
-        base_rots_.at(estimate_mode) = rot;
+        base_rots_.at(estimate_mode) = candidate_rot;
     }
 
     void setOrientationWxB(int frame, int estimate_mode, tf::Vector3 v);
@@ -516,5 +596,11 @@ namespace aerial_robot_estimation
 
     void statePublish(const ros::TimerEvent & e);
     void rosParamInit();
+
+    std::array<std::array<bool, 3>, 2> orientation_filter_initialized_;
+    std::array<std::array<tf::Matrix3x3, 3>, 2> prev_valid_orientation_;
+    bool reject_orientation_jump_;
+    double max_orientation_jump_;
+
   };
 };

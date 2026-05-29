@@ -9,6 +9,8 @@ controller:
   compensate_multilink_inertia: true
   inertia_dot_lpf_rate: 0.15
   nonlinear_ang_acc_limit: 5.0
+  allocation_damping: 0.03 
+  use_damped_pseudoinverse: false 
 
   xy:
     p_gain: 10.0

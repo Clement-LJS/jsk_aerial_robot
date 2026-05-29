@@ -102,7 +102,10 @@ namespace aerial_robot_control
     tf::Vector3 target_acc_, target_ang_acc_;
     tf::Vector3 rpy_, target_rpy_;
     tf::Vector3 omega_, target_omega_;
-
+    
+    tf::Vector3 prev_rpy_;
+    bool prev_rpy_initialized_;
+    
     std::mutex wrench_mutex_;
     boost::thread wrench_estimate_thread_;
     Eigen::VectorXd init_sum_momentum_;

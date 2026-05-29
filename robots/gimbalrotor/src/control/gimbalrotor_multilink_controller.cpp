@@ -5,6 +5,10 @@
 #include <std_msgs/Float32MultiArray.h>
 #include <pluginlib/class_list_macros.h>
 
+#include <std_msgs/Float64.h>
+#include <algorithm>
+#include <cmath>
+
 using namespace std;
 
 namespace aerial_robot_control
@@ -14,6 +18,8 @@ GimbalrotorMultilinkController::GimbalrotorMultilinkController():
   compensate_multilink_inertia_(true),
   inertia_dot_lpf_rate_(0.2),
   nonlinear_ang_acc_limit_(5.0),
+  use_damped_pseudoinverse_(false),
+  allocation_damping_(0.03),
   prev_inertia_initialized_(false),
   prev_inertia_stamp_(0.0)
 {
@@ -38,6 +44,9 @@ void GimbalrotorMultilinkController::initialize(
 
   /*Extra debug topic for multilink compensation.*/
   multilink_nonlinear_acc_pub_ = nh_.advertise<std_msgs::Float32MultiArray>("debug/multilink_nonlinear_ang_acc", 1);
+  allocation_condition_pub_ = nh_.advertise<std_msgs::Float64>("debug/allocation_condition", 1);
+  allocation_sigma_min_pub_ = nh_.advertise<std_msgs::Float64>("debug/allocation_sigma_min", 1);
+  allocation_sigma_max_pub_ = nh_.advertise<std_msgs::Float64>("debug/allocation_sigma_max", 1);
 
   ROS_INFO("[GimbalrotorMultilinkController] initialized.");
 }
@@ -66,6 +75,13 @@ void GimbalrotorMultilinkController::rosParamInit()
   getParam<bool>(control_nh, "compensate_multilink_inertia", compensate_multilink_inertia_, true);
   getParam<double>(control_nh, "inertia_dot_lpf_rate", inertia_dot_lpf_rate_, 0.2);
   getParam<double>(control_nh, "nonlinear_ang_acc_limit", nonlinear_ang_acc_limit_, 5.0);
+  getParam<bool>(control_nh, "use_damped_pseudoinverse", use_damped_pseudoinverse_, false);
+  getParam<double>(control_nh, "allocation_damping", allocation_damping_, 0.03);
+
+  if(allocation_damping_ < 0.0)
+  {
+    allocation_damping_ = 0.0;
+  }
 
   if(inertia_dot_lpf_rate_ < 0.0)
     {
@@ -85,6 +101,8 @@ void GimbalrotorMultilinkController::rosParamInit()
   ROS_INFO_STREAM("[GimbalrotorMultilinkController] compensate_multilink_inertia: " << compensate_multilink_inertia_);
   ROS_INFO_STREAM("[GimbalrotorMultilinkController] inertia_dot_lpf_rate: " << inertia_dot_lpf_rate_);
   ROS_INFO_STREAM("[GimbalrotorMultilinkController] nonlinear_ang_acc_limit: " << nonlinear_ang_acc_limit_);
+  ROS_INFO_STREAM("[GimbalrotorMultilinkController] use_damped_pseudoinverse: " << use_damped_pseudoinverse_);
+  ROS_INFO_STREAM("[GimbalrotorMultilinkController] allocation_damping: " << allocation_damping_);
 }
 
 Eigen::Vector3d GimbalrotorMultilinkController::limitVectorNorm(
@@ -166,6 +184,35 @@ Eigen::Vector3d GimbalrotorMultilinkController::calculateMultilinkNonlinearAngul
   Eigen::Vector3d nonlinear_ang_acc = inertia.inverse() * nonlinear_torque;
   nonlinear_ang_acc = limitVectorNorm(nonlinear_ang_acc, nonlinear_ang_acc_limit_);
   return nonlinear_ang_acc;
+}
+
+Eigen::MatrixXd GimbalrotorMultilinkController::dampedPseudoInverse(
+    const Eigen::MatrixXd& mat,
+    double damping) const
+{
+  if(mat.rows() == 0 || mat.cols() == 0)
+  {
+    return Eigen::MatrixXd();
+  }
+
+  /*
+   * Damped least-squares pseudoinverse:
+   *
+   * For A:
+   *   A# = A^T (A A^T + λ² I)^-1
+   *
+   * This is good when A has fewer rows than columns, which is common
+   * in allocation: fewer controlled axes, more actuator variables.
+   */
+  const double lambda = std::max(0.0, damping);
+
+  Eigen::MatrixXd identity = Eigen::MatrixXd::Identity(mat.rows(), mat.rows());
+
+  Eigen::MatrixXd regularized = mat * mat.transpose() + lambda * lambda * identity;
+
+  Eigen::MatrixXd regularized_inv = regularized.ldlt().solve(Eigen::MatrixXd::Identity(regularized.rows(), regularized.cols()));
+
+  return mat.transpose() * regularized_inv;
 }
 
 void GimbalrotorMultilinkController::controlCore()
@@ -417,8 +464,75 @@ void GimbalrotorMultilinkController::controlCore()
       integrated_map = integrated_map.bottomRows(4);
     }
 
+
+  /* Allocation singularity monitor. integrated_map maps virtual thrust components to desired acceleration/wrench. If sigma_min is very small, the allocation is near singular. */
+  Eigen::JacobiSVD<Eigen::MatrixXd> svd_monitor(integrated_map);
+  Eigen::VectorXd singular_values = svd_monitor.singularValues();
+
+  double sigma_min = 0.0;
+  double sigma_max = 0.0;
+  double allocation_condition = 1.0e9;
+
+  if(singular_values.size() > 0)
+  {
+    sigma_min = singular_values.minCoeff();
+    sigma_max = singular_values.maxCoeff();
+
+    if(std::abs(sigma_min) > 1.0e-6)
+      allocation_condition = sigma_max / sigma_min;
+  }
+
+  {
+    std_msgs::Float64 msg;
+    msg.data = allocation_condition;
+    allocation_condition_pub_.publish(msg);
+
+    msg.data = sigma_min;
+    allocation_sigma_min_pub_.publish(msg);
+
+    msg.data = sigma_max;
+    allocation_sigma_max_pub_.publish(msg);
+  }
+
+  if(allocation_condition > 1000.0 || sigma_min < 1.0e-4)
+  {
+    ROS_WARN_THROTTLE(
+        0.1,
+        "[GimbalrotorMultilinkController] allocation near singular: cond=%.3f sigma_min=%.6f sigma_max=%.6f rows=%ld cols=%ld",
+        allocation_condition,
+        sigma_min,
+        sigma_max,
+        integrated_map.rows(),
+        integrated_map.cols());
+  }
+
+
   /* Vectoring force mapping.*/
-  Eigen::MatrixXd integrated_map_inv = aerial_robot_model::pseudoinverse(integrated_map);
+  // Eigen::MatrixXd integrated_map_inv = aerial_robot_model::pseudoinverse(integrated_map);
+
+  Eigen::MatrixXd integrated_map_inv;
+
+  if(use_damped_pseudoinverse_ && (allocation_condition > 1000.0 || sigma_min < 1.0e-4))
+  {
+    ROS_WARN_THROTTLE(
+        0.1,
+        "[GimbalrotorMultilinkController] using damped pseudoinverse: cond=%.3f sigma_min=%.6f damping=%.3f",
+        allocation_condition,
+        sigma_min,
+        allocation_damping_);
+
+    integrated_map_inv = dampedPseudoInverse(integrated_map, allocation_damping_);
+  }
+  else
+  {
+    integrated_map_inv = aerial_robot_model::pseudoinverse(integrated_map);
+  }
+
+  if(integrated_map_inv.rows() == 0 || integrated_map_inv.cols() == 0)
+  {
+    ROS_ERROR_THROTTLE(0.1, "[GimbalrotorMultilinkController] invalid integrated_map_inv");
+    return;
+  }
 
   integrated_map_inv_trans_ = integrated_map_inv.leftCols(underactuate_ ? 1 : 3);
   integrated_map_inv_rot_ = integrated_map_inv.rightCols(3);
