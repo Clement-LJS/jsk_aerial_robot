@@ -90,7 +90,7 @@ controller:
 
     # First test: ONLY feed-axis compliance.
     # Do not enable Y/Z yet.
-    axis_enable_x: 1.0
+    axis_enable_x: 0.0
     axis_enable_y: 0.0
     axis_enable_z: 0.0
 
@@ -128,15 +128,20 @@ controller:
     use_pitch_impedance: true
 
     # rotational admittance around pitch axis
-    pitch_virtual_inertia: 0.15
-    pitch_damping: 0.8
-    pitch_stiffness: 1.5
+    pitch_virtual_inertia: 0.20
+    pitch_damping: 1.2
+    pitch_stiffness: 0.8
 
     # desired external pitch torque
     pitch_torque_ref: 0.0
 
+    # torque filtering
+    # smaller = smoother but slower
+    pitch_torque_lpf_alpha: 0.12
+    pitch_torque_deadband: 0.02
+
     # safety limits
     pitch_torque_limit: 0.2
     pitch_angle_offset_limit: 0.05       # rad, about 2.9 deg
-    pitch_rate_offset_limit: 0.20        # rad/s
-    pitch_ang_acc_correction_limit: 0.5  # rad/s^2
+    pitch_rate_offset_limit: 0.12        # rad/s
+    pitch_ang_acc_correction_limit: 0.3  # rad/s^2

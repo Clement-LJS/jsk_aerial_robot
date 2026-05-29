@@ -168,6 +168,10 @@ private:
   double pitch_torque_ref_;
   double pitch_torque_limit_;
 
+  double pitch_torque_lpf_alpha_;
+  double pitch_torque_deadband_;
+  double pitch_torque_lpf_;
+  
   double pitch_angle_offset_limit_;
   double pitch_rate_offset_limit_;
   double pitch_ang_acc_correction_limit_;

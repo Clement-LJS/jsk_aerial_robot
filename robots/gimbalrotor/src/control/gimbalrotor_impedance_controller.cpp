@@ -1,5 +1,7 @@
 #include <gimbalrotor/control/gimbalrotor_impedance_controller.h>
 
+#include <cmath>
+
 #include <pluginlib/class_list_macros.h>
 
 namespace aerial_robot_control
@@ -27,6 +29,9 @@ GimbalrotorImpedanceController::GimbalrotorImpedanceController()
     pitch_stiffness_(0.8),
     pitch_torque_ref_(0.0),
     pitch_torque_limit_(0.8),
+    pitch_torque_lpf_alpha_(0.15),
+    pitch_torque_deadband_(0.02),
+    pitch_torque_lpf_(0.0),
     pitch_angle_offset_limit_(0.20),
     pitch_rate_offset_limit_(0.60),
     pitch_ang_acc_correction_limit_(2.0),
@@ -258,6 +263,9 @@ void GimbalrotorImpedanceController::rosParamInit()
   getParam<double>(imp_nh, "pitch_torque_ref", pitch_torque_ref_, 0.0);
   getParam<double>(imp_nh, "pitch_torque_limit", pitch_torque_limit_, 0.8);
 
+  getParam<double>(imp_nh, "pitch_torque_lpf_alpha", pitch_torque_lpf_alpha_, 0.15);
+  getParam<double>(imp_nh, "pitch_torque_deadband", pitch_torque_deadband_, 0.02);
+
   getParam<double>(imp_nh, "pitch_angle_offset_limit", pitch_angle_offset_limit_, 0.20);
   getParam<double>(imp_nh, "pitch_rate_offset_limit", pitch_rate_offset_limit_, 0.60);
   getParam<double>(imp_nh, "pitch_ang_acc_correction_limit", pitch_ang_acc_correction_limit_, 2.0);
@@ -274,6 +282,12 @@ void GimbalrotorImpedanceController::rosParamInit()
   if(pitch_torque_limit_ < 0.0)
     pitch_torque_limit_ = 0.0;
 
+  pitch_torque_lpf_alpha_ = clampValue(pitch_torque_lpf_alpha_, 0.0, 1.0);
+
+  if(pitch_torque_deadband_ < 0.0)
+    pitch_torque_deadband_ = 0.0;
+
+  
   if(pitch_angle_offset_limit_ < 0.0)
     pitch_angle_offset_limit_ = 0.0;
 
@@ -641,16 +655,37 @@ void GimbalrotorImpedanceController::modifyTargetRPYForCompliance(
       torque_cog = R_world_cog.transpose() * torque_raw;
     }
 
+  double pitch_torque_raw = torque_cog.y();
+
   /*
-   * Pitch torque around CoG/body Y axis.
+   * Low-pass filter pitch torque.
+   *
+   * Small alpha:
+   *   smoother, less noise, slower response.
+   *
+   * Large alpha:
+   *   faster response, more noise.
    */
-  double pitch_torque = torque_cog.y();
+  pitch_torque_lpf_ =
+    pitch_torque_lpf_alpha_ * pitch_torque_raw
+    + (1.0 - pitch_torque_lpf_alpha_) * pitch_torque_lpf_;
+
+  double pitch_torque = pitch_torque_lpf_;
+
+  /*
+   * Ignore very small torque noise.
+   */
+  if(std::abs(pitch_torque) < pitch_torque_deadband_)
+    {
+      pitch_torque = 0.0;
+    }
 
   pitch_torque =
-      clampValue(pitch_torque,
-                 -pitch_torque_limit_,
-                 pitch_torque_limit_);
+    clampValue(pitch_torque,
+               -pitch_torque_limit_,
+               pitch_torque_limit_);
 
+  
   /*
    * Rotational admittance:
    *
@@ -701,15 +736,19 @@ void GimbalrotorImpedanceController::modifyTargetRPYForCompliance(
 
   target_rpy.setY(target_rpy.y() + pitch_angle_offset_);
 
+
+
   ROS_WARN_THROTTLE(
-      0.5,
-      "[Pitch Target Admittance] tau_pitch: %.3f | pitch_offset: %.4f | pitch_rate_offset: %.4f | pitch_acc_offset: %.4f | target_pitch_before: %.4f | target_pitch_after: %.4f",
-      pitch_torque,
-      pitch_angle_offset_,
-      pitch_rate_offset_,
-      pitch_ang_acc_offset_,
-      target_pitch_before,
-      target_rpy.y());
+    0.5,
+    "[Pitch Target Admittance] tau_raw: %.3f | tau_lpf: %.3f | tau_used: %.3f | pitch_offset: %.4f | pitch_rate_offset: %.4f | pitch_acc_offset: %.4f | target_pitch_before: %.4f | target_pitch_after: %.4f",
+    pitch_torque_raw,
+    pitch_torque_lpf_,
+    pitch_torque,
+    pitch_angle_offset_,
+    pitch_rate_offset_,
+    pitch_ang_acc_offset_,
+    target_pitch_before,
+    target_rpy.y());
 }
 
 void GimbalrotorImpedanceController::externalWrenchCallback(
@@ -750,6 +789,8 @@ void GimbalrotorImpedanceController::resetImpedanceMemory()
   prev_modified_target_world_.setZero();
   prev_modified_target_valid_ = false;
 
+  pitch_torque_lpf_ = 0.0;
+  
   pitch_angle_offset_ = 0.0;
   pitch_rate_offset_ = 0.0;
   pitch_ang_acc_offset_ = 0.0;
