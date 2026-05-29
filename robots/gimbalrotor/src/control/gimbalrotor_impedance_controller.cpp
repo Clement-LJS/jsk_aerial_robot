@@ -19,7 +19,20 @@ GimbalrotorImpedanceController::GimbalrotorImpedanceController()
     tool_frame_yaw_(0.0),
     prev_modified_target_valid_(false),
     target_override_threshold_(0.05),
-    force_lpf_alpha_(0.2)
+    force_lpf_alpha_(0.2),
+
+    use_pitch_impedance_(true),
+    pitch_virtual_inertia_(0.08),
+    pitch_damping_(0.35),
+    pitch_stiffness_(0.8),
+    pitch_torque_ref_(0.0),
+    pitch_torque_limit_(0.8),
+    pitch_angle_offset_limit_(0.20),
+    pitch_rate_offset_limit_(0.60),
+    pitch_ang_acc_correction_limit_(2.0),
+    pitch_angle_offset_(0.0),
+    pitch_rate_offset_(0.0),
+    pitch_ang_acc_offset_(0.0)
 {
   est_external_wrench_ = Eigen::VectorXd::Zero(6);
 
@@ -236,6 +249,40 @@ void GimbalrotorImpedanceController::rosParamInit()
   getParam<double>(imp_nh, "velocity_limit_y", velocity_limit_tool_(1), 0.05);
   getParam<double>(imp_nh, "velocity_limit_z", velocity_limit_tool_(2), 0.05);
 
+  getParam<bool>(imp_nh, "use_pitch_impedance", use_pitch_impedance_, true);
+
+  getParam<double>(imp_nh, "pitch_virtual_inertia", pitch_virtual_inertia_, 0.08);
+  getParam<double>(imp_nh, "pitch_damping", pitch_damping_, 0.35);
+  getParam<double>(imp_nh, "pitch_stiffness", pitch_stiffness_, 0.8);
+
+  getParam<double>(imp_nh, "pitch_torque_ref", pitch_torque_ref_, 0.0);
+  getParam<double>(imp_nh, "pitch_torque_limit", pitch_torque_limit_, 0.8);
+
+  getParam<double>(imp_nh, "pitch_angle_offset_limit", pitch_angle_offset_limit_, 0.20);
+  getParam<double>(imp_nh, "pitch_rate_offset_limit", pitch_rate_offset_limit_, 0.60);
+  getParam<double>(imp_nh, "pitch_ang_acc_correction_limit", pitch_ang_acc_correction_limit_, 2.0);
+
+  if(pitch_virtual_inertia_ < 0.001)
+    pitch_virtual_inertia_ = 0.001;
+
+  if(pitch_damping_ < 0.0)
+    pitch_damping_ = 0.0;
+
+  if(pitch_stiffness_ < 0.0)
+    pitch_stiffness_ = 0.0;
+
+  if(pitch_torque_limit_ < 0.0)
+    pitch_torque_limit_ = 0.0;
+
+  if(pitch_angle_offset_limit_ < 0.0)
+    pitch_angle_offset_limit_ = 0.0;
+
+  if(pitch_rate_offset_limit_ < 0.0)
+    pitch_rate_offset_limit_ = 0.0;
+
+  if(pitch_ang_acc_correction_limit_ < 0.0)
+    pitch_ang_acc_correction_limit_ = 0.0;
+    
   /*
    * Safety cleanup.
    */
@@ -546,6 +593,125 @@ void GimbalrotorImpedanceController::controlCore()
   prev_time_ = now;
 }
 
+void GimbalrotorImpedanceController::modifyTargetRPYForCompliance(
+    tf::Vector3& target_rpy)
+{
+  if(!use_impedance_ || !use_pitch_impedance_ || !is_cutting_)
+    {
+      return;
+    }
+
+  const ros::Time now = ros::Time::now();
+  const double dt = (now - prev_time_).toSec();
+
+  if(dt <= 0.0 || dt > 0.1)
+    {
+      return;
+    }
+
+  /*
+   * Read external torque.
+   *
+   * est_external_wrench_:
+   *   0,1,2 = force
+   *   3,4,5 = torque
+   */
+  Eigen::Vector3d torque_raw(
+      est_external_wrench_(3),
+      est_external_wrench_(4),
+      est_external_wrench_(5));
+
+  Eigen::Vector3d torque_cog = torque_raw;
+
+  /*
+   * Your YAML uses:
+   *   external_wrench_frame: world
+   *
+   * So convert world torque to CoG/body torque before taking pitch.
+   */
+  if(external_wrench_frame_ == "world")
+    {
+      tf::Matrix3x3 R_world_cog_tf =
+          estimator_->getOrientation(Frame::COG,
+                                     estimate_mode_);
+
+      Eigen::Matrix3d R_world_cog;
+      tf::matrixTFToEigen(R_world_cog_tf, R_world_cog);
+
+      torque_cog = R_world_cog.transpose() * torque_raw;
+    }
+
+  /*
+   * Pitch torque around CoG/body Y axis.
+   */
+  double pitch_torque = torque_cog.y();
+
+  pitch_torque =
+      clampValue(pitch_torque,
+                 -pitch_torque_limit_,
+                 pitch_torque_limit_);
+
+  /*
+   * Rotational admittance:
+   *
+   *   Jv * theta_ddot + Dv * theta_dot + Kv * theta
+   *   =
+   *   tau_ext - tau_ref
+   *
+   * Output:
+   *   pitch_angle_offset_
+   */
+  const double torque_error =
+      pitch_torque - pitch_torque_ref_;
+
+  pitch_ang_acc_offset_ =
+      (torque_error
+       - pitch_damping_ * pitch_rate_offset_
+       - pitch_stiffness_ * pitch_angle_offset_)
+      / pitch_virtual_inertia_;
+
+  pitch_ang_acc_offset_ =
+      clampValue(pitch_ang_acc_offset_,
+                 -pitch_ang_acc_correction_limit_,
+                 pitch_ang_acc_correction_limit_);
+
+  pitch_rate_offset_ += pitch_ang_acc_offset_ * dt;
+
+  pitch_rate_offset_ =
+      clampValue(pitch_rate_offset_,
+                 -pitch_rate_offset_limit_,
+                 pitch_rate_offset_limit_);
+
+  pitch_angle_offset_ += pitch_rate_offset_ * dt;
+
+  pitch_angle_offset_ =
+      clampValue(pitch_angle_offset_,
+                 -pitch_angle_offset_limit_,
+                 pitch_angle_offset_limit_);
+
+  /*
+   * This is the actual compliance target shift.
+   *
+   * Positive pitch torque:
+   *   positive pitch target offset
+   *
+   * This makes the PID follow the contact direction instead of fighting it.
+   */
+  const double target_pitch_before = target_rpy.y();
+
+  target_rpy.setY(target_rpy.y() + pitch_angle_offset_);
+
+  ROS_WARN_THROTTLE(
+      0.5,
+      "[Pitch Target Admittance] tau_pitch: %.3f | pitch_offset: %.4f | pitch_rate_offset: %.4f | pitch_acc_offset: %.4f | target_pitch_before: %.4f | target_pitch_after: %.4f",
+      pitch_torque,
+      pitch_angle_offset_,
+      pitch_rate_offset_,
+      pitch_ang_acc_offset_,
+      target_pitch_before,
+      target_rpy.y());
+}
+
 void GimbalrotorImpedanceController::externalWrenchCallback(
     const geometry_msgs::WrenchStamped::ConstPtr& msg)
 {
@@ -583,6 +749,10 @@ void GimbalrotorImpedanceController::resetImpedanceMemory()
   prev_dx_world_.setZero();
   prev_modified_target_world_.setZero();
   prev_modified_target_valid_ = false;
+
+  pitch_angle_offset_ = 0.0;
+  pitch_rate_offset_ = 0.0;
+  pitch_ang_acc_offset_ = 0.0;
 }
 
 tf::Vector3 GimbalrotorImpedanceController::eigenToTfVector(

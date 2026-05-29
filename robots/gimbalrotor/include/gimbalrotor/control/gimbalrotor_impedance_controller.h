@@ -45,6 +45,7 @@ public:
 protected:
   void rosParamInit() override;
   void controlCore() override;
+  void modifyTargetRPYForCompliance(tf::Vector3& target_rpy) override;
 
 private:
   void externalWrenchCallback(const geometry_msgs::WrenchStamped::ConstPtr& msg);
@@ -157,6 +158,23 @@ private:
   double force_lpf_alpha_;
 
   ros::Time prev_time_;
+
+  bool use_pitch_impedance_;
+
+  double pitch_virtual_inertia_;
+  double pitch_damping_;
+  double pitch_stiffness_;
+
+  double pitch_torque_ref_;
+  double pitch_torque_limit_;
+
+  double pitch_angle_offset_limit_;
+  double pitch_rate_offset_limit_;
+  double pitch_ang_acc_correction_limit_;
+
+  double pitch_angle_offset_;
+  double pitch_rate_offset_;
+  double pitch_ang_acc_offset_;
 };
 
 } // namespace aerial_robot_control

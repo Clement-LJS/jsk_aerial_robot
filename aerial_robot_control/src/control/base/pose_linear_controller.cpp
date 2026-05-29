@@ -225,6 +225,16 @@ namespace aerial_robot_control
     return true;
   }
 
+  void PoseLinearController::modifyTargetRPYForCompliance(tf::Vector3& target_rpy)
+  {
+    /*
+    * Default behavior:
+    *   do nothing.
+    *
+    * Child controllers can override this.
+    */
+  }
+
   void PoseLinearController::controlCore()
   {
     pos_ = estimator_->getPos(Frame::COG, estimate_mode_);
@@ -280,10 +290,24 @@ namespace aerial_robot_control
     
     cog_rot.setRPY(r, p, y);
 
+    // omega_ = estimator_->getAngularVel(Frame::COG, estimate_mode_);
+    // target_rpy_ = navigator_->getTargetRPY();
+    // tf::Matrix3x3 target_rot; target_rot.setRPY(target_rpy_.x(), target_rpy_.y(), target_rpy_.z());
+    // tf::Vector3 target_omega = navigator_->getTargetOmega(); // w.r.t. target cog frame
+
     omega_ = estimator_->getAngularVel(Frame::COG, estimate_mode_);
+
     target_rpy_ = navigator_->getTargetRPY();
-    tf::Matrix3x3 target_rot; target_rot.setRPY(target_rpy_.x(), target_rpy_.y(), target_rpy_.z());
+
+    /* Allow derived controller to modify target attitude before PID.
+    * For pitch compliance: target_pitch = normal_target_pitch + admittance_offset */
+    modifyTargetRPYForCompliance(target_rpy_);
+
+    tf::Matrix3x3 target_rot;
+    target_rot.setRPY(target_rpy_.x(), target_rpy_.y(), target_rpy_.z());
+
     tf::Vector3 target_omega = navigator_->getTargetOmega(); // w.r.t. target cog frame
+
     target_omega_ = cog_rot.inverse() * target_rot * target_omega; // w.r.t. current cog frame
     target_ang_acc_ = navigator_->getTargetAngAcc();
 

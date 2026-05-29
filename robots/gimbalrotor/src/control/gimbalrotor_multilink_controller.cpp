@@ -215,6 +215,7 @@ Eigen::MatrixXd GimbalrotorMultilinkController::dampedPseudoInverse(
   return mat.transpose() * regularized_inv;
 }
 
+
 void GimbalrotorMultilinkController::controlCore()
 {
   /*
@@ -302,11 +303,12 @@ void GimbalrotorMultilinkController::controlCore()
    * Therefore, for multilink experiments, recommended:
    *   gimbal_calc_in_fc: false
    */
+
   target_wrench_acc_cog.tail(3) =
-      Eigen::Vector3d(target_ang_acc_x,
-                      target_ang_acc_y,
-                      target_ang_acc_z)
-      + nonlinear_ang_acc;
+    Eigen::Vector3d(target_ang_acc_x,
+                    target_ang_acc_y,
+                    target_ang_acc_z)
+    + nonlinear_ang_acc;
 
   setTargetWrenchAccCog(target_wrench_acc_cog);
 

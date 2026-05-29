@@ -124,3 +124,19 @@ controller:
 
     # Strong smoothing for first test.
     force_lpf_alpha: 0.1
+
+    use_pitch_impedance: true
+
+    # rotational admittance around pitch axis
+    pitch_virtual_inertia: 0.15
+    pitch_damping: 0.8
+    pitch_stiffness: 1.5
+
+    # desired external pitch torque
+    pitch_torque_ref: 0.0
+
+    # safety limits
+    pitch_torque_limit: 0.2
+    pitch_angle_offset_limit: 0.05       # rad, about 2.9 deg
+    pitch_rate_offset_limit: 0.20        # rad/s
+    pitch_ang_acc_correction_limit: 0.5  # rad/s^2
