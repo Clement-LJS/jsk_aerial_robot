@@ -593,8 +593,10 @@ void GimbalrotorImpedanceController::modifyTargetRPYForCompliance(tf::Vector3& t
   pitch_angle_offset_ += pitch_rate_offset_ * dt;
   pitch_angle_offset_ = clampValue(pitch_angle_offset_, -pitch_angle_offset_limit_, pitch_angle_offset_limit_);
 
+  target_rpy.setY(target_rpy.y() + pitch_angle_offset_);
+
   std_msgs::Float64 pitch_offset_msg;
-  pitch_offset_msg.data = pitch_angle_offset_;
+  pitch_offset_msg.data = 0.0;
   pitch_joint_compliance_offset_pub_.publish(pitch_offset_msg);
 
   ROS_WARN_THROTTLE(

@@ -81,14 +81,15 @@ navigation:
 
   # Cutting compliance is added around horizontal compensation,
   # not replacing it.
-  use_pitch_joint_compliance_in_cutting: true
+  use_pitch_joint_compliance_in_cutting: false
 
   # Limit small offset around stable hand-horizontal posture.
-  pitch_joint_compliance_offset_limit: 0.10
+  pitch_joint_compliance_offset_limit: 0.0
 
   # Set nonzero only if branch is not horizontal.
   branch_alignment_offset: 0.0
 
-  # Optional slow planned cutting angle.
-  # Keep 0 first during testing.
+  # Deprecated for fixed-hand cutting mode.
+  # Cutting pitch motion should come from baselink/body RPY command, 
+  # not from pitch-joint offset, otherwise hand orientation changes.
   cutting_feed_offset: 0.0

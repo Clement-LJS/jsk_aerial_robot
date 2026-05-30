@@ -336,37 +336,36 @@ void GimbalrotorMultilinkNavigator::pitchLinkCompensationProcess()
                                                       body_yaw);
     }
 
-  /*
-   * Compensation idea:
-   *
-   *   hand_world_pitch = body_pitch + pitch_joint_angle
-   *
-   * To keep hand horizontal:
-   *
-   *   hand_world_pitch = 0
-   *
-   * Therefore:
-   *
-   *   pitch_joint_angle = -body_pitch
-   *
-   * But sign depends on your URDF joint axis.
-   * If the hand tilts in the wrong direction, set:
-   *
-   *   pitch_joint_compensation_sign: -1.0
-   */
+
+ /*
+  * Compensation idea:
+  *
+  *   hand_world_pitch = body_pitch + pitch_joint_angle
+  *
+  * To keep the hand/branch orientation constant:
+  *
+  *   pitch_joint_angle compensates body_pitch.
+  *
+  * This is needed during cutting too:
+  *   - body pitches for cutting
+  *   - pitch joint moves oppositely
+  *   - hand link keeps the same world orientation / parallel to branch
+  */
   double raw_pitch_joint_cmd =
       pitch_joint_compensation_sign_ * body_pitch + pitch_joint_offset_;
 
   if(interaction_mode_ == CUTTING_COMPLIANCE)
-  {
-    raw_pitch_joint_cmd += branch_alignment_offset_;
-    raw_pitch_joint_cmd += cutting_feed_offset_;
+    {
+     /*
+      * During cutting, keep the hand orientation fixed relative to the branch.
+      * Do NOT add pitch_joint_compliance_offset here.
+      * Pitch impedance is applied to body pitch target in the controller.
+      *
+      * branch_alignment_offset can be used only if the branch is not horizontal.
+      */
+      raw_pitch_joint_cmd += branch_alignment_offset_;
+    }
 
-    if(use_pitch_joint_compliance_in_cutting_)
-      {
-        raw_pitch_joint_cmd += pitch_joint_compliance_offset_;
-      }
-  }
 
   /*
    * Apply joint limit.
