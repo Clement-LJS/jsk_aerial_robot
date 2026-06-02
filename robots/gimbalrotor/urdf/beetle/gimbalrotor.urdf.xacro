@@ -289,7 +289,7 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-    	<mesh filename="package://gimbalrotor/urdf/beetle/mesh/urdf_full_pitchjoint.STL" scale="1 1 1"/>
+    	<mesh filename="package://gimbalrotor/urdf/beetle/mesh/passive_perching_hand.STL" scale="1 1 1"/>
       </geometry>
     </visual>
     <collision>
@@ -301,7 +301,7 @@
   </link>
 
   <!-- pitch joint hand assem  -->
-  <link name="hand_assem_link">
+  <!-- <link name="hand_assem_link">
     <inertial>
       <origin xyz="0.09014 0.00038 0.02488"/>
       <mass value="0.4820000"/>
@@ -322,7 +322,7 @@
     <box size="0.5 0.1 0.177"/>
       </geometry>
     </collision>
-  </link>  
+  </link>   -->
 
   ## beetle hand joint
   <joint name="handbase_baselink_joint" type="fixed">
@@ -345,58 +345,4 @@
     <origin xyz="-0.05918 0.00052 0.08000" rpy="0 0 3.142"/>
     <axis xyz="0 0 0"/>
   </joint>
-
-  <joint name="pitch_joint" type="revolute">
-    <parent link="pitch_joint_link"/>
-    <child link="hand_assem_link"/>
-    <!-- location of the pitch axis -->
-    <origin xyz="0.22074 0.02932 0" rpy="0 0 0"/>  <!-- 0.02932 is pulley origin -->
-    <axis xyz="0 1 0"/>
-    <limit effort="10" velocity="0.1" lower="-1.57" upper="1.57"/>
-    <dynamics damping="0.9" friction="0.05"/>
-  </joint>
-
-  <joint name="wire_joint" type="revolute">
-    <parent link="base_link"/>
-    <child link="virtual_wire"/>
-    <limit effort="10" velocity="1.0" lower="-1.57" upper="1.57"/>
-    <dynamics damping="0.1" friction="0.01"/>
-    <origin rpy="0 0 0" xyz="0 0 0"/>
-    <axis xyz="0 0 1"/>
-  </joint>
-
-  <link name="virtual_wire">
-    <inertial>      
-      <origin xyz="0 0 0" rpy="0 0 0"/>
-      <mass value="0.00001"/>
-      <inertia
-          ixx="0.00001" ixy="0.0" ixz="0.0"
-          iyy="0.00001" iyz="0.0"
-          izz="0.00001"/>
-    </inertial>
-  </link>
-
-  
-  <transmission name="pitch_joint">
-    <type>transmission_interface/SimpleTransmission</type>
-    <joint name="pitch_joint">
-      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
-    </joint>
-    <actuator name="pitch_joint">
-      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
-      <mechanicalReduction>1</mechanicalReduction>
-    </actuator>
-  </transmission>
-
-  <transmission name="wire_joint">
-    <type>transmission_interface/SimpleTransmission</type>
-    <joint name="wire_joint">
-      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
-    </joint>
-    <actuator name="wire_joint">
-      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
-      <mechanicalReduction>1</mechanicalReduction>
-    </actuator>
-  </transmission>  
-  
 </robot>

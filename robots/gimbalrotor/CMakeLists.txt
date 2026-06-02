@@ -25,19 +25,15 @@ include_directories(
   )
 
 add_library(gimbalrotor_controller
-  src/control/gimbalrotor_controller.cpp
-  src/control/gimbalrotor_multilink_controller.cpp
-  src/control/gimbalrotor_impedance_controller.cpp)
+  src/control/gimbalrotor_controller.cpp)
 target_link_libraries(gimbalrotor_controller ${catkin_LIBRARIES})
 
 add_library(gimbalrotor_robot_model
-  src/model/gimbalrotor_robot_model.cpp
-  src/model/gimbalrotor_multilink_robot_model.cpp)
+  src/model/gimbalrotor_robot_model.cpp)
 target_link_libraries(gimbalrotor_robot_model ${catkin_LIBRARIES})
 
 add_library(gimbalrotor_navigation
-  src/gimbalrotor_navigation.cpp
-  src/gimbalrotor_multilink_navigation.cpp)
+  src/gimbalrotor_navigation.cpp)
 target_link_libraries(gimbalrotor_navigation ${catkin_LIBRARIES})
 
 install(DIRECTORY config plugins launch

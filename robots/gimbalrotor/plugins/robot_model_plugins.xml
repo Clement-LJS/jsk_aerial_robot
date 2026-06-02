@@ -2,7 +2,4 @@
   <class name="gimbalrotor_robot_model" type="GimbalrotorRobotModel" base_class_type="aerial_robot_model::RobotModel">
     <description>plugin for gimbalrotor robot model </description>
   </class>
-  <class name="gimbalrotor_multilink_robot_model" type="GimbalrotorMultilinkRobotModel" base_class_type="aerial_robot_model::RobotModel">
-    <description>plugin for gimbalrotor robot model with automatically detected movable body links </description>
-  </class>
 </library>
