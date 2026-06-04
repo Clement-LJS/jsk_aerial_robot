@@ -241,16 +241,16 @@
     </link>
   </xacro:macro>
 
-    ## link
-  <link name="handbase">
-    <inertial>
-      <origin xyz="0.0 0.0 0.0" rpy="0 0 0"/>
-      <mass value="0.00001"/>
-      <inertia
-          ixx="0.00001" iyy="0.00001" izz="0.00001"
-          ixy="0.0" ixz="0.0" iyz="0.0"/>
-    </inertial>
-  </link>
+  <!--   ## link -->
+  <!-- <link name="handbase"> -->
+  <!--   <inertial> -->
+  <!--     <origin xyz="0.0 0.0 0.0" rpy="0 0 0"/> -->
+  <!--     <mass value="0.00001"/> -->
+  <!--     <inertia -->
+  <!--         ixx="0.00001" iyy="0.00001" izz="0.00001" -->
+  <!--         ixy="0.0" ixz="0.0" iyz="0.0"/> -->
+  <!--   </inertial> -->
+  <!-- </link> -->
 
   <!-- <link name="hand"> -->
   <!--   <inertial> -->
@@ -302,13 +302,13 @@
   <!--   </collision> -->
   <!-- </link> -->
 
-  ## beetle hand joint
-  <joint name="handbase_baselink_joint" type="fixed">
-    <child link="handbase"/>
-    <parent link="base_link"/>
-    <origin xyz="0 0 0" rpy="0 0 0"/>
-    <axis xyz="1 0 0"/>
-  </joint>
+  <!-- ## beetle hand joint -->
+  <!-- <joint name="handbase_baselink_joint" type="fixed"> -->
+  <!--   <child link="handbase"/> -->
+  <!--   <parent link="base_link"/> -->
+  <!--   <origin xyz="0 0 0" rpy="0 0 0"/> -->
+  <!--   <axis xyz="1 0 0"/> -->
+  <!-- </joint> -->
 
   <!-- <joint name="handbase_hand_joint" type="fixed"> -->
   <!--   <child link="hand"/> -->
