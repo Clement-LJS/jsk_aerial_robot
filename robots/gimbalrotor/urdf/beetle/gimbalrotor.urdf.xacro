@@ -252,28 +252,28 @@
     </inertial>
   </link>
 
-  <link name="hand">
-    <inertial>
-      <origin xyz="0.31654 0.00003 0.03656"/>
-      <mass value="0.423690"/>
-      <inertia
-  	  ixx="0.0004659" ixy="-0.0001450" ixz="0.0002106"
-    	  iyy="0.0023921" iyz="-0.0000032"
-  	  izz="0.0022280"/>
-    </inertial>
-    <visual>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
-      <geometry>
-    	<mesh filename="package://gimbalrotor/urdf/beetle/mesh/fullassem_pochitab.STL" scale="0.001 0.001 0.001"/>
-      </geometry>
-    </visual>
-    <collision>
-      <origin xyz="0.236 0.024 0.039" rpy="0 0 0"/>
-      <geometry>
-	<box size="0.471 0.134 0.153"/>
-      </geometry>
-    </collision>
-  </link>
+  <!-- <link name="hand"> -->
+  <!--   <inertial> -->
+  <!--     <origin xyz="0.31654 0.00003 0.03656"/> -->
+  <!--     <mass value="0.423690"/> -->
+  <!--     <inertia -->
+  <!-- 	  ixx="0.0004659" ixy="-0.0001450" ixz="0.0002106" -->
+  <!--   	  iyy="0.0023921" iyz="-0.0000032" -->
+  <!-- 	  izz="0.0022280"/> -->
+  <!--   </inertial> -->
+  <!--   <visual> -->
+  <!--     <origin xyz="0 0 0" rpy="0 0 0"/> -->
+  <!--     <geometry> -->
+  <!--   	<mesh filename="package://gimbalrotor/urdf/beetle/mesh/fullassem_pochitab.STL" scale="0.001 0.001 0.001"/> -->
+  <!--     </geometry> -->
+  <!--   </visual> -->
+  <!--   <collision> -->
+  <!--     <origin xyz="0.236 0.024 0.039" rpy="0 0 0"/> -->
+  <!--     <geometry> -->
+  <!-- 	<box size="0.471 0.134 0.153"/> -->
+  <!--     </geometry> -->
+  <!--   </collision> -->
+  <!-- </link> -->
 
   <!-- <link name="hand_2"> -->
   <!--   <inertial> -->
@@ -310,11 +310,11 @@
     <axis xyz="1 0 0"/>
   </joint>
 
-  <joint name="handbase_hand_joint" type="fixed">
-    <child link="hand"/>
-    <parent link="handbase"/>
-    <origin xyz=" 0.05918 0.00052 0.08000" rpy="0 0 0"/>
-    <axis xyz="0 0 0"/>
-  </joint>
+  <!-- <joint name="handbase_hand_joint" type="fixed"> -->
+  <!--   <child link="hand"/> -->
+  <!--   <parent link="handbase"/> -->
+  <!--   <origin xyz=" 0.05918 0.00052 0.08000" rpy="0 0 0"/> -->
+  <!--   <axis xyz="0 0 0"/> -->
+  <!-- </joint> -->
 
 </robot>
