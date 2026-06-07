@@ -1,0 +1,109 @@
+<launch>
+  <!-- ========================================================= -->
+  <!-- Perch branch force-relief takeoff node                     -->
+  <!-- ========================================================= -->
+
+  <arg name="branch_pose_topic" default="/mocap/pose"/>
+  <arg name="gimbal_odom_topic" default="/gimbalrotor/uav/baselink/odom"/>
+  <arg name="flight_state_topic" default="/gimbalrotor/flight_state"/>
+  <arg name="external_wrench_topic" default="/gimbalrotor/estimated_external_wrench"/>
+  <arg name="nav_out_topic" default="/gimbalrotor/uav/nav"/>
+
+  <arg name="target_world_frame" default="world"/>
+  <arg name="branch_default_frame" default="world"/>
+  <arg name="robot_default_frame" default="world"/>
+
+  <!-- Final pitch after low-force hover target is found. -->
+  <arg name="final_pitch_deg" default="0.0"/>
+
+  <!-- During takeoff, hold locked initial pitch by default. -->
+  <arg name="use_locked_initial_pitch_for_takeoff" default="true"/>
+  <arg name="takeoff_hold_pitch_deg" default="20.0"/>
+
+  <!-- Pitch ramp after relief search is done. -->
+  <arg name="arc_rate_deg_per_sec" default="0.3"/>
+
+  <!-- Wait after HOVER before search starts. -->
+  <arg name="hover_settle_time_sec" default="3.0"/>
+
+  <!-- Force-relief search -->
+  <arg name="enable_force_relief_search" default="true"/>
+  <arg name="relief_search_max_m" default="0.04"/>
+  <arg name="relief_search_step_m" default="0.01"/>
+  <arg name="relief_candidate_dwell_sec" default="2.0"/>
+  <arg name="relief_settle_before_measure_sec" default="0.8"/>
+  <arg name="force_cost_torque_weight" default="5.0"/>
+  <arg name="hold_best_relief_position" default="true"/>
+  <arg name="max_relief_position_jump_m" default="0.06"/>
+
+  <!-- Force gate for pitch ramp -->
+  <arg name="enable_force_gate" default="true"/>
+  <arg name="max_external_force_norm" default="12.0"/>
+  <arg name="max_external_torque_norm" default="1.3"/>
+  <arg name="pause_pitch_ramp_on_high_force" default="true"/>
+
+  <!-- Keep roll/yaw adaptation disabled first. -->
+  <arg name="adapt_roll_yaw_after_hover" default="false"/>
+  <arg name="roll_yaw_adapt_alpha" default="0.001"/>
+  <arg name="max_roll_adapt_deg" default="2.0"/>
+  <arg name="max_yaw_adapt_deg" default="2.0"/>
+  <arg name="adapt_distance_gate_m" default="0.03"/>
+
+  <arg name="branch_clearance_deadband_m" default="0.01"/>
+
+  <arg name="publish_robot_takeoff_land" default="true"/>
+  <arg name="immediate_land_on_request" default="true"/>
+  <arg name="stop_command_on_autoland" default="true"/>
+
+  <arg name="jsk_takeoff_height" default="0.45"/>
+  <param name="/gimbalrotor/navigation/takeoff_height" value="$(arg jsk_takeoff_height)"/>
+
+  <node pkg="gimbalrotor"
+        type="perch_branch_takeoff_totest2.py"
+        name="perch_branch_arc_takeoff"
+        output="screen">
+
+    <param name="branch_pose_topic" value="$(arg branch_pose_topic)"/>
+    <param name="gimbal_odom_topic" value="$(arg gimbal_odom_topic)"/>
+    <param name="flight_state_topic" value="$(arg flight_state_topic)"/>
+    <param name="external_wrench_topic" value="$(arg external_wrench_topic)"/>
+    <param name="nav_out_topic" value="$(arg nav_out_topic)"/>
+
+    <param name="target_world_frame" value="$(arg target_world_frame)"/>
+    <param name="branch_default_frame" value="$(arg branch_default_frame)"/>
+    <param name="robot_default_frame" value="$(arg robot_default_frame)"/>
+
+    <param name="final_pitch_deg" value="$(arg final_pitch_deg)"/>
+    <param name="use_locked_initial_pitch_for_takeoff" value="$(arg use_locked_initial_pitch_for_takeoff)"/>
+    <param name="takeoff_hold_pitch_deg" value="$(arg takeoff_hold_pitch_deg)"/>
+    <param name="arc_rate_deg_per_sec" value="$(arg arc_rate_deg_per_sec)"/>
+    <param name="hover_settle_time_sec" value="$(arg hover_settle_time_sec)"/>
+
+    <param name="enable_force_relief_search" value="$(arg enable_force_relief_search)"/>
+    <param name="relief_search_max_m" value="$(arg relief_search_max_m)"/>
+    <param name="relief_search_step_m" value="$(arg relief_search_step_m)"/>
+    <param name="relief_candidate_dwell_sec" value="$(arg relief_candidate_dwell_sec)"/>
+    <param name="relief_settle_before_measure_sec" value="$(arg relief_settle_before_measure_sec)"/>
+    <param name="force_cost_torque_weight" value="$(arg force_cost_torque_weight)"/>
+    <param name="hold_best_relief_position" value="$(arg hold_best_relief_position)"/>
+    <param name="max_relief_position_jump_m" value="$(arg max_relief_position_jump_m)"/>
+
+    <param name="enable_force_gate" value="$(arg enable_force_gate)"/>
+    <param name="max_external_force_norm" value="$(arg max_external_force_norm)"/>
+    <param name="max_external_torque_norm" value="$(arg max_external_torque_norm)"/>
+    <param name="pause_pitch_ramp_on_high_force" value="$(arg pause_pitch_ramp_on_high_force)"/>
+
+    <param name="adapt_roll_yaw_after_hover" value="$(arg adapt_roll_yaw_after_hover)"/>
+    <param name="roll_yaw_adapt_alpha" value="$(arg roll_yaw_adapt_alpha)"/>
+    <param name="max_roll_adapt_deg" value="$(arg max_roll_adapt_deg)"/>
+    <param name="max_yaw_adapt_deg" value="$(arg max_yaw_adapt_deg)"/>
+    <param name="adapt_distance_gate_m" value="$(arg adapt_distance_gate_m)"/>
+
+    <param name="branch_clearance_deadband_m" value="$(arg branch_clearance_deadband_m)"/>
+
+    <param name="publish_robot_takeoff_land" value="$(arg publish_robot_takeoff_land)"/>
+    <param name="immediate_land_on_request" value="$(arg immediate_land_on_request)"/>
+    <param name="stop_command_on_autoland" value="$(arg stop_command_on_autoland)"/>
+
+  </node>
+</launch>

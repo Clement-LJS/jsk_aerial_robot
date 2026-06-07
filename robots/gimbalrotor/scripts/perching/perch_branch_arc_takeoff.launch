@@ -1,0 +1,83 @@
+<launch>
+  <!-- ========================================================= -->
+  <!-- Safer perch branch attitude-only takeoff node              -->
+  <!-- Goal: takeoff, reach HOVER, then pitch slowly to 0 deg     -->
+  <!-- ========================================================= -->
+
+  <arg name="branch_pose_topic" default="/mocap/pose"/>
+  <arg name="gimbal_odom_topic" default="/gimbalrotor/uav/baselink/odom"/>
+  <arg name="flight_state_topic" default="/gimbalrotor/flight_state"/>
+  <arg name="nav_out_topic" default="/gimbalrotor/uav/nav"/>
+
+  <arg name="target_world_frame" default="world"/>
+  <arg name="branch_default_frame" default="world"/>
+  <arg name="robot_default_frame" default="world"/>
+
+  <!-- Final hover pitch. 0 deg means horizontal. -->
+  <arg name="final_pitch_deg" default="0.0"/>
+
+  <!-- Safe pitch during takeoff and hover settle. -->
+  <arg name="takeoff_hold_pitch_deg" default="20.0"/>
+
+  <!-- Pitch ramp rate after hover settle. Very slow first. -->
+  <arg name="arc_rate_deg_per_sec" default="0.1"/>
+
+  <!-- Wait after HOVER before ramping pitch. -->
+  <arg name="hover_settle_time_sec" default="4.0"/>
+
+  <!-- Critical: do not command position from this node yet. -->
+  <arg name="publish_position_command" default="false"/>
+
+  <!-- Do not adapt roll/yaw for now. Reduce variables. -->
+  <arg name="adapt_roll_yaw_after_hover" default="false"/>
+  <arg name="roll_yaw_adapt_alpha" default="0.001"/>
+  <arg name="max_roll_adapt_deg" default="2.0"/>
+  <arg name="max_yaw_adapt_deg" default="2.0"/>
+  <arg name="adapt_distance_gate_m" default="0.03"/>
+
+  <arg name="branch_clearance_deadband_m" default="0.01"/>
+
+  <arg name="publish_hold_when_enabled" default="true"/>
+  <arg name="arc_return_before_land" default="true"/>
+  <arg name="publish_robot_takeoff_land" default="true"/>
+  <arg name="stop_command_on_autoland" default="true"/>
+
+  <arg name="jsk_takeoff_height" default="0.45"/>
+  <param name="/gimbalrotor/navigation/takeoff_height" value="$(arg jsk_takeoff_height)"/>
+
+  <node pkg="gimbalrotor"
+        type="perch_branch_arc_takeoff.py"
+        name="perch_branch_arc_takeoff"
+        output="screen">
+
+    <param name="branch_pose_topic" value="$(arg branch_pose_topic)"/>
+    <param name="gimbal_odom_topic" value="$(arg gimbal_odom_topic)"/>
+    <param name="flight_state_topic" value="$(arg flight_state_topic)"/>
+    <param name="nav_out_topic" value="$(arg nav_out_topic)"/>
+
+    <param name="target_world_frame" value="$(arg target_world_frame)"/>
+    <param name="branch_default_frame" value="$(arg branch_default_frame)"/>
+    <param name="robot_default_frame" value="$(arg robot_default_frame)"/>
+
+    <param name="final_pitch_deg" value="$(arg final_pitch_deg)"/>
+    <param name="takeoff_hold_pitch_deg" value="$(arg takeoff_hold_pitch_deg)"/>
+    <param name="arc_rate_deg_per_sec" value="$(arg arc_rate_deg_per_sec)"/>
+    <param name="hover_settle_time_sec" value="$(arg hover_settle_time_sec)"/>
+
+    <param name="publish_position_command" value="$(arg publish_position_command)"/>
+
+    <param name="adapt_roll_yaw_after_hover" value="$(arg adapt_roll_yaw_after_hover)"/>
+    <param name="roll_yaw_adapt_alpha" value="$(arg roll_yaw_adapt_alpha)"/>
+    <param name="max_roll_adapt_deg" value="$(arg max_roll_adapt_deg)"/>
+    <param name="max_yaw_adapt_deg" value="$(arg max_yaw_adapt_deg)"/>
+    <param name="adapt_distance_gate_m" value="$(arg adapt_distance_gate_m)"/>
+
+    <param name="branch_clearance_deadband_m" value="$(arg branch_clearance_deadband_m)"/>
+
+    <param name="publish_hold_when_enabled" value="$(arg publish_hold_when_enabled)"/>
+    <param name="arc_return_before_land" value="$(arg arc_return_before_land)"/>
+    <param name="publish_robot_takeoff_land" value="$(arg publish_robot_takeoff_land)"/>
+    <param name="stop_command_on_autoland" value="$(arg stop_command_on_autoland)"/>
+
+  </node>
+</launch>
