@@ -284,17 +284,17 @@
     ## passive hand link
     <link name="passive_hand_link">
       <inertial>
-	<origin xyz="0.18069 0.00008 0.00001"/>
-	<mass value="0.110"/>
+	<origin xyz="0.16829 0.00007 0.00007"/>
+	<mass value="0.150"/>
 	<inertia
-	    ixx="0.0000221" ixy="0.0000001" ixz="-0.00000004"
-	    iyy="0.0005956" iyz="0.000000006"
-	    izz="0.0005915"/>
+	    ixx="0.0000323" ixy="0.0000003" ixz="-0.0000014"
+	    iyy="0.0010134" iyz="0.000000006"
+	    izz="0.0010082"/>
       </inertial>
       <visual>
 	<origin xyz="0 0 0" rpy="0 0 0"/>
 	<geometry>
-    	  <mesh filename="package://gimbalrotor/urdf/beetle/mesh/passive_perching_hand.STL" scale="1 1 1"/>
+    	  <mesh filename="package://gimbalrotor/urdf/beetle/mesh/passive_perching_hand_275.STL" scale="1 1 1"/>
 	</geometry>
       </visual>
       <collision>
