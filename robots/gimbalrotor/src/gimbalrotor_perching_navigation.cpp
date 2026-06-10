@@ -29,9 +29,12 @@ GimbalrotorPerchingNavigator::GimbalrotorPerchingNavigator():
   use_pitch_command_for_arc_(true),
   hold_locked_pose_without_pitch_command_(true),
 
+  active_perching_hold_enable_(true),
+
   min_valid_radius_(0.05),
   max_pitch_delta_(0.78539816339),  // 45 deg
   arc_pitch_sign_(1.0),
+  y_compliance_deadband_(0.03),
 
   perching_enable_topic_("perching/enable"),
   branch_pose_topic_("perching/branch_pose"),
@@ -41,6 +44,9 @@ GimbalrotorPerchingNavigator::GimbalrotorPerchingNavigator():
 
   has_branch_pose_(false),
   has_perching_point_(false),
+
+  has_active_pitch_target_(false),
+  active_target_pitch_(0.0),
 
   locked_radius_(0.0),
   locked_y_offset_(0.0),
@@ -68,7 +74,7 @@ void GimbalrotorPerchingNavigator::initialize(
   perching_point_sub_ = nh_.subscribe(perching_point_topic_, 1, &GimbalrotorPerchingNavigator::perchingPointCallback, this);
   relock_sub_ = nh_.subscribe(relock_topic_, 1, &GimbalrotorPerchingNavigator::relockCallback, this);
   reset_sub_ = nh_.subscribe(reset_topic_, 1, &GimbalrotorPerchingNavigator::resetCallback, this);
- 
+
   locked_pose_pub_ = nh_.advertise<geometry_msgs::PoseStamped>("perching/locked_pose", 1, true);
   commanded_pose_pub_ = nh_.advertise<geometry_msgs::PoseStamped>("perching/commanded_pose", 1);
 
@@ -83,6 +89,7 @@ void GimbalrotorPerchingNavigator::rosParamInit()
   GimbalrotorNavigator::rosParamInit();
 
   ros::NodeHandle navi_nh(nh_, "navigation");
+
   getParam<bool>(navi_nh, "perching_enable", perching_enable_, false);
   getParam<bool>(navi_nh, "perching_lock_once", perching_lock_once_, true);
   getParam<bool>(navi_nh, "perching_require_branch_point", require_branch_point_, true);
@@ -92,15 +99,28 @@ void GimbalrotorPerchingNavigator::rosParamInit()
   getParam<bool>(navi_nh, "perching_use_pitch_command_for_arc", use_pitch_command_for_arc_, true);
   getParam<bool>(navi_nh, "perching_hold_locked_pose_without_pitch_command", hold_locked_pose_without_pitch_command_, true);
 
+  getParam<bool>(navi_nh, "perching_active_hold_enable", active_perching_hold_enable_, true);
+
   getParam<double>(navi_nh, "perching_min_valid_radius", min_valid_radius_, 0.05);
   getParam<double>(navi_nh, "perching_max_pitch_delta", max_pitch_delta_, 0.78539816339);
   getParam<double>(navi_nh, "perching_arc_pitch_sign", arc_pitch_sign_, 1.0);
+  getParam<double>(navi_nh, "perching_y_compliance_deadband", y_compliance_deadband_, 0.03);
 
   getParam<std::string>(navi_nh, "perching_enable_topic", perching_enable_topic_, "perching/enable");
   getParam<std::string>(navi_nh, "perching_branch_pose_topic", branch_pose_topic_, "perching/branch_pose");
   getParam<std::string>(navi_nh, "perching_point_topic", perching_point_topic_, "perching/point");
   getParam<std::string>(navi_nh, "perching_relock_topic", relock_topic_, "perching/relock");
   getParam<std::string>(navi_nh, "perching_reset_topic", reset_topic_, "perching/reset");
+}
+
+void GimbalrotorPerchingNavigator::update()
+{
+  if(perching_enable_ && active_perching_hold_enable_)
+  {
+    applyActivePerchingTarget();
+  }
+
+  GimbalrotorNavigator::update();
 }
 
 void GimbalrotorPerchingNavigator::perchingEnableCallback(const std_msgs::BoolConstPtr& msg)
@@ -115,19 +135,19 @@ void GimbalrotorPerchingNavigator::perchingEnableCallback(const std_msgs::BoolCo
     {
       tryLockPerching("enable callback");
     }
+
+    active_target_pitch_ = locked_robot_rpy_.y();
+    has_active_pitch_target_ = false;
   }
   else
   {
     ROS_WARN("[GimbalrotorPerchingNavigator] perching DISABLED");
+    has_active_pitch_target_ = false;
   }
 }
 
 void GimbalrotorPerchingNavigator::branchPoseCallback(const geometry_msgs::PoseStampedConstPtr& msg)
 {
-  /*
-   * Only use branch position.
-   * Do not use branch orientation because a circular branch/pipe orientation can be physically meaningless.
-   */
   branch_pos_world_.setValue(msg->pose.position.x,
                              msg->pose.position.y,
                              msg->pose.position.z);
@@ -142,12 +162,6 @@ void GimbalrotorPerchingNavigator::branchPoseCallback(const geometry_msgs::PoseS
 
 void GimbalrotorPerchingNavigator::perchingPointCallback(const geometry_msgs::PointStampedConstPtr& msg)
 {
-  /*
-   * Preferred pivot/contact point.
-   *
-   * Use this when the exact grasp/contact/perching point is not identical to
-   * the branch mocap origin.
-   */
   perching_point_world_.setValue(msg->point.x,
                                  msg->point.y,
                                  msg->point.z);
@@ -164,6 +178,9 @@ void GimbalrotorPerchingNavigator::relockCallback(const std_msgs::EmptyConstPtr&
   locked_radius_vec_world_.setValue(0.0, 0.0, 0.0);
 
   tryLockPerching("manual relock");
+
+  active_target_pitch_ = locked_robot_rpy_.y();
+  has_active_pitch_target_ = false;
 }
 
 void GimbalrotorPerchingNavigator::resetCallback(const std_msgs::EmptyConstPtr& msg)
@@ -178,6 +195,9 @@ void GimbalrotorPerchingNavigator::resetPerchingLock()
   locked_radius_ = 0.0;
   locked_y_offset_ = 0.0;
   locked_x_side_ = 1.0;
+
+  has_active_pitch_target_ = false;
+  active_target_pitch_ = 0.0;
 
   locked_robot_pos_world_.setValue(0.0, 0.0, 0.0);
   locked_robot_rpy_.setValue(0.0, 0.0, 0.0);
@@ -208,11 +228,12 @@ bool GimbalrotorPerchingNavigator::tryLockPerching(const std::string& reason)
   locked_robot_rpy_ = getCurrentRobotRPY();
 
   locked_radius_vec_world_ = locked_robot_pos_world_ - perching_point_world_;
-  locked_radius_ = norm3D(locked_radius_vec_world_);
+
+  locked_radius_ = norm2D(locked_radius_vec_world_.x(), locked_radius_vec_world_.z());
 
   if(locked_radius_ < min_valid_radius_)
   {
-    ROS_WARN_THROTTLE(1.0, "[GimbalrotorPerchingNavigator] cannot lock: invalid radius %.4f", locked_radius_);
+    ROS_WARN_THROTTLE(1.0, "[GimbalrotorPerchingNavigator] cannot lock: invalid X-Z radius %.4f", locked_radius_);
     return false;
   }
 
@@ -226,6 +247,9 @@ bool GimbalrotorPerchingNavigator::tryLockPerching(const std::string& reason)
   {
     locked_x_side_ = -1.0;
   }
+
+  active_target_pitch_ = locked_robot_rpy_.y();
+  has_active_pitch_target_ = false;
 
   perching_locked_ = true;
 
@@ -242,7 +266,9 @@ bool GimbalrotorPerchingNavigator::tryLockPerching(const std::string& reason)
            locked_robot_rpy_.x() * 180.0 / PI,
            locked_robot_rpy_.y() * 180.0 / PI,
            locked_robot_rpy_.z() * 180.0 / PI);
-  ROS_WARN("[GimbalrotorPerchingNavigator] radius: %.3f m", locked_radius_);
+  ROS_WARN("[GimbalrotorPerchingNavigator] X-Z radius: %.3f m", locked_radius_);
+  ROS_WARN("[GimbalrotorPerchingNavigator] locked Y offset: %.3f m", locked_y_offset_);
+  ROS_WARN("[GimbalrotorPerchingNavigator] Y compliance deadband: %.3f m", y_compliance_deadband_);
 
   publishLockedDebugPose();
 
@@ -260,22 +286,128 @@ void GimbalrotorPerchingNavigator::naviCallback(const aerial_robot_msgs::FlightN
 
   aerial_robot_msgs::FlightNavConstPtr nav_msg_ptr(new aerial_robot_msgs::FlightNav(nav_msg));
 
-  BaseNavigator::naviCallback(nav_msg_ptr);
+  GimbalrotorNavigator::naviCallback(nav_msg_ptr);
+}
 
-  if(nav_msg.roll_nav_mode == NAV_MODE_POS)
+void GimbalrotorPerchingNavigator::applyActivePerchingTarget()
+{
+  if(!perching_enable_)
   {
-    setTargetRoll(nav_msg.target_roll);
+    return;
   }
 
-  if(nav_msg.pitch_nav_mode == NAV_MODE_POS)
+  if(!perching_locked_)
   {
-    setTargetPitch(nav_msg.target_pitch);
+    if(!tryLockPerching("active update"))
+    {
+      return;
+    }
   }
+
+  aerial_robot_msgs::FlightNav nav_msg = buildActivePerchingNavCommand();
+  aerial_robot_msgs::FlightNavConstPtr nav_msg_ptr(new aerial_robot_msgs::FlightNav(nav_msg));
+
+  GimbalrotorNavigator::naviCallback(nav_msg_ptr);
+}
+
+aerial_robot_msgs::FlightNav GimbalrotorPerchingNavigator::buildActivePerchingNavCommand()
+{
+  aerial_robot_msgs::FlightNav nav_msg;
+
+  const double target_pitch = computeActiveHoldPitch();
+  const tf::Vector3 target_pos = has_active_pitch_target_
+      ? computeArcPositionFromPitch(target_pitch)
+      : computeActiveHoldPosition();
+
+  nav_msg.pos_xy_nav_mode = NAV_MODE_POS;
+  nav_msg.pos_z_nav_mode = NAV_MODE_POS;
+
+  nav_msg.target_pos_x = target_pos.x();
+  nav_msg.target_pos_y = target_pos.y();
+  nav_msg.target_pos_z = target_pos.z();
+
+  nav_msg.target_vel_x = 0.0;
+  nav_msg.target_vel_y = 0.0;
+  nav_msg.target_vel_z = 0.0;
+
+  nav_msg.roll_nav_mode = NAV_MODE_NONE;
+
+  nav_msg.pitch_nav_mode = NAV_MODE_POS;
+  nav_msg.target_pitch = target_pitch;
+
+  publishCommandedDebugPose(target_pos, target_pitch);
+
+  return nav_msg;
+}
+
+tf::Vector3 GimbalrotorPerchingNavigator::computeActiveHoldPosition() const
+{
+  tf::Vector3 locked_radius_xz(locked_radius_vec_world_.x(), 0.0, locked_radius_vec_world_.z());
+
+  double length_xz = norm2D(locked_radius_xz.x(), locked_radius_xz.z());
+
+  if(length_xz < 1.0e-6)
+  {
+    locked_radius_xz.setX(locked_x_side_ * locked_radius_);
+    locked_radius_xz.setY(0.0);
+    locked_radius_xz.setZ(0.0);
+    length_xz = locked_radius_;
+  }
+
+  if(length_xz < 1.0e-6)
+  {
+    locked_radius_xz.setX(locked_x_side_);
+    locked_radius_xz.setY(0.0);
+    locked_radius_xz.setZ(0.0);
+    length_xz = 1.0;
+  }
+
+  locked_radius_xz.setX(locked_radius_xz.x() / length_xz * locked_radius_);
+  locked_radius_xz.setY(0.0);
+  locked_radius_xz.setZ(locked_radius_xz.z() / length_xz * locked_radius_);
+
+  tf::Vector3 target_pos = perching_point_world_ + locked_radius_xz;
+
+  target_pos.setY(computeCompliantTargetY());
+
+  return target_pos;
+}
+
+double GimbalrotorPerchingNavigator::computeActiveHoldPitch() const
+{
+  if(has_active_pitch_target_)
+  {
+    return active_target_pitch_;
+  }
+
+  return locked_robot_rpy_.y();
+}
+
+double GimbalrotorPerchingNavigator::computeCompliantTargetY() const
+{
+  const double branch_relative_y_ref = perching_point_world_.y() + locked_y_offset_;
+  const double current_y = getCurrentRobotPos().y();
+  const double dy = current_y - branch_relative_y_ref;
+
+  if(std::fabs(dy) <= y_compliance_deadband_)
+  {
+    return current_y;
+  }
+
+  if(dy > 0.0)
+  {
+    return branch_relative_y_ref + y_compliance_deadband_;
+  }
+
+  return branch_relative_y_ref - y_compliance_deadband_;
 }
 
 void GimbalrotorPerchingNavigator::applyPerchingConstraint(aerial_robot_msgs::FlightNav& nav_msg)
 {
-  if(!perching_enable_) return;
+  if(!perching_enable_)
+  {
+    return;
+  }
 
   if(!perching_locked_)
   {
@@ -290,11 +422,17 @@ void GimbalrotorPerchingNavigator::applyPerchingConstraint(aerial_robot_msgs::Fl
    *
    * If pitch command is given:
    *   target_pitch -> target position on branch arc.
+   *
+   * Also store this pitch as the active pitch target, so the update loop keeps
+   * tracking it even after /uav/nav stops.
    */
   if(use_pitch_command_for_arc_ && hasPitchCommand(nav_msg))
   {
     const double target_pitch = getCommandedPitch(nav_msg);
     const tf::Vector3 target_pos = computeArcPositionFromPitch(target_pitch);
+
+    has_active_pitch_target_ = true;
+    active_target_pitch_ = target_pitch;
 
     nav_msg.pos_xy_nav_mode = NAV_MODE_POS;
     nav_msg.pos_z_nav_mode = NAV_MODE_POS;
@@ -315,27 +453,36 @@ void GimbalrotorPerchingNavigator::applyPerchingConstraint(aerial_robot_msgs::Fl
     return;
   }
 
+  if(!hasPitchCommand(nav_msg))
+  {
+    has_active_pitch_target_ = false;
+  }
+
   /*
-   * If no pitch command is given, but perching is enabled, hold the locked
-   * branch-relative pose. This avoids falling back to an old free-flight target.
+   * If no pitch command is given, but perching is enabled, hold/update the
+   * branch-relative pose. Unlike the old code, this uses the active hold
+   * calculation, not only the original locked pose.
    */
   if(hold_locked_pose_without_pitch_command_ && !hasPositionCommand(nav_msg))
   {
+    const double target_pitch = computeActiveHoldPitch();
+    const tf::Vector3 target_pos = computeActiveHoldPosition();
+
     nav_msg.pos_xy_nav_mode = NAV_MODE_POS;
     nav_msg.pos_z_nav_mode = NAV_MODE_POS;
 
-    nav_msg.target_pos_x = locked_robot_pos_world_.x();
-    nav_msg.target_pos_y = locked_robot_pos_world_.y();
-    nav_msg.target_pos_z = locked_robot_pos_world_.z();
+    nav_msg.target_pos_x = target_pos.x();
+    nav_msg.target_pos_y = target_pos.y();
+    nav_msg.target_pos_z = target_pos.z();
 
     nav_msg.target_vel_x = 0.0;
     nav_msg.target_vel_y = 0.0;
     nav_msg.target_vel_z = 0.0;
 
     nav_msg.pitch_nav_mode = NAV_MODE_POS;
-    nav_msg.target_pitch = locked_robot_rpy_.y();
+    nav_msg.target_pitch = target_pitch;
 
-    publishCommandedDebugPose(locked_robot_pos_world_, locked_robot_rpy_.y());
+    publishCommandedDebugPose(target_pos, target_pitch);
 
     return;
   }
@@ -448,7 +595,8 @@ tf::Vector3 GimbalrotorPerchingNavigator::computeArcPositionFromPitch(double tar
    *   r_des = RotY(dtheta) * r0
    *   P_des = C + r_des
    *
-   * For now this assumes branch axis roughly world Y, so pitch arc is X-Z.
+   * Assumption:
+   *   Branch axis is roughly world Y, so pitch arc is X-Z.
    */
 
   double delta_pitch = normalizeAngle(target_pitch - locked_robot_rpy_.y());
@@ -456,16 +604,38 @@ tf::Vector3 GimbalrotorPerchingNavigator::computeArcPositionFromPitch(double tar
 
   const double signed_delta = arc_pitch_sign_ * delta_pitch;
 
+  /*
+   * Use only X-Z radius for the pitch arc because Y is the branch-axis
+   * direction and is allowed to have small compliance.
+   */
+  tf::Vector3 locked_radius_xz(locked_radius_vec_world_.x(),
+                               0.0,
+                               locked_radius_vec_world_.z());
+
   tf::Matrix3x3 rot(tf::createQuaternionFromRPY(0.0, signed_delta, 0.0));
-  tf::Vector3 rotated_radius = rot * locked_radius_vec_world_;
+  tf::Vector3 rotated_radius = rot * locked_radius_xz;
+
+  double length_xz = norm2D(rotated_radius.x(), rotated_radius.z());
+
+  if(length_xz < 1.0e-6)
+  {
+    rotated_radius.setX(locked_x_side_ * locked_radius_);
+    rotated_radius.setY(0.0);
+    rotated_radius.setZ(0.0);
+  }
+  else
+  {
+    rotated_radius.setX(rotated_radius.x() / length_xz * locked_radius_);
+    rotated_radius.setY(0.0);
+    rotated_radius.setZ(rotated_radius.z() / length_xz * locked_radius_);
+  }
 
   tf::Vector3 target_pos = perching_point_world_ + rotated_radius;
 
   /*
-   * Keep branch-axis direction locked for first experiment.
-   * This prevents sliding sideways along the branch.
+   * Allow small Y offset, instead of complete Y lock.
    */
-  target_pos.setY(perching_point_world_.y() + locked_y_offset_);
+  target_pos.setY(computeCompliantTargetY());
 
   return target_pos;
 }
@@ -473,7 +643,6 @@ tf::Vector3 GimbalrotorPerchingNavigator::computeArcPositionFromPitch(double tar
 tf::Vector3 GimbalrotorPerchingNavigator::projectPositionToPitchArc(const tf::Vector3& desired_pos) const
 {
   const double cx = perching_point_world_.x();
-  const double cy = perching_point_world_.y();
   const double cz = perching_point_world_.z();
 
   double dx = desired_pos.x() - cx;
@@ -500,7 +669,7 @@ tf::Vector3 GimbalrotorPerchingNavigator::projectPositionToPitchArc(const tf::Ve
 
   tf::Vector3 constrained_pos;
   constrained_pos.setX(cx + locked_radius_ * dx);
-  constrained_pos.setY(cy + locked_y_offset_);
+  constrained_pos.setY(computeCompliantTargetY());
   constrained_pos.setZ(cz + locked_radius_ * dz);
 
   return constrained_pos;
@@ -572,15 +741,31 @@ tf::Vector3 GimbalrotorPerchingNavigator::getDesiredVelocity(const aerial_robot_
 
 double GimbalrotorPerchingNavigator::clamp(double value, double min_value, double max_value) const
 {
-  if(value < min_value) return min_value;
-  if(value > max_value) return max_value;
+  if(value < min_value)
+  {
+    return min_value;
+  }
+
+  if(value > max_value)
+  {
+    return max_value;
+  }
+
   return value;
 }
 
 double GimbalrotorPerchingNavigator::normalizeAngle(double angle) const
 {
-  while(angle > PI) angle -= 2.0 * PI;
-  while(angle < -PI) angle += 2.0 * PI;
+  while(angle > PI)
+  {
+    angle -= 2.0 * PI;
+  }
+
+  while(angle < -PI)
+  {
+    angle += 2.0 * PI;
+  }
+
   return angle;
 }
 

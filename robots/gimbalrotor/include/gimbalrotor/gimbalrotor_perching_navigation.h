@@ -1,20 +1,23 @@
 // -*- mode: c++ -*-
+
 #pragma once
 
 #include <cmath>
 #include <string>
 
-#include <ros/ros.h>
-
-#include <aerial_robot_msgs/FlightNav.h>
 #include <gimbalrotor/gimbalrotor_navigation.h>
 
-#include <geometry_msgs/PoseStamped.h>
+#include <aerial_robot_msgs/FlightNav.h>
+
 #include <geometry_msgs/PointStamped.h>
+#include <geometry_msgs/PoseStamped.h>
+
 #include <std_msgs/Bool.h>
 #include <std_msgs/Empty.h>
 
 #include <tf/tf.h>
+
+#include <ros/ros.h>
 
 namespace aerial_robot_navigation
 {
@@ -25,11 +28,23 @@ public:
   GimbalrotorPerchingNavigator();
   ~GimbalrotorPerchingNavigator() {}
 
-  void initialize(ros::NodeHandle nh,
-                  ros::NodeHandle nhp,
-                  boost::shared_ptr<aerial_robot_model::RobotModel> robot_model,
-                  boost::shared_ptr<aerial_robot_estimation::StateEstimator> estimator,
-                  double loop_du) override;
+  void initialize(
+      ros::NodeHandle nh,
+      ros::NodeHandle nhp,
+      boost::shared_ptr<aerial_robot_model::RobotModel> robot_model,
+      boost::shared_ptr<aerial_robot_estimation::StateEstimator> estimator,
+      double loop_du) override;
+
+  /*
+   * Important change:
+   *
+   * The old perching navigator only modified incoming /uav/nav commands.
+   * This update() makes perching an active mode.
+   *
+   * If perching_enable_ is true and the lock is valid, this continuously
+   * creates a branch-relative perching target every control cycle.
+   */
+  void update() override;
 
 private:
   /*
@@ -42,9 +57,14 @@ private:
    *   2. Normal navigation to branch.
    *   3. Enable perching navigation near branch.
    *   4. Lock current robot pose + branch/perching point.
-   *   5. Convert pitch command into:
+   *   5. While enabled, actively keep a branch-relative target.
+   *   6. If pitch command is given, convert pitch command into:
    *        - body pitch target
    *        - CoG position target on arc around branch
+   *
+   * Assumption:
+   *   Branch axis is approximately world Y.
+   *   Therefore pitch-arc motion is in world X-Z.
    */
 
   void rosParamInit() override;
@@ -60,6 +80,20 @@ private:
   void resetPerchingLock();
 
   void applyPerchingConstraint(aerial_robot_msgs::FlightNav& nav_msg);
+
+  /*
+   * Active perching target generation.
+   *
+   * This is the important part for:
+   *   - perching_enable_ true
+   *   - no /uav/nav command arriving
+   *   - still keep tracking branch-relative perching reference
+   */
+  void applyActivePerchingTarget();
+  aerial_robot_msgs::FlightNav buildActivePerchingNavCommand();
+  tf::Vector3 computeActiveHoldPosition() const;
+  double computeActiveHoldPitch() const;
+  double computeCompliantTargetY() const;
 
   bool hasPitchCommand(const aerial_robot_msgs::FlightNav& nav_msg) const;
   bool hasPositionCommand(const aerial_robot_msgs::FlightNav& nav_msg) const;
@@ -105,9 +139,24 @@ private:
   bool use_pitch_command_for_arc_;
   bool hold_locked_pose_without_pitch_command_;
 
+  /*
+   * New active-mode parameters.
+   *
+   * active_perching_hold_enable_:
+   *   If true, perching mode continuously sends a branch-relative target
+   *   during update(), even without /uav/nav.
+   *
+   * y_compliance_deadband_:
+   *   Small allowed motion along branch axis / world Y.
+   *   If current Y error is inside this band, target Y follows current Y.
+   *   If outside, target Y is clamped to the deadband boundary.
+   */
+  bool active_perching_hold_enable_;
+
   double min_valid_radius_;
   double max_pitch_delta_;
   double arc_pitch_sign_;
+  double y_compliance_deadband_;
 
   std::string perching_enable_topic_;
   std::string branch_pose_topic_;
@@ -117,6 +166,9 @@ private:
 
   bool has_branch_pose_;
   bool has_perching_point_;
+
+  bool has_active_pitch_target_;
+  double active_target_pitch_;
 
   tf::Vector3 branch_pos_world_;
   tf::Vector3 perching_point_world_;
