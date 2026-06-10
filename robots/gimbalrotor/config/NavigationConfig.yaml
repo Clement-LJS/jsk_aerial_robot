@@ -33,3 +33,63 @@ navigation:
   # desire tilt
   baselink_rot_pub_interval: 0.2
   baselink_rot_change_thresh: 1.0 # 0.2 hz -> 0.04; 0.01 hz-> 0.02
+
+
+  ############################# PERCHING NAV #############################
+  # Keep false by default.
+  # Enable only when robot is near branch and ready for perching/cutting.
+  perching_enable: false
+
+  # If true, first enable locks pivot/radius once.
+  # Use /gimbalrotor/perching/relock to relock manually.
+  perching_lock_once: true
+
+  # If true, perching cannot lock until branch_pose or perching_point exists.
+  perching_require_branch_point: true
+
+  # false:
+  #   target_pitch is absolute pitch [rad].
+  # true:
+  #   target_pitch is delta pitch from locked pitch [rad].
+  perching_command_pitch_as_delta: true
+
+  # If position command is sent while perching is enabled,
+  # constrain it onto branch pitch arc.
+  perching_constrain_position_command: true
+
+  # If velocity command is sent while perching is enabled,
+  # remove radial velocity away/toward branch.
+  perching_constrain_velocity_command: true
+
+  # Main cutting mode:
+  # target_pitch command creates target position around branch arc.
+  perching_use_pitch_command_for_arc: true
+
+  # If perching enabled but no pitch command arrives,
+  # hold the locked pose instead of drifting to old command.
+  perching_hold_locked_pose_without_pitch_command: true
+
+  # Safety: invalid branch/robot distance below this will not lock.
+  perching_min_valid_radius: 0.05
+
+  # Max allowed pitch change from locked pose [rad].
+  # 0.5236 = 30 deg
+  # 0.7854 = 45 deg
+  # 1.0472 = 60 deg
+  perching_max_pitch_delta: 0.5235987756
+
+  # If pitch arc direction is reversed, change to -1.0.
+  perching_arc_pitch_sign: 1.0
+
+  # Topic names are relative to /gimbalrotor namespace.
+  # Full topics:
+  #   /gimbalrotor/perching/enable
+  #   /gimbalrotor/perching/branch_pose
+  #   /gimbalrotor/perching/point
+  #   /gimbalrotor/perching/relock
+  #   /gimbalrotor/perching/reset
+  perching_enable_topic: "perching/enable"
+  perching_branch_pose_topic: "perching/branch_pose"
+  perching_point_topic: "perching/point"
+  perching_relock_topic: "perching/relock"
+  perching_reset_topic: "perching/reset"
