@@ -79,8 +79,9 @@ navigation:
   perching_max_pitch_delta: 0.5235987756
 
   # If pitch arc direction is reversed, change to -1.0.
-  perching_arc_pitch_sign: -1.0
-
+  perching_arc_pitch_sign: 1.0
+  perching_command_pitch_sign: 1.0
+  
   # Topic names are relative to /gimbalrotor namespace.
   # Full topics:
   #   /gimbalrotor/perching/enable

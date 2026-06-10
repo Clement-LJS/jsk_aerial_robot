@@ -156,6 +156,7 @@ private:
   double min_valid_radius_;
   double max_pitch_delta_;
   double arc_pitch_sign_;
+  double command_pitch_sign_;
   double y_compliance_deadband_;
 
   std::string perching_enable_topic_;

@@ -34,6 +34,7 @@ GimbalrotorPerchingNavigator::GimbalrotorPerchingNavigator():
   min_valid_radius_(0.05),
   max_pitch_delta_(0.78539816339),  // 45 deg
   arc_pitch_sign_(1.0),
+  command_pitch_sign_(1.0),
   y_compliance_deadband_(0.03),
 
   perching_enable_topic_("perching/enable"),
@@ -104,6 +105,7 @@ void GimbalrotorPerchingNavigator::rosParamInit()
   getParam<double>(navi_nh, "perching_min_valid_radius", min_valid_radius_, 0.05);
   getParam<double>(navi_nh, "perching_max_pitch_delta", max_pitch_delta_, 0.78539816339);
   getParam<double>(navi_nh, "perching_arc_pitch_sign", arc_pitch_sign_, 1.0);
+  getParam<double>(navi_nh, "perching_command_pitch_sign", command_pitch_sign_, 1.0);
   getParam<double>(navi_nh, "perching_y_compliance_deadband", y_compliance_deadband_, 0.03);
 
   getParam<std::string>(navi_nh, "perching_enable_topic", perching_enable_topic_, "perching/enable");
@@ -557,7 +559,7 @@ double GimbalrotorPerchingNavigator::getCommandedPitch(const aerial_robot_msgs::
 
   if(command_pitch_as_delta_)
   {
-    target_pitch = locked_robot_rpy_.y() + nav_msg.target_pitch;
+    target_pitch = locked_robot_rpy_.y() + command_pitch_sign_ * nav_msg.target_pitch;
   }
 
   double delta_pitch = normalizeAngle(target_pitch - locked_robot_rpy_.y());
