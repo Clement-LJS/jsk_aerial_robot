@@ -97,3 +97,6 @@ navigation:
 
   perching_active_hold_enable: true
   perching_y_compliance_deadband: 0.03
+
+  perching_accept_uav_nav_pitch_command: false
+  perching_manual_pitch_delta_topic: perching/manual_pitch_delta

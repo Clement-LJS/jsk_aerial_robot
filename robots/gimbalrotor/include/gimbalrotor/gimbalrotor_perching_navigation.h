@@ -14,6 +14,7 @@
 
 #include <std_msgs/Bool.h>
 #include <std_msgs/Empty.h>
+#include <std_msgs/Float64.h>
 
 #include <tf/tf.h>
 
@@ -36,37 +37,23 @@ public:
       double loop_du) override;
 
   /*
-   * Important change:
+   * Important:
    *
-   * The old perching navigator only modified incoming /uav/nav commands.
-   * This update() makes perching an active mode.
+   * Perching navigation is an active constrained navigation mode.
    *
-   * If perching_enable_ is true and the lock is valid, this continuously
-   * creates a branch-relative perching target every control cycle.
+   * While perching is enabled:
+   *   - the robot keeps a branch-relative target
+   *   - pitch delta command is converted into:
+   *       1. body pitch target
+   *       2. CoG position target on X-Z arc around branch/perching point
+   *
+   * Manual perching pitch command is intentionally separated from /uav/nav.
+   * This avoids /perching_cutting_mission overwriting manual pitch by sending
+   * target_pitch = 0.0 with pitch_nav_mode = POS.
    */
   void update() override;
 
 private:
-  /*
-   * Reusable perching navigation.
-   *
-   * This class is NOT for branch takeoff.
-   *
-   * Intended mission:
-   *   1. Normal takeoff from ground.
-   *   2. Normal navigation to branch.
-   *   3. Enable perching navigation near branch.
-   *   4. Lock current robot pose + branch/perching point.
-   *   5. While enabled, actively keep a branch-relative target.
-   *   6. If pitch command is given, convert pitch command into:
-   *        - body pitch target
-   *        - CoG position target on arc around branch
-   *
-   * Assumption:
-   *   Branch axis is approximately world Y.
-   *   Therefore pitch-arc motion is in world X-Z.
-   */
-
   void rosParamInit() override;
   void naviCallback(const aerial_robot_msgs::FlightNavConstPtr& msg) override;
 
@@ -76,19 +63,23 @@ private:
   void relockCallback(const std_msgs::EmptyConstPtr& msg);
   void resetCallback(const std_msgs::EmptyConstPtr& msg);
 
+  /*
+   * Manual perching pitch delta command.
+   *
+   * msg->data is relative pitch angle [rad].
+   *
+   * Example:
+   *   +0.10 rad means add +0.10 rad from locked pitch
+   *   -0.10 rad means add -0.10 rad from locked pitch
+   *    0.00 rad means return to locked pitch
+   */
+  void manualPitchDeltaCallback(const std_msgs::Float64ConstPtr& msg);
+
   bool tryLockPerching(const std::string& reason);
   void resetPerchingLock();
 
   void applyPerchingConstraint(aerial_robot_msgs::FlightNav& nav_msg);
 
-  /*
-   * Active perching target generation.
-   *
-   * This is the important part for:
-   *   - perching_enable_ true
-   *   - no /uav/nav command arriving
-   *   - still keep tracking branch-relative perching reference
-   */
   void applyActivePerchingTarget();
   aerial_robot_msgs::FlightNav buildActivePerchingNavCommand();
   tf::Vector3 computeActiveHoldPosition() const;
@@ -124,6 +115,7 @@ private:
   ros::Subscriber perching_point_sub_;
   ros::Subscriber relock_sub_;
   ros::Subscriber reset_sub_;
+  ros::Subscriber manual_pitch_delta_sub_;
 
   ros::Publisher locked_pose_pub_;
   ros::Publisher commanded_pose_pub_;
@@ -140,17 +132,17 @@ private:
   bool hold_locked_pose_without_pitch_command_;
 
   /*
-   * New active-mode parameters.
+   * If false, /uav/nav pitch_nav_mode == POS is NOT treated as a perching
+   * arc pitch command.
    *
-   * active_perching_hold_enable_:
-   *   If true, perching mode continuously sends a branch-relative target
-   *   during update(), even without /uav/nav.
+   * This should normally be false for your current test, because mission nodes
+   * often publish target_pitch = 0.0 with pitch_nav_mode = POS.
    *
-   * y_compliance_deadband_:
-   *   Small allowed motion along branch axis / world Y.
-   *   If current Y error is inside this band, target Y follows current Y.
-   *   If outside, target Y is clamped to the deadband boundary.
+   * Manual pitch should use:
+   *   /gimbalrotor/perching/manual_pitch_delta
    */
+  bool accept_uav_nav_pitch_command_;
+
   bool active_perching_hold_enable_;
 
   double min_valid_radius_;
@@ -164,6 +156,7 @@ private:
   std::string perching_point_topic_;
   std::string relock_topic_;
   std::string reset_topic_;
+  std::string manual_pitch_delta_topic_;
 
   bool has_branch_pose_;
   bool has_perching_point_;

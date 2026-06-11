@@ -29,6 +29,8 @@ GimbalrotorPerchingNavigator::GimbalrotorPerchingNavigator():
   use_pitch_command_for_arc_(true),
   hold_locked_pose_without_pitch_command_(true),
 
+  accept_uav_nav_pitch_command_(false),
+
   active_perching_hold_enable_(true),
 
   min_valid_radius_(0.05),
@@ -42,6 +44,7 @@ GimbalrotorPerchingNavigator::GimbalrotorPerchingNavigator():
   perching_point_topic_("perching/point"),
   relock_topic_("perching/relock"),
   reset_topic_("perching/reset"),
+  manual_pitch_delta_topic_("perching/manual_pitch_delta"),
 
   has_branch_pose_(false),
   has_perching_point_(false),
@@ -76,6 +79,12 @@ void GimbalrotorPerchingNavigator::initialize(
   relock_sub_ = nh_.subscribe(relock_topic_, 1, &GimbalrotorPerchingNavigator::relockCallback, this);
   reset_sub_ = nh_.subscribe(reset_topic_, 1, &GimbalrotorPerchingNavigator::resetCallback, this);
 
+  manual_pitch_delta_sub_ = nh_.subscribe(
+      manual_pitch_delta_topic_,
+      1,
+      &GimbalrotorPerchingNavigator::manualPitchDeltaCallback,
+      this);
+
   locked_pose_pub_ = nh_.advertise<geometry_msgs::PoseStamped>("perching/locked_pose", 1, true);
   commanded_pose_pub_ = nh_.advertise<geometry_msgs::PoseStamped>("perching/commanded_pose", 1);
 
@@ -83,6 +92,7 @@ void GimbalrotorPerchingNavigator::initialize(
   ROS_WARN("[GimbalrotorPerchingNavigator] enable topic: %s", perching_enable_topic_.c_str());
   ROS_WARN("[GimbalrotorPerchingNavigator] branch pose topic: %s", branch_pose_topic_.c_str());
   ROS_WARN("[GimbalrotorPerchingNavigator] perching point topic: %s", perching_point_topic_.c_str());
+  ROS_WARN("[GimbalrotorPerchingNavigator] manual pitch delta topic: %s", manual_pitch_delta_topic_.c_str());
 }
 
 void GimbalrotorPerchingNavigator::rosParamInit()
@@ -100,6 +110,19 @@ void GimbalrotorPerchingNavigator::rosParamInit()
   getParam<bool>(navi_nh, "perching_use_pitch_command_for_arc", use_pitch_command_for_arc_, true);
   getParam<bool>(navi_nh, "perching_hold_locked_pose_without_pitch_command", hold_locked_pose_without_pitch_command_, true);
 
+  /*
+   * Important:
+   *
+   * Default false.
+   *
+   * If this is false, /gimbalrotor/uav/nav pitch_nav_mode == POS will not be
+   * treated as a manual perching pitch command.
+   *
+   * This prevents /perching_cutting_mission from overwriting manual keyboard
+   * pitch by repeatedly sending target_pitch = 0.0.
+   */
+  getParam<bool>(navi_nh, "perching_accept_uav_nav_pitch_command", accept_uav_nav_pitch_command_, false);
+
   getParam<bool>(navi_nh, "perching_active_hold_enable", active_perching_hold_enable_, true);
 
   getParam<double>(navi_nh, "perching_min_valid_radius", min_valid_radius_, 0.05);
@@ -113,6 +136,13 @@ void GimbalrotorPerchingNavigator::rosParamInit()
   getParam<std::string>(navi_nh, "perching_point_topic", perching_point_topic_, "perching/point");
   getParam<std::string>(navi_nh, "perching_relock_topic", relock_topic_, "perching/relock");
   getParam<std::string>(navi_nh, "perching_reset_topic", reset_topic_, "perching/reset");
+
+  /*
+   * Use this for keyboard pitch add-angle.
+   *
+   * Full resolved topic is usually: /gimbalrotor/perching/manual_pitch_delta
+   */
+  getParam<std::string>(navi_nh, "perching_manual_pitch_delta_topic", manual_pitch_delta_topic_, "perching/manual_pitch_delta");
 }
 
 void GimbalrotorPerchingNavigator::update()
@@ -206,6 +236,45 @@ void GimbalrotorPerchingNavigator::resetPerchingLock()
   locked_radius_vec_world_.setValue(0.0, 0.0, 0.0);
 
   ROS_WARN("[GimbalrotorPerchingNavigator] perching lock reset");
+}
+
+void GimbalrotorPerchingNavigator::manualPitchDeltaCallback(const std_msgs::Float64ConstPtr& msg)
+{
+  if(!perching_enable_)
+  {
+    ROS_WARN_THROTTLE(
+        1.0,
+        "[GimbalrotorPerchingNavigator] manual pitch delta ignored because perching is disabled");
+    return;
+  }
+
+  if(!perching_locked_)
+  {
+    if(!tryLockPerching("manual pitch delta command"))
+    {
+      ROS_WARN_THROTTLE(
+          1.0,
+          "[GimbalrotorPerchingNavigator] manual pitch delta ignored because perching lock failed");
+      return;
+    }
+  }
+
+  double delta_pitch = command_pitch_sign_ * msg->data;
+  delta_pitch = clamp(delta_pitch, -max_pitch_delta_, max_pitch_delta_);
+
+  const double target_pitch = normalizeAngle(locked_robot_rpy_.y() + delta_pitch);
+  const tf::Vector3 target_pos = computeArcPositionFromPitch(target_pitch);
+
+  has_active_pitch_target_ = true;
+  active_target_pitch_ = target_pitch;
+
+  publishCommandedDebugPose(target_pos, target_pitch);
+
+  ROS_WARN_THROTTLE(
+      0.5,
+      "[GimbalrotorPerchingNavigator] manual pitch delta %.3f deg -> target pitch %.3f deg",
+      delta_pitch * 180.0 / PI,
+      target_pitch * 180.0 / PI);
 }
 
 bool GimbalrotorPerchingNavigator::tryLockPerching(const std::string& reason)
@@ -455,20 +524,12 @@ void GimbalrotorPerchingNavigator::applyPerchingConstraint(aerial_robot_msgs::Fl
     return;
   }
 
-  if(!hasPitchCommand(nav_msg))
-  {
-    has_active_pitch_target_ = false;
-  }
-
-  /*
-   * If no pitch command is given, but perching is enabled, hold/update the
-   * branch-relative pose. Unlike the old code, this uses the active hold
-   * calculation, not only the original locked pose.
-   */
   if(hold_locked_pose_without_pitch_command_ && !hasPositionCommand(nav_msg))
   {
     const double target_pitch = computeActiveHoldPitch();
-    const tf::Vector3 target_pos = computeActiveHoldPosition();
+    const tf::Vector3 target_pos = has_active_pitch_target_
+        ? computeArcPositionFromPitch(target_pitch)
+        : computeActiveHoldPosition();
 
     nav_msg.pos_xy_nav_mode = NAV_MODE_POS;
     nav_msg.pos_z_nav_mode = NAV_MODE_POS;
@@ -536,6 +597,10 @@ void GimbalrotorPerchingNavigator::applyPerchingConstraint(aerial_robot_msgs::Fl
 
 bool GimbalrotorPerchingNavigator::hasPitchCommand(const aerial_robot_msgs::FlightNav& nav_msg) const
 {
+  if(!accept_uav_nav_pitch_command_)
+  {
+    return false;
+  }
   return nav_msg.pitch_nav_mode == NAV_MODE_POS;
 }
 
