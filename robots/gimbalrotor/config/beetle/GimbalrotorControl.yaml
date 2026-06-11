@@ -1,4 +1,4 @@
-aerial_robot_control_name: aerial_robot_control/gimbalrotor_impedance_controller
+aerial_robot_control_name: aerial_robot_control/gimbalrotor_perching_impedance_controller
 
 controller:
   torque_allocation_matrix_inv_pub_interval: 0.05
@@ -133,3 +133,23 @@ controller:
     angular_vel_offset_limit_roll: 0.0
     angular_vel_offset_limit_pitch: 0.3
     angular_vel_offset_limit_yaw: 0.0
+
+    perching:
+      # These topics must match GimbalrotorPerchingNavigator.
+      perching_enable_topic: perching/enable
+      perching_point_topic: perching/point
+      perching_branch_pose_topic: perching/branch_pose
+      perching_locked_pose_topic: perching/locked_pose
+
+      # If /perching/point is not published, use branch pose as the pivot.
+      use_branch_pose_if_no_point: true
+
+      # Only use perching-constrained impedance after the perching navigator has locked.
+      # If not locked yet, this controller falls back to normal impedance.
+      require_perching_lock: true
+
+      # These should match your navigation parameters.
+      # If omitted, the controller also tries to read them from navigation.
+      perching_min_valid_radius: 0.05
+      perching_max_pitch_delta: 0.78539816339
+      perching_arc_pitch_sign: 1.0

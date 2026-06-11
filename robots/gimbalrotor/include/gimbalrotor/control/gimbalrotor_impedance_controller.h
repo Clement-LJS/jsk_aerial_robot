@@ -40,7 +40,23 @@ protected:
   virtual void rosParamInit() override;
   virtual void controlCore() override;
 
-private:
+  /*
+   * This is the important refactor.
+   *
+   * Normal GimbalrotorImpedanceController uses normal impedance injection.
+   * A subclass, such as GimbalrotorPerchingImpedanceController, can override
+   * only this function and keep all existing impedance/wrench/core logic.
+   */
+  virtual void applyImpedanceOutputToNavigator(
+      const tf::Vector3& original_target_pos,
+      const tf::Vector3& original_target_rpy,
+      const ImpedanceCoreOutput& output);
+
+  virtual const char* controllerName() const
+  {
+    return "GimbalrotorImpedanceController";
+  }
+
   void externalWrenchCallback(
       const geometry_msgs::WrenchStamped::ConstPtr& msg);
 
@@ -57,7 +73,7 @@ private:
   Eigen::Vector3d tfVector3ToEigen(
       const tf::Vector3& v) const;
 
-private:
+protected:
   ros::Subscriber external_wrench_sub_;
   ros::Subscriber impedance_enable_sub_;
 
@@ -81,9 +97,6 @@ private:
    *
    *   cog / body / base_link:
    *     impedance axes rotate with robot body
-   *
-   * Robot-specific tool frame should be added later in a robot-specific
-   * subclass, not in ImpedanceCore.
    */
   std::string compliance_frame_;
 
