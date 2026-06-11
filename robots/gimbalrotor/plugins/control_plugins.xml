@@ -2,4 +2,9 @@
   <class name="aerial_robot_control/gimbalrotor_controller" type="aerial_robot_control::GimbalrotorController" base_class_type="aerial_robot_control::ControlBase">
     <description>plugin for gimbalrotor control </description>
   </class>
+
+  <class name="aerial_robot_control/gimbalrotor_impedance_controller" type="aerial_robot_control::GimbalrotorImpedanceController" base_class_type="aerial_robot_control::ControlBase">
+    <description>plugin for gimbalrotor impedance control </description>
+  </class>
+
 </library>

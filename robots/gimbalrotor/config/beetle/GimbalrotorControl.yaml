@@ -1,4 +1,4 @@
-aerial_robot_control_name: aerial_robot_control/gimbalrotor_controller
+aerial_robot_control_name: aerial_robot_control/gimbalrotor_impedance_controller
 
 controller:
   torque_allocation_matrix_inv_pub_interval: 0.05
@@ -57,3 +57,79 @@ controller:
     limit_d: 20.0
 
     need_d_control: true
+
+  impedance:
+    use_impedance: true
+
+    impedance_enable_topic: perching/enable
+    external_wrench_topic: estimated_external_wrench
+
+    external_wrench_frame: world
+    compliance_frame: world
+
+    force_lpf_alpha: 0.2
+    torque_lpf_alpha: 0.2
+
+    enable_x: 0
+    enable_y: 0
+    enable_z: 0
+
+    enable_roll: 0
+    enable_pitch: 1
+    enable_yaw: 0
+
+    force_ref_x: 0.0
+    force_ref_y: 0.0
+    force_ref_z: 0.0
+
+    torque_ref_roll: 0.0
+    torque_ref_pitch: 0.0
+    torque_ref_yaw: 0.0
+
+    mass_x: 5.0
+    mass_y: 5.0
+    mass_z: 5.0
+
+    damping_x: 50.0
+    damping_y: 50.0
+    damping_z: 50.0
+
+    stiffness_x: 100.0
+    stiffness_y: 100.0
+    stiffness_z: 100.0
+
+    inertia_roll: 0.08
+    inertia_pitch: 0.08
+    inertia_yaw: 0.08
+
+    rot_damping_roll: 0.5
+    rot_damping_pitch: 0.5
+    rot_damping_yaw: 0.5
+
+    rot_stiffness_roll: 1.0
+    rot_stiffness_pitch: 1.0
+    rot_stiffness_yaw: 1.0
+
+    force_limit_x: 0.0
+    force_limit_y: 0.0
+    force_limit_z: 0.0
+
+    torque_limit_roll: 0.0
+    torque_limit_pitch: 0.2
+    torque_limit_yaw: 0.0
+
+    pos_offset_limit_x: 0.0
+    pos_offset_limit_y: 0.0
+    pos_offset_limit_z: 0.0
+
+    vel_offset_limit_x: 0.0
+    vel_offset_limit_y: 0.0
+    vel_offset_limit_z: 0.0
+
+    angle_offset_limit_roll: 0.0
+    angle_offset_limit_pitch: 0.05236
+    angle_offset_limit_yaw: 0.0
+
+    angular_vel_offset_limit_roll: 0.0
+    angular_vel_offset_limit_pitch: 0.3
+    angular_vel_offset_limit_yaw: 0.0
