@@ -1,0 +1,57 @@
+<launch>
+  <!-- Bag replay / RViz fixed frame -->
+  <arg name="fixed_frame" default="world"/>
+
+  <!-- Your actual topics -->
+  <arg name="branch_pose_topic" default="/mocap/pose"/>
+  <arg name="robot_odom_topic" default="/gimbalrotor/uav/baselink/odom"/>
+
+  <!-- Debug output namespace -->
+  <arg name="debug_ns" default="/gimbalrotor/perching_debug"/>
+
+  <!-- Hand/perching point offset from base_link.
+       Default x = 0.19178 + 0.3875 = 0.57928 m.
+       Change only if your real perching point is different. -->
+  <arg name="hand_offset_x" default="0.57928"/>
+  <arg name="hand_offset_y" default="0.0"/>
+  <arg name="hand_offset_z" default="0.0"/>
+
+  <!-- Target radius options.
+       If target_radius is 0 and auto_set_target_radius is true,
+       the node automatically locks the first measured radius as target.
+       For better checking, you can set target_radius to your controller's commanded perching radius. -->
+  <arg name="target_radius" default="0.0"/>
+  <arg name="auto_set_target_radius" default="true"/>
+
+  <!-- Visualization tuning -->
+  <arg name="branch_axis_length" default="2.0"/>
+  <arg name="publish_rate" default="30.0"/>
+
+  <node pkg="gimbalrotor"
+        type="perching_radius_debug_node.py"
+        name="perching_radius_debug_node"
+        output="screen">
+
+    <param name="fixed_frame" value="$(arg fixed_frame)"/>
+    <param name="branch_pose_topic" value="$(arg branch_pose_topic)"/>
+    <param name="robot_odom_topic" value="$(arg robot_odom_topic)"/>
+    <param name="debug_ns" value="$(arg debug_ns)"/>
+
+    <param name="hand_offset_x" value="$(arg hand_offset_x)"/>
+    <param name="hand_offset_y" value="$(arg hand_offset_y)"/>
+    <param name="hand_offset_z" value="$(arg hand_offset_z)"/>
+
+    <param name="target_radius" value="$(arg target_radius)"/>
+    <param name="auto_set_target_radius" value="$(arg auto_set_target_radius)"/>
+
+    <param name="branch_axis_length" value="$(arg branch_axis_length)"/>
+    <param name="publish_rate" value="$(arg publish_rate)"/>
+  </node>
+
+  <node pkg="rviz"
+        type="rviz"
+        name="rviz_perching_radius_debug"
+        args="-d $(find gimbalrotor)/scripts/rviz/perching_radius_debug.rviz"
+        if="$(arg launch_rviz)"
+        output="screen"/>
+</launch>

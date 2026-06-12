@@ -1,0 +1,137 @@
+Panels:
+  - Class: rviz/Displays
+    Name: Displays
+    Property Tree Widget:
+      Expanded:
+        - /Global Options1
+      Splitter Ratio: 0.5
+    Tree Height: 300
+
+Visualization Manager:
+  Class: ""
+  Enabled: true
+
+  Global Options:
+    Background Color: 48; 48; 48
+    Default Light: true
+    Fixed Frame: world
+    Frame Rate: 30
+
+  Displays:
+    - Class: rviz/Grid
+      Name: Grid
+      Enabled: true
+      Value: true
+      Alpha: 0.5
+      Cell Size: 0.25
+      Plane: XY
+      Plane Cell Count: 30
+      Color: 160; 160; 160
+      Reference Frame: <Fixed Frame>
+
+    - Class: rviz/TF
+      Name: TF
+      Enabled: true
+      Value: true
+      Marker Scale: 0.30
+      Marker Alpha: 1
+      Show Arrows: true
+      Show Axes: true
+      Show Names: false
+      Frame Timeout: 15
+      Update Interval: 0
+      Frames:
+        All Enabled: true
+      Tree:
+        {}
+
+    - Class: rviz/MarkerArray
+      Name: Perching Radius Debug Markers
+      Enabled: true
+      Value: true
+      Marker Topic: /gimbalrotor/perching_debug/markers
+      Queue Size: 100
+      Namespaces:
+        {}
+
+    - Class: rviz/Odometry
+      Name: Robot Baselink Odom
+      Enabled: true
+      Value: true
+      Topic: /gimbalrotor/uav/baselink/odom
+      Keep: 100
+      Position Tolerance: 0.01
+      Angle Tolerance: 0.01
+      Color: 255; 0; 0
+      Alpha: 1
+      Shape:
+        Value: Axes
+        Axes Length: 0.35
+        Axes Radius: 0.02
+        Shaft Length: 0.35
+        Shaft Radius: 0.02
+        Head Length: 0.20
+        Head Radius: 0.05
+        Color: 255; 0; 0
+      Covariance:
+        Value: false
+      Unreliable: false
+
+    - Class: rviz/Pose
+      Name: Branch Mocap Pose
+      Enabled: true
+      Value: true
+      Topic: /mocap/pose
+      Shape: Axes
+      Axes Length: 0.40
+      Axes Radius: 0.02
+      Shaft Length: 0.35
+      Shaft Radius: 0.02
+      Head Length: 0.20
+      Head Radius: 0.05
+      Color: 0; 255; 0
+      Alpha: 1
+      Unreliable: false
+
+  Tools:
+    - Class: rviz/Interact
+      Hide Inactive Objects: true
+    - Class: rviz/MoveCamera
+    - Class: rviz/Select
+    - Class: rviz/FocusCamera
+    - Class: rviz/Measure
+    - Class: rviz/PublishPoint
+      Topic: /clicked_point
+      Single click: true
+
+  Views:
+    Current:
+      Class: rviz/Orbit
+      Name: Current View
+      Target Frame: <Fixed Frame>
+      Distance: 3.0
+      Focal Point:
+        X: 0.0
+        Y: 0.0
+        Z: 0.6
+      Pitch: 0.75
+      Yaw: 2.35
+      Near Clip Distance: 0.01
+      Focal Shape Fixed Size: true
+      Focal Shape Size: 0.05
+      Value: Orbit
+    Saved: ~
+
+Window Geometry:
+  Width: 1600
+  Height: 1000
+  X: 0
+  Y: 0
+
+  # Hide the left dock by default.
+  # If it still appears, use: Panels -> uncheck Displays.
+  Hide Left Dock: true
+  Hide Right Dock: true
+
+  Displays:
+    collapsed: true

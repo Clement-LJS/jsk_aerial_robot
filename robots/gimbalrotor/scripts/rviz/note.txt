@@ -1,0 +1,13 @@
+roscore 
+
+source ~/ros/jsk_aerial_robot_ws/devel/setup.bash
+rosparam set /use_sim_time true
+roslaunch gimbalrotor perching_radius_debug.launch launch_rviz:=true
+
+source ~/ros/jsk_aerial_robot_ws/devel/setup.bash
+rosbag play 5perchingimpedance_pushwithpipe.bag --clock --pause
+
+Add -> By topic -> /gimbalrotor/perching_debug/markers -> MarkerArray
+Add -> By topic -> /gimbalrotor/uav/baselink/odom -> Odometry
+Add -> By topic -> /mocap/pose -> Pose
+Add -> TF
