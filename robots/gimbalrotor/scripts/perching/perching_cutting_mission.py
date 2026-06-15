@@ -17,7 +17,7 @@ NAV_MODE_POS_VEL = 3
 
 class PerchingCuttingMission:
     def __init__(self):
-        self.ns = rospy.get_param("~robot_namespace", "/gimbalrotor")
+        self.ns = rospy.get_param("~robot_namespace", "/gimbalrotor").rstrip("/")
 
         self.branch_pose_topic = rospy.get_param(
             "~branch_pose_topic",
@@ -26,7 +26,7 @@ class PerchingCuttingMission:
 
         self.use_branch_pose_as_perching_point = rospy.get_param(
             "~use_branch_pose_as_perching_point",
-            True
+            False
         )
 
         self.perching_point_offset_x = rospy.get_param(
@@ -101,6 +101,13 @@ class PerchingCuttingMission:
             latch=True
         )
 
+        self.branch_pose_pub = rospy.Publisher(
+            self.ns + "/perching/branch_pose",
+            PoseStamped,
+            queue_size=1,
+            latch=True
+        )
+
         self.perching_point_pub = rospy.Publisher(
             self.ns + "/perching/point",
             PointStamped,
@@ -133,10 +140,19 @@ class PerchingCuttingMission:
 
         rospy.logwarn("[PerchingCuttingMission] initialized")
         rospy.logwarn("[PerchingCuttingMission] branch_pose_topic: %s", self.branch_pose_topic)
+        rospy.logwarn("[PerchingCuttingMission] use_branch_pose_as_perching_point: %s",
+                      str(self.use_branch_pose_as_perching_point))
 
     def branch_pose_callback(self, msg):
         self.latest_branch_pose = msg
 
+        # Always republish branch mocap as reference information.
+        # The perching navigator can use this as existence/reference,
+        # but the hand-center pivot calculation does not use this origin.
+        self.branch_pose_pub.publish(msg)
+
+        # Legacy mode only.
+        # Keep this option for debugging old experiments, but default is false.
         if not self.use_branch_pose_as_perching_point:
             return
 
@@ -155,7 +171,8 @@ class PerchingCuttingMission:
 
         if self.enabled:
             rospy.logwarn("[PerchingCuttingMission] ENABLED")
-            rospy.logwarn("[PerchingCuttingMission] target pitch: %.2f deg", math.degrees(self.current_target_pitch_rad))
+            rospy.logwarn("[PerchingCuttingMission] target pitch: %.2f deg",
+                          math.degrees(self.current_target_pitch_rad))
         else:
             rospy.logwarn("[PerchingCuttingMission] DISABLED")
 
@@ -200,8 +217,6 @@ class PerchingCuttingMission:
 
         nav_msg = FlightNav()
 
-        # No free XYZ command here.
-        # C++ perching navigator will generate position command from pitch.
         nav_msg.pos_xy_nav_mode = NAV_MODE_NONE
         nav_msg.pos_z_nav_mode = NAV_MODE_NONE
 
@@ -209,7 +224,6 @@ class PerchingCuttingMission:
         nav_msg.target_vel_y = 0.0
         nav_msg.target_vel_z = 0.0
 
-        # Pitch command is the main command.
         nav_msg.roll_nav_mode = NAV_MODE_NONE
         nav_msg.pitch_nav_mode = NAV_MODE_POS
         nav_msg.yaw_nav_mode = NAV_MODE_NONE

@@ -32,6 +32,8 @@ public:
   virtual void reset() override;
 
 protected:
+  virtual void controlCore() override;
+
   virtual const char* controllerName() const override
   {
     return "GimbalrotorPerchingImpedanceController";
@@ -45,6 +47,12 @@ protected:
 private:
   void perchingRosParamInit();
 
+  void normalImpedanceEnableCallback(
+      const std_msgs::Bool::ConstPtr& msg);
+
+  void perchingImpedanceEnableCallback(
+      const std_msgs::Bool::ConstPtr& msg);
+
   void perchingEnableCallback(
       const std_msgs::Bool::ConstPtr& msg);
 
@@ -56,6 +64,13 @@ private:
 
   void lockedPoseCallback(
       const geometry_msgs::PoseStamped::ConstPtr& msg);
+
+  void lockedPivotCallback(
+      const geometry_msgs::PointStamped::ConstPtr& msg);
+
+  void updateEffectiveImpedanceEnable();
+
+  void updateLockedConstraintFromLockedPoseAndPivot();
 
   bool hasValidPerchingConstraint() const;
 
@@ -81,19 +96,31 @@ private:
       tf::Vector3& rpy) const;
 
 private:
+  ros::Subscriber normal_impedance_enable_sub_;
+  ros::Subscriber perching_impedance_enable_sub_;
+
   ros::Subscriber perching_enable_sub_for_constraint_;
   ros::Subscriber perching_point_sub_;
   ros::Subscriber branch_pose_sub_;
   ros::Subscriber locked_pose_sub_;
+  ros::Subscriber locked_pivot_sub_;
 
   std::string perching_enable_topic_for_constraint_;
+  std::string perching_impedance_enable_topic_;
   std::string perching_point_topic_;
   std::string perching_branch_pose_topic_;
   std::string perching_locked_pose_topic_;
+  std::string perching_locked_pivot_topic_;
+
+  bool normal_impedance_enabled_;
+  bool perching_impedance_enabled_;
+  bool effective_impedance_enabled_;
 
   bool perching_enabled_for_constraint_;
   bool has_perching_point_;
   bool has_branch_pose_;
+  bool has_locked_pose_msg_;
+  bool has_locked_pivot_;
   bool has_locked_pose_;
 
   bool use_branch_pose_if_no_point_;
@@ -108,6 +135,7 @@ private:
 
   tf::Vector3 locked_robot_pos_world_;
   tf::Vector3 locked_robot_rpy_;
+  tf::Vector3 locked_pivot_world_;
   tf::Vector3 locked_radius_vec_world_;
 
   double locked_radius_;

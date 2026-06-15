@@ -36,21 +36,6 @@ public:
       boost::shared_ptr<aerial_robot_estimation::StateEstimator> estimator,
       double loop_du) override;
 
-  /*
-   * Important:
-   *
-   * Perching navigation is an active constrained navigation mode.
-   *
-   * While perching is enabled:
-   *   - the robot keeps a branch-relative target
-   *   - pitch delta command is converted into:
-   *       1. body pitch target
-   *       2. CoG position target on X-Z arc around branch/perching point
-   *
-   * Manual perching pitch command is intentionally separated from /uav/nav.
-   * This avoids /perching_cutting_mission overwriting manual pitch by sending
-   * target_pitch = 0.0 with pitch_nav_mode = POS.
-   */
   void update() override;
 
 private:
@@ -62,17 +47,6 @@ private:
   void perchingPointCallback(const geometry_msgs::PointStampedConstPtr& msg);
   void relockCallback(const std_msgs::EmptyConstPtr& msg);
   void resetCallback(const std_msgs::EmptyConstPtr& msg);
-
-  /*
-   * Manual perching pitch delta command.
-   *
-   * msg->data is relative pitch angle [rad].
-   *
-   * Example:
-   *   +0.10 rad means add +0.10 rad from locked pitch
-   *   -0.10 rad means add -0.10 rad from locked pitch
-   *    0.00 rad means return to locked pitch
-   */
   void manualPitchDeltaCallback(const std_msgs::Float64ConstPtr& msg);
 
   bool tryLockPerching(const std::string& reason);
@@ -102,12 +76,24 @@ private:
   tf::Vector3 getDesiredPosition(const aerial_robot_msgs::FlightNav& nav_msg) const;
   tf::Vector3 getDesiredVelocity(const aerial_robot_msgs::FlightNav& nav_msg) const;
 
+  tf::Vector3 getCurrentBaselinkPos() const;
+  tf::Matrix3x3 getCurrentBaselinkRot() const;
+
+  tf::Vector3 computeHandPerchingCenterWorldFromBaselink() const;
+
+  bool isManualPivotMode() const;
+  bool isBranchPivotMode() const;
+  bool hasBranchPivotSource() const;
+
+  tf::Vector3 computeLockPivotWorld() const;
+
   double clamp(double value, double min_value, double max_value) const;
   double normalizeAngle(double angle) const;
   double norm2D(double x, double z) const;
   double norm3D(const tf::Vector3& v) const;
 
   void publishLockedDebugPose();
+  void publishLockedPivot();
   void publishCommandedDebugPose(const tf::Vector3& pos, double pitch);
 
   ros::Subscriber perching_enable_sub_;
@@ -118,6 +104,7 @@ private:
   ros::Subscriber manual_pitch_delta_sub_;
 
   ros::Publisher locked_pose_pub_;
+  ros::Publisher locked_pivot_pub_;
   ros::Publisher commanded_pose_pub_;
 
   bool perching_enable_;
@@ -131,18 +118,7 @@ private:
   bool use_pitch_command_for_arc_;
   bool hold_locked_pose_without_pitch_command_;
 
-  /*
-   * If false, /uav/nav pitch_nav_mode == POS is NOT treated as a perching
-   * arc pitch command.
-   *
-   * This should normally be false for your current test, because mission nodes
-   * often publish target_pitch = 0.0 with pitch_nav_mode = POS.
-   *
-   * Manual pitch should use:
-   *   /gimbalrotor/perching/manual_pitch_delta
-   */
   bool accept_uav_nav_pitch_command_;
-
   bool active_perching_hold_enable_;
 
   double min_valid_radius_;
@@ -151,9 +127,14 @@ private:
   double command_pitch_sign_;
   double y_compliance_deadband_;
 
+  std::string pivot_source_;
+
+  tf::Vector3 hand_perching_center_offset_baselink_; 
+  
   std::string perching_enable_topic_;
   std::string branch_pose_topic_;
   std::string perching_point_topic_;
+  std::string locked_pivot_topic_;
   std::string relock_topic_;
   std::string reset_topic_;
   std::string manual_pitch_delta_topic_;
@@ -169,6 +150,7 @@ private:
 
   tf::Vector3 locked_robot_pos_world_;
   tf::Vector3 locked_robot_rpy_;
+  tf::Vector3 locked_pivot_world_;
   tf::Vector3 locked_radius_vec_world_;
 
   double locked_radius_;

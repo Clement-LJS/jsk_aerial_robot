@@ -61,7 +61,8 @@ controller:
   impedance:
     use_impedance: true
 
-    impedance_enable_topic: perching/enable
+    impedance_enable_topic: impedance_enable
+
     external_wrench_topic: estimated_external_wrench
 
     external_wrench_frame: world
@@ -70,6 +71,8 @@ controller:
     force_lpf_alpha: 0.2
     torque_lpf_alpha: 0.2
 
+    # Keep your proven perching test setting.
+    # For normal flying impedance in all axes, you can later set x/y/z to 1.
     enable_x: 0
     enable_y: 0
     enable_z: 0
@@ -135,21 +138,26 @@ controller:
     angular_vel_offset_limit_yaw: 0.0
 
     perching:
-      # These topics must match GimbalrotorPerchingNavigator.
+      # Perching navigation state.
+      # Full topic: /gimbalrotor/perching/enable
       perching_enable_topic: perching/enable
+
+      # Separate perching impedance trigger.
+      # Full topic: /gimbalrotor/perching/impedance_enable
+      perching_impedance_enable_topic: perching/impedance_enable
+
+      # These topics must match GimbalrotorPerchingNavigator.
       perching_point_topic: perching/point
       perching_branch_pose_topic: perching/branch_pose
       perching_locked_pose_topic: perching/locked_pose
+      perching_locked_pivot_topic: perching/locked_pivot
 
-      # If /perching/point is not published, use branch pose as the pivot.
-      use_branch_pose_if_no_point: true
+      # Do not use branch mocap as fallback pivot.
+      # The navigator publishes locked_pivot from the hand center.
+      use_branch_pose_if_no_point: false
 
-      # Only use perching-constrained impedance after the perching navigator has locked.
-      # If not locked yet, this controller falls back to normal impedance.
       require_perching_lock: true
 
-      # These should match your navigation parameters.
-      # If omitted, the controller also tries to read them from navigation.
       perching_min_valid_radius: 0.05
       perching_max_pitch_delta: 0.78539816339
       perching_arc_pitch_sign: 1.0

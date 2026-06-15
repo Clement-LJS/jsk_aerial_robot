@@ -36,37 +36,26 @@ navigation:
 
 
   ############################# PERCHING NAV #############################
-  # Keep false by default.
-  # Enable only when robot is near branch and ready for perching/cutting.
+  # Keep false by default. Enable only when robot is near branch and ready for perching/cutting.
   perching_enable: false
 
-  # If true, first enable locks pivot/radius once.
-  # Use /gimbalrotor/perching/relock to relock manually.
+  # If true, first enable locks pivot/radius once. Use /gimbalrotor/perching/relock to relock manually.
   perching_lock_once: true
 
-  # If true, perching cannot lock until branch_pose or perching_point exists.
-  perching_require_branch_point: true
-
-  # false:
-  #   target_pitch is absolute pitch [rad].
-  # true:
-  #   target_pitch is delta pitch from locked pitch [rad].
+  # false: target_pitch is absolute pitch [rad].
+  # true: target_pitch is delta pitch from locked pitch [rad].
   perching_command_pitch_as_delta: true
 
-  # If position command is sent while perching is enabled,
-  # constrain it onto branch pitch arc.
+  # If position command is sent while perching is enabled, constrain it onto branch pitch arc.
   perching_constrain_position_command: true
 
-  # If velocity command is sent while perching is enabled,
-  # remove radial velocity away/toward branch.
+  # If velocity command is sent while perching is enabled, remove radial velocity away/toward branch.
   perching_constrain_velocity_command: true
 
-  # Main cutting mode:
-  # target_pitch command creates target position around branch arc.
+  # Main cutting mode: target_pitch command creates target position around branch arc.
   perching_use_pitch_command_for_arc: true
 
-  # If perching enabled but no pitch command arrives,
-  # hold the locked pose instead of drifting to old command.
+  # If perching enabled but no pitch command arrives, hold the locked pose instead of drifting to old command.
   perching_hold_locked_pose_without_pitch_command: true
 
   # Safety: invalid branch/robot distance below this will not lock.
@@ -82,13 +71,6 @@ navigation:
   perching_arc_pitch_sign: 1.0
   perching_command_pitch_sign: 1.0
   
-  # Topic names are relative to /gimbalrotor namespace.
-  # Full topics:
-  #   /gimbalrotor/perching/enable
-  #   /gimbalrotor/perching/branch_pose
-  #   /gimbalrotor/perching/point
-  #   /gimbalrotor/perching/relock
-  #   /gimbalrotor/perching/reset
   perching_enable_topic: "perching/enable"
   perching_branch_pose_topic: "perching/branch_pose"
   perching_point_topic: "perching/point"
@@ -100,3 +82,16 @@ navigation:
 
   perching_accept_uav_nav_pitch_command: false
   perching_manual_pitch_delta_topic: perching/manual_pitch_delta
+  
+  perching_pivot_source: manual
+  perching_require_branch_point: false
+
+  # hand center from baselink 
+  hand_perching_center_offset_baselink_x: -0.33568
+  hand_perching_center_offset_baselink_y: 0.00193
+  hand_perching_center_offset_baselink_z: 0.08000
+
+  # Latched pivot topic published by perching navigator after lock.
+  # Perching impedance controller uses this so both navigator and controller
+  # use exactly the same pivot.
+  perching_locked_pivot_topic: perching/locked_pivot

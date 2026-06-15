@@ -1,21 +1,19 @@
 <launch>
   <arg name="robot_namespace" default="/gimbalrotor"/>
 
-  <!-- Change this to your real branch mocap topic. -->
+  <!-- Branch mocap topic. This is reference information only. -->
   <arg name="branch_pose_topic" default="/mocap/ground_pose"/>
 
-  <!-- If the mocap origin is not exactly the contact/perching point,
-       tune these offsets. -->
+  <!-- Legacy only. Default false because branch mocap origin is not the branch center axis. -->
+  <arg name="use_branch_pose_as_perching_point" default="false"/>
+
   <arg name="perching_point_offset_x" default="0.0"/>
   <arg name="perching_point_offset_y" default="0.0"/>
   <arg name="perching_point_offset_z" default="0.0"/>
 
   <arg name="command_rate" default="20.0"/>
 
-  <!-- Initial pitch command after enabling perching mission. -->
   <arg name="default_pitch_deg" default="0.0"/>
-
-  <!-- Safety limit for pitch command from this mission node. -->
   <arg name="pitch_limit_deg" default="30.0"/>
 
   <node pkg="gimbalrotor"
@@ -25,7 +23,7 @@
     <param name="robot_namespace" value="$(arg robot_namespace)"/>
     <param name="branch_pose_topic" value="$(arg branch_pose_topic)"/>
 
-    <param name="use_branch_pose_as_perching_point" value="true"/>
+    <param name="use_branch_pose_as_perching_point" value="$(arg use_branch_pose_as_perching_point)"/>
     <param name="perching_point_offset_x" value="$(arg perching_point_offset_x)"/>
     <param name="perching_point_offset_y" value="$(arg perching_point_offset_y)"/>
     <param name="perching_point_offset_z" value="$(arg perching_point_offset_z)"/>
