@@ -91,7 +91,7 @@ if __name__ == "__main__":
         "/gimbalrotor/perching/manual_pitch_delta"
     )
 
-    step = rospy.get_param("~step", 0.02)
+    step = rospy.get_param("~step", 0.0017) # 0.1deg
 
     limit_deg = rospy.get_param("~limit_deg", 20.0)
     limit_rad = math.radians(limit_deg)
