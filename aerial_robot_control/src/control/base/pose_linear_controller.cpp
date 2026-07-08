@@ -35,8 +35,6 @@
 
 
 #include <aerial_robot_control/control/base/pose_linear_controller.h>
-#include <algorithm>
-#include <cmath>
 
 namespace aerial_robot_control
 {
@@ -49,8 +47,6 @@ namespace aerial_robot_control
     rpy_(0,0,0), target_rpy_(0,0,0),
     target_acc_(0,0,0),
     target_omega_(0,0,0),
-    prev_rpy_(0,0,0),
-    prev_rpy_initialized_(false),
     start_rp_integration_(false)
   {
     pid_msg_.x.total.resize(1);
@@ -210,9 +206,6 @@ namespace aerial_robot_control
     target_acc_.setValue(0, 0, 0);
     target_rpy_.setValue(0, 0, 0);
     target_omega_.setValue(0, 0, 0);
-    
-    prev_rpy_.setValue(0, 0, 0);
-    prev_rpy_initialized_ = false;
   }
 
   bool PoseLinearController::update()
@@ -237,40 +230,8 @@ namespace aerial_robot_control
     tf::Quaternion cog2baselink_rot;
     tf::quaternionKDLToTF(robot_model_->getCogDesireOrientation<KDL::Rotation>(), cog2baselink_rot);
     tf::Matrix3x3 cog_rot = estimator_->getOrientation(Frame::BASELINK, estimate_mode_) * tf::Matrix3x3(cog2baselink_rot).inverse();
-
-    double r, p, y;
-    cog_rot.getRPY(r, p, y);
-
-    if(prev_rpy_initialized_)
-      {
-        const double dr = std::abs(angles::shortest_angular_distance(prev_rpy_.x(), r));
-        const double dp = std::abs(angles::shortest_angular_distance(prev_rpy_.y(), p));
-        const double dy = std::abs(angles::shortest_angular_distance(prev_rpy_.z(), y));
-
-        const double pi = 3.14159265358979323846;
-        const double max_att_jump = 60.0 * pi / 180.0;
-
-        if(dr > max_att_jump || dp > max_att_jump || dy > max_att_jump)
-          {
-            ROS_ERROR_THROTTLE(
-                0.1,
-                "[PoseLinearController] rejected attitude spike: "
-                "prev_rpy=(%.3f %.3f %.3f), new_rpy=(%.3f %.3f %.3f), jump=(%.3f %.3f %.3f)",
-                prev_rpy_.x(), prev_rpy_.y(), prev_rpy_.z(),
-                r, p, y,
-                dr, dp, dy);
-
-            r = prev_rpy_.x();
-            p = prev_rpy_.y();
-            y = prev_rpy_.z();
-          }
-      }
-
+    double r, p, y; cog_rot.getRPY(r, p, y);
     rpy_.setValue(r, p, y);
-    prev_rpy_ = rpy_;
-    prev_rpy_initialized_ = true;
-
-    cog_rot.setRPY(r, p, y);
 
     omega_ = estimator_->getAngularVel(Frame::COG, estimate_mode_);
     target_rpy_ = navigator_->getTargetRPY();
@@ -345,18 +306,9 @@ namespace aerial_robot_control
           }
         du_rp = 0;
       }
+    pid_controllers_.at(ROLL).update(target_rpy_.x() - rpy_.x(), du_rp, target_omega_.x() - omega_.x(), target_ang_acc_.x());
+    pid_controllers_.at(PITCH).update(target_rpy_.y() - rpy_.y(), du_rp, target_omega_.y() - omega_.y(), target_ang_acc_.y());
 
-    double err_roll  = angles::shortest_angular_distance(rpy_.x(), target_rpy_.x());
-    double err_pitch = angles::shortest_angular_distance(rpy_.y(), target_rpy_.y());
-
-    const double pi = 3.14159265358979323846;
-    const double max_rp_err = 30.0 * pi / 180.0;
-    err_roll = std::max(-max_rp_err, std::min(max_rp_err, err_roll));
-    err_pitch = std::max(-max_rp_err, std::min(max_rp_err, err_pitch));
-
-    pid_controllers_.at(ROLL).update( err_roll, du_rp, target_omega_.x() - omega_.x(), target_ang_acc_.x());
-    pid_controllers_.at(PITCH).update(err_pitch, du_rp, target_omega_.y() - omega_.y(), target_ang_acc_.y());
-        
     // yaw
     double err_yaw = angles::shortest_angular_distance(rpy_.z(), target_rpy_.z());
     double err_omega_z = target_omega_.z() - omega_.z();

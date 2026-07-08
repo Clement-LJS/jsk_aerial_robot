@@ -71,17 +71,10 @@ StateEstimator::StateEstimator()
       cog_omegas_.at(i).setZero();
       base_rot_status_.at(i) = 0;
       cog_rot_status_.at(i) = 0;
-      orientation_filter_initialized_[Frame::BASELINK][i] = false;
-      orientation_filter_initialized_[Frame::COG][i] = false;
-      prev_valid_orientation_[Frame::BASELINK][i].setIdentity();
-      prev_valid_orientation_[Frame::COG][i].setIdentity();
     }
 
   /* TODO: represented sensors unhealth level */
   unhealth_level_ = 0;
-
-  reject_orientation_jump_ = true;
-  max_orientation_jump_ = 60.0 * 3.14159265358979323846 / 180.0;
 }
 
 void StateEstimator::initialize(ros::NodeHandle nh, ros::NodeHandle nh_private, boost::shared_ptr<aerial_robot_model::RobotModel> robot_model)
@@ -249,19 +242,6 @@ void StateEstimator::rosParamInit()
   nhp_.param ("param_verbose", param_verbose_, true);
 
   ros::NodeHandle nh = ros::NodeHandle(nh_, "estimation");
-  
-  bool reject_orientation_jump;
-  double max_orientation_jump_deg;
-
-  nh.param("reject_orientation_jump", reject_orientation_jump, true);
-  nh.param("max_orientation_jump_deg", max_orientation_jump_deg, 60.0);
-
-  reject_orientation_jump_ = reject_orientation_jump;
-  max_orientation_jump_ = max_orientation_jump_deg * 3.14159265358979323846 / 180.0;
-
-  ROS_INFO_STREAM("[StateEstimator] reject_orientation_jump: " << reject_orientation_jump_);
-  ROS_INFO_STREAM("[StateEstimator] max_orientation_jump_deg: " << max_orientation_jump_deg);
-
   nh.param ("mode", estimate_mode_, 0); //EGOMOTION_ESTIMATE: 0
   ROS_WARN("mode is %s", (estimate_mode_ == EGOMOTION_ESTIMATE)?string("EGOMOTION_ESTIMATE").c_str():((estimate_mode_ == EXPERIMENT_ESTIMATE)?string("EXPERIMENT_ESTIMATE").c_str():((estimate_mode_ == GROUND_TRUTH)?string("GROUND_TRUTH").c_str():string("WRONG_MODE").c_str())));
 
