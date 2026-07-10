@@ -26,23 +26,23 @@
     ## link
     <link name="base_link">
       <inertial>
-        <origin xyz="0.000169 0.002346 0.106123" rpy="0 0 0"/>
-        <mass value="1.400000"/>
+        <origin xyz="0.00193 0.00159 0.06156" rpy="0 0 0"/>  #################<!-- Changed -->
+        <mass value="1.444000"/>  #################<!-- Changed -->
         <inertia
-            ixx="0.024393" ixy="0.00005" ixz="0.000015"
-	    iyy="0.024541" iyz="0.000205"
-	    izz="0.043817"/>
-      </inertial>
+          ixx="0.0368599" ixy="-0.0000221" ixz="0.0002913"
+	        iyy="0.0367152" iyz="-0.00007901"
+	        izz="0.0663418"/>
+      </inertial>  #################<!-- Changed -->
       <visual>
         <origin xyz="0 0 0" rpy="0 0 0"/>
         <geometry>
-          <mesh filename="package://gimbalrotor/urdf/beetle/mesh/beetle_hand_base_link.dae"/>
+          <mesh filename="package://gimbalrotor/urdf/beetle/mesh/base_module_incenter.STL" scale="0.001 0.001 0.001"/>  #################<!-- Changed -->
         </geometry>
       </visual>
       <collision>
-        <origin xyz="0 0 0.1065" rpy="0 0 0"/>
+        <origin xyz="0 0 0.0575" rpy="0 0 0"/>
         <geometry>
-          <box size="0.518 0.518 0.213"/>
+          <box size="0.518 0.518 0.241"/>
         </geometry>
       </collision>
     </link>
@@ -62,7 +62,7 @@
     <joint name="fc_joint" type="fixed">
       <child link="fc"/>
       <parent link="base_link"/>
-      <origin rpy="0 0 0" xyz="0 0 0.12947"/>
+      <origin rpy="0 0 0" xyz="0 0 0.06927"/>  #################<!-- Changed -->
       <axis xyz="0 0 1"/>
     </joint>
 
@@ -88,34 +88,10 @@
       </joint>
     </xacro:macro>
 
-    ## dummy rotor arms
-    <!-- <xacro:dummy_rotor_arm id = "${child1}" x = "0.12427" y="0.12427" z = "0.11425" yaw = "${pi/4.0}"/> -->
-    <!-- <xacro:dummy_rotor_arm id = "${child2}" x = "-0.12427" y="0.12427" z = "0.11425" yaw = "${pi*3.0/4.0}"/> -->
-    <!-- <xacro:dummy_rotor_arm id = "${child3}" x = "-0.12427" y="-0.12427" z = "0.11425" yaw = "${pi*5.0/4.0}"/> -->
-    <!-- <xacro:dummy_rotor_arm id = "${child4}" x = "0.12427" y="-0.12427" z = "0.11425" yaw = "${pi*7.0/4.0}"/> -->
-
-    <xacro:dummy_rotor_arm id = "${child1}" x = "0.13427" y="0.13427" z = "0.11425" yaw = "${pi/4.0}"/>
-    <xacro:dummy_rotor_arm id = "${child2}" x = "-0.13427" y="0.13427" z = "0.11425" yaw = "${pi*3.0/4.0}"/>
-    <xacro:dummy_rotor_arm id = "${child3}" x = "-0.13427" y="-0.13427" z = "0.11425" yaw = "${pi*5.0/4.0}"/>
-    <xacro:dummy_rotor_arm id = "${child4}" x = "0.13427" y="-0.13427" z = "0.11425" yaw = "${pi*7.0/4.0}"/>
-
-    ## dummy link for the contact point coordinate
-    <!-- <link name="contact_point"> -->
-    <!--   <inertial> -->
-    <!--     <origin xyz="0 0 0" rpy="0 0 0"/> -->
-    <!--     <mass value="0.0001"/> -->
-    <!--     <inertia -->
-    <!--           ixx="0.000001" ixy="0.0" ixz="0.0" -->
-    <!--           iyy="0.0001" iyz="0.0" -->
-    <!--           izz="0.0001"/> -->
-    <!--     </inertial> -->
-    <!--   </link> -->
-    <!--   <joint name="cp_base_joint" type="fixed"> -->
-    <!--     <parent link="base_link"/> -->
-    <!--     <child link="contact_point"/> -->
-    <!--     <origin rpy="0 0 0" xyz="0.26 0 0"/> -->
-    <!--     <axis xyz="0 0 1"/> -->
-    <!--   </joint> -->
+    <xacro:dummy_rotor_arm id = "${child1}" x = "0.12216" y = "0.12215" z = "0.0555" yaw = "${pi/4.0}"/>
+    <xacro:dummy_rotor_arm id = "${child2}" x = "-0.12216" y = "0.12215" z = "0.0555" yaw = "${pi*3.0/4.0}"/>
+    <xacro:dummy_rotor_arm id = "${child3}" x = "-0.12216" y = "-0.12215" z = "0.0555" yaw = "${pi*5.0/4.0}"/>
+    <xacro:dummy_rotor_arm id = "${child4}" x = "0.12216" y = "-0.12215" z = "0.0555" yaw = "${pi*7.0/4.0}"/>
 
     <xacro:friction self="base_link"/>
   </xacro:macro>
@@ -125,13 +101,13 @@
     #### rotor parent link (virtual) ####
     <link name="gimbal_link${self}">
       <inertial>
-        <origin xyz="0.022864 0.0 0.018338" rpy="0 0 0"/>
-        <mass value="0.15000"/>
+        <origin xyz="0.02375 0.00001 0.0078" rpy="0 0 0"/>  #################<!-- Changed -->
+        <mass value="0.15890"/>  #################<!-- Changed -->
         <inertia
-            ixx="0.000063" ixy="0.000003" ixz="0.000000"
-            iyy="0.000057" iyz="0.000000"
-	    izz="0.000063"/>
-      </inertial>
+          ixx="0.0000742" ixy="-0.00000005" ixz="0.0000009"
+          iyy="0.0000729" iyz="-0.00000002"
+	        izz="0.0000774"/>
+      </inertial>  #################<!-- Changed -->
       <collision>
         <origin xyz="0.0 0.0 0.0" rpy="0 0 0"/>
         <geometry>
@@ -141,7 +117,7 @@
       <visual>
         <origin xyz="0 0 0" rpy="0 0 0"/>
         <geometry>
-          <mesh filename="package://gimbalrotor/urdf/beetle/mesh/beetle_hand_rotor_module.dae"/>
+          <mesh filename="package://gimbalrotor/urdf/beetle/mesh/gimbal_module.STL" scale="0.001 0.001 0.001"/>  #################<!-- Changed -->
         </geometry>
       </visual>
     </link>
@@ -223,27 +199,7 @@
     </transmission>
   </xacro:macro>
 
-  <!-- extra_module -->
-  <!-- <xacro:macro name="extra_module" params="name parent *origin *inertial visible:=0 model_url:=0"> -->
-  <!--   <joint name="${parent}2${name}" type="fixed"> -->
-  <!--     <parent link="${parent}"/> -->
-  <!--     <child link="${name}"/> -->
-  <!--     <xacro:insert_block name="origin" /> -->
-  <!--   </joint> -->
-  <!--   <link name="${name}"> -->
-  <!--     <xacro:insert_block name="inertial" /> -->
-  <!--     <xacro:if value="${visible == 1}"> -->
-  <!--       <visual> -->
-  <!-- 	  <origin rpy="0 0 0" xyz="0 0 0"/> -->
-  <!--         <geometry> -->
-  <!--           <mesh filename="${model_url}" scale="${scale} ${scale} ${scale}"/> -->
-  <!--         </geometry> -->
-  <!--       </visual> -->
-  <!--     </xacro:if> -->
-  <!--   </link> -->
-  <!-- </xacro:macro> -->
-
-  ## link
+  <!-- ## link
   <link name="handbase">
     <inertial>
       <origin xyz="0.0 0.0 0.0" rpy="0 0 0"/>
@@ -252,7 +208,7 @@
           ixx="0.00001" iyy="0.00001" izz="0.00001"
           ixy="0.0" ixz="0.0" iyz="0.0"/>
     </inertial>
-  </link>
+  </link> -->
 
   <xacro:if value="$(arg use_saw)">
     <!-- saw link  -->
@@ -313,28 +269,28 @@
     </link>
   </xacro:if>
   
-  ## beetle hand joint
+  <!-- ## beetle hand joint
   <joint name="handbase_baselink_joint" type="fixed">
     <child link="handbase"/>
     <parent link="base_link"/>
     <origin xyz="0 0 0" rpy="0 0 0"/>
     <axis xyz="1 0 0"/>
-  </joint>
+  </joint> -->
 
   <xacro:if value="$(arg use_saw)">
-    <joint name="handbase_saw_joint" type="fixed">
+    <joint name="saw_joint" type="fixed">
       <child link="saw"/>
-      <parent link="handbase"/>
-      <origin xyz="0.05918 0.00052 0.08000" rpy="0 0 0"/>
+      <parent link="base_link"/>
+      <origin xyz="0.05918 0.00025 0.01700" rpy="0 0 0"/>
       <axis xyz="0 0 0"/>
     </joint>
   </xacro:if>
 
   <xacro:if value="$(arg use_hand)">
-    <joint name="handbase_pitchpipe_joint" type="fixed">
+    <joint name="pitchpipe_joint" type="fixed">
       <child link="passive_hand_link"/>
-      <parent link="handbase"/>
-      <origin xyz="-0.05918 0.00052 0.08000" rpy="0 0 3.142"/>
+      <parent link="base_link"/>
+      <origin xyz="-0.05918 0.00025 0.01700" rpy="0 0 3.142"/>
       <axis xyz="0 0 0"/>
     </joint>
   </xacro:if>
