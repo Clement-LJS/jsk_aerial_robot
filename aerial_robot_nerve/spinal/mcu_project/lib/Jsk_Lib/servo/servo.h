@@ -52,6 +52,17 @@ public:
   void sendData(bool flag_send_asap);
   void torqueEnable(const std::map<uint8_t, float>& servo_map);
   void setGoalAngle(const std::map<uint8_t, float>& servo_map, uint8_t value_type = 0);
+
+  int32_t getGoalPosition(uint8_t index) const
+  {
+    if (index >= servo_handler_.getServoNum())
+      {
+        return 0;
+      }
+
+    return servo_handler_.getServo()[index].getGoalPosition();
+  }
+  
 #if KONDO
   KondoServo& getServoHnadler() {return servo_handler_;}
 #else DYNAMIXEL
