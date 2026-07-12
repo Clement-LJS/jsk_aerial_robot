@@ -1,4 +1,5 @@
-aerial_robot_control_name: aerial_robot_control/gimbalrotor_controller
+
+65;6800;1caerial_robot_control_name: aerial_robot_control/gimbalrotor_controller
 
 controller:
   torque_allocation_matrix_inv_pub_interval: 0.05
@@ -18,7 +19,7 @@ controller:
   z:
     p_gain: 10.0
     i_gain: 2.0
-    d_gain: 6.0
+    d_gain: 5.0
     limit_err_p: 1.0
     limit_sum: 25.0 # N for clamping thrust force
     limit_p: 25.0
@@ -28,8 +29,8 @@ controller:
 
   roll:
     p_gain: 17.0
-    i_gain: 0.3
-    d_gain: 14.0
+    i_gain: 0.5 # or 0.3
+    d_gain: 10.0
     limit_sum: 20.0
     limit_p: 20.0
     limit_i: 0.6
@@ -38,18 +39,18 @@ controller:
   pitch:
     p_gain: 15.0
     i_gain: 0.0
-    d_gain: 10.0
+    d_gain: 7.0
     limit_sum: 20.0
     limit_p: 20.0
     limit_i: 10.0
     limit_d: 20.0
 
-    start_rp_integration_height: 0.01
+    start_rp_integration_height: 0.15
 
   yaw:
     p_gain: 15.0
     i_gain: 1.0
-    d_gain: 10.0
+    d_gain: 6.0
     limit_err_p: 0.4
     limit_sum: 20.0
     limit_p: 20.0
