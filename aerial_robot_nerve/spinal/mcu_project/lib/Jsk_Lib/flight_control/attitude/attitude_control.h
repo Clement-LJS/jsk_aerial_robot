@@ -52,9 +52,6 @@
 #include <spinal/UavInfo.h>
 #include <spinal/PMatrixPseudoInverseWithInertia.h>
 #include <spinal/TorqueAllocationMatrixInv.h>
-#include <spinal/ServoStates.h>
-#include <spinal/ServoState.h>
-#include <stdio.h> 
 
 #define IDLE_DUTY 0.5f
 #define FORCE_LANDING_INTEGRAL 0.0025f // 500Hz * 0.0025 = 1.25 N / sec
@@ -69,8 +66,6 @@
 #define CONTROL_TERM_PUB_INTERVAL 100
 #define CONTROL_FEEDBACK_STATE_PUB_INTERVAL 25
 #define PWM_PUB_INTERVAL 100 //100ms
-
-#define GIMBAL_TARGET_PUB_INTERVAL 20 // 20ms = 50Hz
 
 #define MOTOR_TEST 0
 
@@ -161,22 +156,6 @@ private:
   ros::Publisher esc_telem_pub_;
   spinal::ESCTelemetryArray esc_telem_msg_;
 
-  /* Logical joint targets in radians */
-  ros::Publisher joint_target_states_pub_;
-  sensor_msgs::JointState joint_target_states_msg_;
-
-  double joint_target_position_[MAX_MOTOR_NUMBER];
-
-  char joint_target_name_storage_[MAX_MOTOR_NUMBER][12]; 
-  char* joint_target_name_ptrs_[MAX_MOTOR_NUMBER]; 
-  
-  /* Dynamixel goal positions in raw counts */
-  ros::Publisher servo_goal_states_pub_;
-  spinal::ServoStates servo_goal_states_msg_;
-  spinal::ServoState servo_goal_state_buffer_[MAX_MOTOR_NUMBER];
-
-  uint32_t target_states_pub_last_time_;
-
   void setAttitudeControlCallback(const std_srvs::SetBool::Request& req, std_srvs::SetBool::Response& res)
   {
     att_control_flag_ = req.data;
@@ -259,10 +238,6 @@ private:
   void pwmTestCallback(const spinal::PwmTest& pwm_msg);
   void pwmConversion(void);
   void pwmsControl(void);
-
-#ifndef SIMULATION
-  void publishGimbalTargets();
-#endif 
 
   void reset(void);
 

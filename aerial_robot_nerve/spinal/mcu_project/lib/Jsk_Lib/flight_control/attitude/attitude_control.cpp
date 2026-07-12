@@ -53,9 +53,7 @@ AttitudeController::AttitudeController():
   torque_allocation_matrix_inv_sub_("torque_allocation_matrix_inv", &AttitudeController::torqueAllocationMatrixInvCallback, this),
   offset_rot_sub_("desire_coordinate", &AttitudeController::offsetRotCallback, this ),
   att_control_srv_("set_attitude_control", &AttitudeController::setAttitudeControlCallback, this),
-  esc_telem_pub_("esc_telem", &esc_telem_msg_), 
-  joint_target_states_pub_("joint_target_states", &joint_target_states_msg_), 
-  servo_goal_states_pub_("servo/goal_states", &servo_goal_states_msg_)
+  esc_telem_pub_("esc_telem", &esc_telem_msg_)
 {
 }
 
@@ -114,8 +112,6 @@ void AttitudeController::init(TIM_HandleTypeDef* htim1, TIM_HandleTypeDef* htim2
   nh_->advertise(control_term_pub_);
   nh_->advertise(control_feedback_state_pub_);
   nh_->advertise(esc_telem_pub_);
-  nh_->advertise(joint_target_states_pub_);
-  nh_->advertise(servo_goal_states_pub_);
 
   nh_->subscribe(four_axis_cmd_sub_);
   nh_->subscribe(pwm_info_sub_);
@@ -159,42 +155,6 @@ void AttitudeController::baseInit()
 
   control_term_pub_last_time_ = 0;
   control_feedback_state_pub_last_time_ = 0;
-
-#ifndef SIMULATION
-  target_states_pub_last_time_ = 0;
-
-  /* /joint_target_states */
-  joint_target_states_msg_.name_length = 0;
-  joint_target_states_msg_.name = joint_target_name_ptrs_;
-
-  joint_target_states_msg_.position_length = 0;
-  joint_target_states_msg_.position = joint_target_position_;
-
-  joint_target_states_msg_.velocity_length = 0;
-  joint_target_states_msg_.velocity = NULL;
-
-  joint_target_states_msg_.effort_length = 0;
-  joint_target_states_msg_.effort = NULL;
-
-  /* /servo/goal_states */
-  servo_goal_states_msg_.servos_length = 0;
-  servo_goal_states_msg_.servos = servo_goal_state_buffer_;
-
-  for (uint16_t i = 0; i < MAX_MOTOR_NUMBER; i++)
-  {
-    joint_target_position_[i] = 0.0;
-
-    snprintf(joint_target_name_storage_[i], sizeof(joint_target_name_storage_[i]), "gimbal%u", static_cast<unsigned int>(i + 1));
-
-    joint_target_name_ptrs_[i] = joint_target_name_storage_[i];
-    servo_goal_state_buffer_[i].index = static_cast<uint8_t>(i);
-
-    servo_goal_state_buffer_[i].angle = 0;
-    servo_goal_state_buffer_[i].temp = 0;
-    servo_goal_state_buffer_[i].load = 0;
-    servo_goal_state_buffer_[i].error = 0;
-  }
-#endif
 
   // frame
   offset_rot_.identity();
@@ -1266,115 +1226,5 @@ void AttitudeController::pwmConversion()
     default:
       break;
     }
-
-  publishGimbalTargets();
 #endif
 }
-
-
-#ifndef SIMULATION
-void AttitudeController::publishGimbalTargets()
-{
-  if (!start_control_flag_)
-    {
-      return;
-    }
-
-  if (servo_ == NULL)
-    {
-      return;
-    }
-
-  if (gimbal_dof_ == 0 || rotor_coef_ == 0)
-    {
-      return;
-    }
-
-  const uint32_t now = HAL_GetTick();
-
-  if ((now - target_states_pub_last_time_) < GIMBAL_TARGET_PUB_INTERVAL)
-    {
-      return;
-    }
-
-  const uint16_t physical_rotor_num = motor_number_ / rotor_coef_;
-  const uint16_t target_num = physical_rotor_num * gimbal_dof_;
-
-  if (target_num == 0 || target_num > MAX_MOTOR_NUMBER)
-    {
-      return;
-    }
-
-  target_states_pub_last_time_ = now;
-
-  /*
-   * Use one timestamp for the two target topics because they represent the same FC command in two coordinate systems:
-   *
-   *   joint target: radians
-   *   servo goal:   Dynamixel counts
-   */
-  const ros::Time target_stamp = nh_->now();
-
-  /*
-   * Logical joint target.
-   *
-   * Compare with:
-   *   /gimbalrotor/joint_states
-   */
-  joint_target_states_msg_.header.stamp = target_stamp;
-  joint_target_states_msg_.name_length = target_num;
-  joint_target_states_msg_.position_length = target_num;
-
-  /*
-   * Raw servo goal.
-   *
-   * Compare with:
-   *   /gimbalrotor/servo/states
-   */
-  servo_goal_states_msg_.stamp = target_stamp;
-  servo_goal_states_msg_.servos_length = target_num;
-
-  for (uint16_t i = 0; i < target_num; i++)
-    {
-      /*
-       * Final FC-calculated target in radians.
-       */
-      joint_target_position_[i] = static_cast<double>(target_gimbal_angles_[i]);
-
-      /*
-       * Exact goal count stored by DirectServo after
-       * setGoalAngle().
-       */
-      int32_t goal_position = servo_->getGoalPosition(i);
-
-      /*
-       * ServoState.angle is int16.
-       * Normal XC330 position values fit this range.
-       */
-      if (goal_position > INT16_MAX)
-        {
-          goal_position = INT16_MAX;
-        }
-      else if (goal_position < INT16_MIN)
-        {
-          goal_position = INT16_MIN;
-        }
-
-      spinal::ServoState& goal_state = servo_goal_state_buffer_[i];
-
-      goal_state.index = static_cast<uint8_t>(i);
-      goal_state.angle = static_cast<int16_t>(goal_position);
-
-      /*
-       * These fields describe measured servo state and do not apply to a target. Leave them zero.
-       */
-      goal_state.temp = 0;
-      goal_state.load = 0;
-      goal_state.error = 0;
-    }
-
-  joint_target_states_pub_.publish(&joint_target_states_msg_);
-  servo_goal_states_pub_.publish(&servo_goal_states_msg_);
-}
-
-#endif
