@@ -3,7 +3,7 @@
 navigation:
   xy_control_mode: 0
 
-  takeoff_height: 0.3
+  takeoff_height: 0.7
   outdoor_takeoff_height: 1.5
 
   max_target_vel: 0.5

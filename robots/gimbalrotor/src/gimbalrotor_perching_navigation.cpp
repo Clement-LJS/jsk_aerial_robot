@@ -549,16 +549,74 @@ bool GimbalrotorPerchingNavigator::tryLockConstraint(const std::string& reason)
   config.minimum_coordinate = -std::abs(maximum_coordinate_);
   config.maximum_coordinate = std::abs(maximum_coordinate_);
 
-  if(!spatial_constraint_.configure(config))
-  {
-    ROS_ERROR(
-        "[GimbalrotorPerchingNavigator] "
-        "constraint invalid. Current version requires "
-        "exactly one rotational allowed DOF.");
+if(!spatial_constraint_.configure(config))
+{
+  int translation_count = 0;
+  int rotation_count = 0;
 
-    return false;
+  for(int i = 0; i < 3; ++i)
+  {
+    if(config.allowed_dof(i) > 0.5)
+    {
+      ++translation_count;
+    }
+
+    if(config.allowed_dof(3 + i) > 0.5)
+    {
+      ++rotation_count;
+    }
   }
 
+  const double locked_rotation_orthogonality_error =
+      (
+        config.locked_rotation_world.transpose()
+        * config.locked_rotation_world
+        - Eigen::Matrix3d::Identity()
+      ).norm();
+
+  const double constraint_rotation_orthogonality_error =
+      (
+        config.rotation_world_constraint.transpose()
+        * config.rotation_world_constraint
+        - Eigen::Matrix3d::Identity()
+      ).norm();
+
+  ROS_ERROR(
+      "[GimbalrotorPerchingNavigator] constraint configuration failed:\n"
+      "  active: %s\n"
+      "  allowed_dof: [%.1f %.1f %.1f %.1f %.1f %.1f]\n"
+      "  enabled translation DOF count: %d\n"
+      "  enabled rotation DOF count: %d\n"
+      "  pivot finite: %s\n"
+      "  locked position finite: %s\n"
+      "  locked rotation finite: %s\n"
+      "  locked rotation orthogonality error: %.9e\n"
+      "  locked rotation determinant: %.9f\n"
+      "  constraint rotation orthogonality error: %.9e\n"
+      "  constraint rotation determinant: %.9f\n"
+      "  coordinate limits: [%.6f, %.6f]",
+      config.active ? "true" : "false",
+      config.allowed_dof(0),
+      config.allowed_dof(1),
+      config.allowed_dof(2),
+      config.allowed_dof(3),
+      config.allowed_dof(4),
+      config.allowed_dof(5),
+      translation_count,
+      rotation_count,
+      config.pivot_world.allFinite() ? "true" : "false",
+      config.locked_position_world.allFinite() ? "true" : "false",
+      config.locked_rotation_world.allFinite() ? "true" : "false",
+      locked_rotation_orthogonality_error,
+      config.locked_rotation_world.determinant(),
+      constraint_rotation_orthogonality_error,
+      config.rotation_world_constraint.determinant(),
+      config.minimum_coordinate,
+      config.maximum_coordinate);
+
+  return false;
+}
+ 
   /*
    * The command-angle reference is also based on base_link orientation.
    */
