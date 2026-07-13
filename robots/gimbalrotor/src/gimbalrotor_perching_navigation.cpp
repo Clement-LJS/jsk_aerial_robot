@@ -311,6 +311,40 @@ void GimbalrotorPerchingNavigator::naviCallback(const aerial_robot_msgs::FlightN
   applyActiveConstraintTarget();
 }
 
+void GimbalrotorPerchingNavigator::handleFinalTargetBaselinkRPYCommand(const geometry_msgs::Vector3StampedConstPtr& msg)
+{
+  /*
+   * Preserve normal gimbalrotor behavior outside perching mode.
+   */
+  if(!perching_enabled_)
+  {
+    GimbalrotorNavigator::handleFinalTargetBaselinkRPYCommand(msg);
+
+    return;
+  }
+
+  if(!perching_locked_ && !tryLockConstraint("base_link RPY command"))
+  {
+    return;
+  }
+
+  const tf::Vector3 requested_baselink_rpy(msg->vector.x, msg->vector.y, msg->vector.z);
+
+  const double requested_constraint_angle = getConstraintAngleFromBaselinkRpy(requested_baselink_rpy);
+
+  /* Convert the requested absolute base_link pitch/roll/yaw into q relative to the locked base_link orientation. */
+  setActiveCoordinateFromAbsoluteBaselinkAngle(requested_constraint_angle);
+
+  /*
+   * This generates together:
+   *
+   *   1. desired base_link orientation,
+   *   2. desired base_link position on the pivot arc,
+   *   3. corresponding COG target for the existing position PID.
+   */
+  applyActiveConstraintTarget();
+}
+
 void GimbalrotorPerchingNavigator::reset()
 {
   GimbalrotorNavigator::reset();
@@ -421,21 +455,14 @@ bool GimbalrotorPerchingNavigator::tryLockConstraint(const std::string& reason)
 
   if(!isManualPivotSource() && !isBranchPivotSource())
   {
-    ROS_ERROR(
-        "[GimbalrotorPerchingNavigator] "
-        "invalid pivot source: %s",
-        pivot_source_.c_str());
+    ROS_ERROR("[GimbalrotorPerchingNavigator] " "invalid pivot source: %s", pivot_source_.c_str());
 
     return false;
   }
 
-  if(isBranchPivotSource() &&
-     !hasBranchPivot())
+  if(isBranchPivotSource() && !hasBranchPivot())
   {
-    ROS_WARN_THROTTLE(
-        1.0,
-        "[GimbalrotorPerchingNavigator] "
-        "branch pivot is not available");
+    ROS_WARN_THROTTLE(1.0, "[GimbalrotorPerchingNavigator] " "branch pivot is not available");
 
     return false;
   }
@@ -445,29 +472,22 @@ bool GimbalrotorPerchingNavigator::tryLockConstraint(const std::string& reason)
    *
    * These values define the perching geometry.
    */
-  const Eigen::Vector3d baselink_position_world =
-      getCurrentBaselinkPositionWorld();
+  const Eigen::Vector3d baselink_position_world = getCurrentBaselinkPositionWorld();
 
-  const Eigen::Matrix3d baselink_rotation_world =
-      getCurrentBaselinkRotationWorld();
+  const Eigen::Matrix3d baselink_rotation_world = getCurrentBaselinkRotationWorld();
+  const tf::Vector3 current_cog_target_rpy = getTargetRPY();
 
+  locked_cog_target_rpy_ = Eigen::Vector3d(current_cog_target_rpy.x(), current_cog_target_rpy.y(), current_cog_target_rpy.z());
   /*
    * Use the same captured base_link pose when calculating the manual pivot.
    *
    * This removes the timing discrepancy that previously appeared in RViz.
    */
-  const Eigen::Vector3d pivot_world =
-      computePivotWorld(
-          baselink_position_world,
-          baselink_rotation_world);
+  const Eigen::Vector3d pivot_world = computePivotWorld(baselink_position_world, baselink_rotation_world);
 
-  if(!baselink_position_world.allFinite() ||
-     !baselink_rotation_world.allFinite() ||
-     !pivot_world.allFinite())
+  if(!baselink_position_world.allFinite() || !baselink_rotation_world.allFinite() || !pivot_world.allFinite())
   {
-    ROS_ERROR(
-        "[GimbalrotorPerchingNavigator] "
-        "invalid base_link or pivot state");
+    ROS_ERROR("[GimbalrotorPerchingNavigator] " "invalid base_link or pivot state");
 
     return false;
   }
@@ -479,20 +499,13 @@ bool GimbalrotorPerchingNavigator::tryLockConstraint(const std::string& reason)
    *
    * No COG is used here.
    */
-  const Eigen::Vector3d locked_radius_world =
-      baselink_position_world
-      - pivot_world;
+  const Eigen::Vector3d locked_radius_world = baselink_position_world - pivot_world;
 
-  const double radius =
-      locked_radius_world.norm();
+  const double radius = locked_radius_world.norm();
 
-  if(!std::isfinite(radius) ||
-     radius < minimum_valid_radius_)
+  if(!std::isfinite(radius) || radius < minimum_valid_radius_)
   {
-    ROS_ERROR(
-        "[GimbalrotorPerchingNavigator] "
-        "invalid base_link-to-pivot radius: %.4f",
-        radius);
+    ROS_ERROR("[GimbalrotorPerchingNavigator] " "invalid base_link-to-pivot radius: %.4f", radius);
 
     return false;
   }
@@ -519,11 +532,9 @@ bool GimbalrotorPerchingNavigator::tryLockConstraint(const std::string& reason)
   config.allowed_dof = allowed_dof_;
   config.coordinate_sign = coordinate_sign_;
 
-  config.pivot_world =
-      pivot_world;
+  config.pivot_world = pivot_world;
 
-  config.rotation_world_constraint =
-      rotation_world_constraint;
+  config.rotation_world_constraint = rotation_world_constraint;
 
   /*
    * Important:
@@ -532,17 +543,11 @@ bool GimbalrotorPerchingNavigator::tryLockConstraint(const std::string& reason)
    *
    * Previously these two fields contained COG pose.
    */
-  config.locked_position_world =
-      baselink_position_world;
+  config.locked_position_world = baselink_position_world;
+  config.locked_rotation_world = baselink_rotation_world;
 
-  config.locked_rotation_world =
-      baselink_rotation_world;
-
-  config.minimum_coordinate =
-      -std::abs(maximum_coordinate_);
-
-  config.maximum_coordinate =
-      std::abs(maximum_coordinate_);
+  config.minimum_coordinate = -std::abs(maximum_coordinate_);
+  config.maximum_coordinate = std::abs(maximum_coordinate_);
 
   if(!spatial_constraint_.configure(config))
   {
@@ -559,32 +564,23 @@ bool GimbalrotorPerchingNavigator::tryLockConstraint(const std::string& reason)
    */
   tf::Matrix3x3 baselink_rotation_tf;
 
-  tf::matrixEigenToTF(
-      baselink_rotation_world,
-      baselink_rotation_tf);
+  tf::matrixEigenToTF(baselink_rotation_world, baselink_rotation_tf);
 
   double roll = 0.0;
   double pitch = 0.0;
   double yaw = 0.0;
 
-  baselink_rotation_tf.getRPY(
-      roll,
-      pitch,
-      yaw);
+  baselink_rotation_tf.getRPY(roll, pitch, yaw);
 
   locked_rpy_ =
-      Eigen::Vector3d(
-          roll,
-          pitch,
-          yaw);
+      Eigen::Vector3d(roll, pitch, yaw);
 
   active_coordinate_ = 0.0;
   perching_locked_ = true;
 
   if(isManualPivotSource())
   {
-    const double configured_radius =
-        hand_center_offset_baselink_.norm();
+    const double configured_radius = hand_center_offset_baselink_.norm();
 
     ROS_WARN(
         "[GimbalrotorPerchingNavigator] "
@@ -621,6 +617,30 @@ void GimbalrotorPerchingNavigator::clearConstraint()
   active_coordinate_ = 0.0;
 }
 
+void GimbalrotorPerchingNavigator::commandBaselinkRotationTarget(const SpatialConstraintTarget& baselink_target)
+{
+  if(!baselink_target.valid)
+  {
+    return;
+  }
+
+  tf::Matrix3x3 target_baselink_rotation_tf;
+
+  tf::matrixEigenToTF(baselink_target.rotation_world, target_baselink_rotation_tf);
+
+  double roll = 0.0;
+  double pitch = 0.0;
+  double yaw = 0.0;
+
+  target_baselink_rotation_tf.getRPY(roll, pitch, yaw);
+
+  /*
+   * This controls the physical base_link orientation through the existing
+   * gimbalrotor desire_coordinate path.
+   */
+  setFinalTargetBaselinkRPY(tf::Vector3(roll, pitch, yaw));
+}
+
 void GimbalrotorPerchingNavigator::applyActiveConstraintTarget()
 {
   if(!isPerchingLocked())
@@ -629,11 +649,11 @@ void GimbalrotorPerchingNavigator::applyActiveConstraintTarget()
   }
 
   /*
-   * First generate the constrained BASE_LINK pose.
+   * Geometry is calculated entirely as:
+   *
+   *   base_link rotating around the fixed pivot.
    */
-  const SpatialConstraintTarget baselink_target =
-      spatial_constraint_.calculateTarget(
-          active_coordinate_);
+  const SpatialConstraintTarget baselink_target = spatial_constraint_.calculateTarget(active_coordinate_);
 
   if(!baselink_target.valid)
   {
@@ -641,14 +661,19 @@ void GimbalrotorPerchingNavigator::applyActiveConstraintTarget()
   }
 
   /*
-   * Then convert it to the COG target required by the existing position PID.
+   * Command the physical base_link orientation.
    *
-   * This conversion does not feed back into SpatialConstraint and therefore
-   * cannot change the base_link arc radius.
+   * This was missing when using perching/target_angle_deg or
+   * perching/add_angle_deg.
    */
-  const SpatialConstraintTarget cog_target =
-      convertBaselinkTargetToCogTarget(
-          baselink_target);
+  commandBaselinkRotationTarget(baselink_target);
+
+  /*
+   * The existing translational pose PID tracks COG, not base_link.
+   *
+   * Convert only after the base_link arc has been calculated.
+   */
+  const SpatialConstraintTarget cog_target = convertBaselinkTargetToCogTarget(baselink_target);
 
   if(!cog_target.valid)
   {
@@ -659,69 +684,42 @@ void GimbalrotorPerchingNavigator::applyActiveConstraintTarget()
   tf::Vector3 target_cog_velocity;
   tf::Vector3 target_cog_acceleration;
 
-  tf::vectorEigenToTF(
-      cog_target.position_world,
-      target_cog_position);
+  tf::vectorEigenToTF(cog_target.position_world, target_cog_position);
+  tf::vectorEigenToTF(cog_target.linear_velocity_world, target_cog_velocity);
+  tf::vectorEigenToTF(cog_target.linear_acceleration_world, target_cog_acceleration);
 
-  tf::vectorEigenToTF(
-      cog_target.linear_velocity_world,
-      target_cog_velocity);
-
-  tf::vectorEigenToTF(
-      cog_target.linear_acceleration_world,
-      target_cog_acceleration);
+  setXyControlMode(POS_CONTROL_MODE);
 
   /*
-   * Attitude remains the constrained base_link orientation.
+   * Translational target:
+   * COG target corresponding to the constrained base_link pose.
    */
-  tf::Matrix3x3 target_baselink_rotation;
-
-  tf::matrixEigenToTF(
-      baselink_target.rotation_world,
-      target_baselink_rotation);
-
-  double roll = 0.0;
-  double pitch = 0.0;
-  double yaw = 0.0;
-
-  target_baselink_rotation.getRPY(
-      roll,
-      pitch,
-      yaw);
-
-  setXyControlMode(
-      POS_CONTROL_MODE);
+  setTargetPos(target_cog_position);
+  setTargetVel(target_cog_velocity);
+  setTargetAcc(target_cog_acceleration);
 
   /*
-   * Existing translational controller tracks COG.
+   * Important:
+   *
+   * Do not put the physical base_link pitch into the COG attitude PID.
+   *
+   * The base_link orientation is handled through
+   * setFinalTargetBaselinkRPY().
+   *
+   * The COG attitude target remains at the value captured during lock.
    */
-  setTargetPos(
-      target_cog_position);
-
-  setTargetVel(
-      target_cog_velocity);
-
-  setTargetAcc(
-      target_cog_acceleration);
-
-  /*
-   * Existing gimbalrotor attitude path receives desired base_link RPY.
-   */
-  setTargetRPY(
-      tf::Vector3(
-          roll,
-          pitch,
-          yaw));
+  setTargetRPY(tf::Vector3(locked_cog_target_rpy_.x(), locked_cog_target_rpy_.y(), locked_cog_target_rpy_.z()));
 
   setTargetZeroOmega();
   setTargetZeroAngAcc();
 
   /*
-   * Publish the actual geometric base_link target for RViz.
+   * RViz debug output represents the constrained base_link pose.
    */
   publishCommandedState(
       baselink_target);
 }
+
 
 bool GimbalrotorPerchingNavigator::hasConstraintAngleCommand(const aerial_robot_msgs::FlightNav& msg) const
 {
@@ -767,6 +765,31 @@ void GimbalrotorPerchingNavigator::setActiveCoordinateFromAngle(double angle_rad
   }
 
   active_coordinate_ = spatial_constraint_.clampCoordinate(coordinate);
+}
+
+void GimbalrotorPerchingNavigator::setActiveCoordinateFromAbsoluteBaselinkAngle(double absolute_angle_rad)
+{
+  const double coordinate = command_sign_ * normalizeAngle(absolute_angle_rad - lockedEulerComponent());
+
+  active_coordinate_ = spatial_constraint_.clampCoordinate(coordinate);
+}
+
+double GimbalrotorPerchingNavigator::getConstraintAngleFromBaselinkRpy(const tf::Vector3& baselink_rpy) const
+{
+  switch(spatial_constraint_.getRotationalDofIndex())
+  {
+    case 0:
+      return baselink_rpy.x();
+
+    case 1:
+      return baselink_rpy.y();
+
+    case 2:
+      return baselink_rpy.z();
+
+    default:
+      return 0.0;
+  }
 }
 
 void GimbalrotorPerchingNavigator::addActiveCoordinate(double delta_rad)

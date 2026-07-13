@@ -66,6 +66,7 @@ protected:
   void rosParamInit() override;
   void naviCallback(const aerial_robot_msgs::FlightNavConstPtr& msg) override;
   void reset() override;
+  void handleFinalTargetBaselinkRPYCommand(const geometry_msgs::Vector3StampedConstPtr& msg) override;
 
 private:
   void perchingEnableCallback(const std_msgs::BoolConstPtr& msg);
@@ -87,7 +88,10 @@ private:
   double getConstraintAngleCommand(const aerial_robot_msgs::FlightNav& msg) const;
 
   void setActiveCoordinateFromAngle(double angle_rad);
+  void setActiveCoordinateFromAbsoluteBaselinkAngle(double absolute_angle_rad);
   void addActiveCoordinate(double delta_rad);
+  double getConstraintAngleFromBaselinkRpy(const tf::Vector3& baselink_rpy) const;
+  void commandBaselinkRotationTarget(const aerial_robot_control::SpatialConstraintTarget& baselink_target);
 
   Eigen::Vector3d getCurrentCogPositionWorld() const;
   Eigen::Vector3d getCurrentBaselinkPositionWorld() const;
@@ -157,6 +161,7 @@ private:
   Eigen::Vector3d branch_position_world_ = Eigen::Vector3d::Zero();
   Eigen::Vector3d perching_point_world_ = Eigen::Vector3d::Zero();
   Eigen::Vector3d locked_rpy_ = Eigen::Vector3d::Zero();
+  Eigen::Vector3d locked_cog_target_rpy_ = Eigen::Vector3d::Zero();
 
   ros::Subscriber perching_enable_sub_;
   ros::Subscriber relock_sub_;

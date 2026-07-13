@@ -26,6 +26,8 @@ namespace aerial_robot_navigation
     void rosParamInit() override;
     void naviCallback(const aerial_robot_msgs::FlightNavConstPtr & msg) override;
     void reset() override;
+    void setFinalTargetBaselinkRPY(const tf::Vector3& baselink_rpy);
+    virtual void handleFinalTargetBaselinkRPYCommand(const geometry_msgs::Vector3StampedConstPtr& msg);
 
   private:
     ros::Publisher target_baselink_rpy_pub_;
