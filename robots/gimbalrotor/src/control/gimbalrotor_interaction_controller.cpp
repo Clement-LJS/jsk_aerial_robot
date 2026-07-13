@@ -446,103 +446,141 @@ void GimbalrotorInteractionController::applyFreeFlightAdmittance(double dt)
   target_ang_acc_ += eigenToTf(rotation_world_cog.transpose() * angular_acceleration_offset_world);
 }
 
-void GimbalrotorInteractionController::applyPerchingAdmittance(aerial_robot_navigation::GimbalrotorPerchingNavigator& navigator, double dt)
+void GimbalrotorInteractionController::applyPerchingAdmittance(
+    aerial_robot_navigation::GimbalrotorPerchingNavigator& navigator,
+    double dt)
 {
-  const SpatialConstraint& constraint = navigator.getSpatialConstraint();
+  const SpatialConstraint& constraint =
+      navigator.getSpatialConstraint();
 
-  const Vector6d generalized_effort = constraint.generalizedEffortFromWorldCogWrench(estimated_wrench_world_cog_, getCurrentCogPositionWorld());
+  /*
+   * The wrench observer is physically defined about COG.
+   *
+   * Shifting that wrench from COG to the pivot is correct and independent
+   * from the base_link arc geometry.
+   */
+  const Vector6d generalized_effort =
+      constraint.generalizedEffortFromWorldCogWrench(
+          estimated_wrench_world_cog_,
+          getCurrentCogPositionWorld());
 
-  publishConstraintWrench(generalized_effort);
+  publishConstraintWrench(
+      generalized_effort);
 
   AdmittanceInput input;
-  input.measured_wrench = generalized_effort;
-  input.active_dof = constraint.getAllowedDof();
-  input.dt = dt;
-  input.enabled = true;
 
-  const AdmittanceOutput output = interaction_controller_.calculateAdmittance(input);
+  input.measured_wrench =
+      generalized_effort;
 
-  const int dof = constraint.getSpatialDofIndex();
-  if(!output.valid || dof < 0)
+  input.active_dof =
+      constraint.getAllowedDof();
+
+  input.dt =
+      dt;
+
+  input.enabled =
+      true;
+
+  const AdmittanceOutput output =
+      interaction_controller_.calculateAdmittance(
+          input);
+
+  const int dof =
+      constraint.getSpatialDofIndex();
+
+  if(!output.valid ||
+     dof < 0)
   {
     return;
   }
 
-  const double corrected_coordinate = navigator.getActiveConstraintCoordinate() + output.position_offset(dof);
+  const double corrected_coordinate =
+      navigator.getActiveConstraintCoordinate()
+      +
+      output.position_offset(dof);
 
-  const SpatialConstraintTarget target = navigator.calculateConstrainedTarget(corrected_coordinate, output.velocity_offset(dof), output.acceleration_offset(dof));
+  /*
+   * This result is the corrected constrained BASE_LINK target.
+   */
+  const SpatialConstraintTarget baselink_target =
+      navigator.calculateConstrainedTarget(
+          corrected_coordinate,
+          output.velocity_offset(dof),
+          output.acceleration_offset(dof));
 
-  if(!target.valid)
+  if(!baselink_target.valid)
   {
     return;
   }
 
-  target_pos_ = eigenToTf(target.position_world);
-  target_vel_ = eigenToTf(target.linear_velocity_world);
-  target_acc_ = eigenToTf(target.linear_acceleration_world);
+  /*
+   * Convert only after the base_link constraint has been applied.
+   */
+  const SpatialConstraintTarget cog_target =
+      navigator.convertBaselinkTargetToCogTarget(
+          baselink_target);
 
-  tf::Matrix3x3 target_rotation_tf;
-  tf::matrixEigenToTF(target.rotation_world, target_rotation_tf);
+  if(!cog_target.valid)
+  {
+    return;
+  }
+
+  /*
+   * Translational PID tracks COG.
+   */
+  target_pos_ =
+      eigenToTf(
+          cog_target.position_world);
+
+  target_vel_ =
+      eigenToTf(
+          cog_target.linear_velocity_world);
+
+  target_acc_ =
+      eigenToTf(
+          cog_target.linear_acceleration_world);
+
+  /*
+   * Attitude target is the constrained base_link orientation.
+   */
+  tf::Matrix3x3 target_baselink_rotation_tf;
+
+  tf::matrixEigenToTF(
+      baselink_target.rotation_world,
+      target_baselink_rotation_tf);
 
   double roll = 0.0;
   double pitch = 0.0;
   double yaw = 0.0;
-  target_rotation_tf.getRPY(roll, pitch, yaw);
-  target_rpy_.setValue(roll, pitch, yaw);
 
-  const Eigen::Matrix3d rotation_world_cog = getCurrentCogRotationWorld();
+  target_baselink_rotation_tf.getRPY(
+      roll,
+      pitch,
+      yaw);
 
-  target_omega_ = eigenToTf(rotation_world_cog.transpose() * target.angular_velocity_world);
-  target_ang_acc_ = eigenToTf(rotation_world_cog.transpose() * target.angular_acceleration_world);
-}
+  target_rpy_.setValue(
+      roll,
+      pitch,
+      yaw);
 
-void GimbalrotorInteractionController::applyFreeFlightImpedance()
-{
-  const Eigen::Matrix3d rotation_world_cog = getCurrentCogRotationWorld();
+  /*
+   * Angular velocity is the same rigid-body angular motion regardless of
+   * whether the reference origin is base_link or COG.
+   *
+   * Convert the world angular values into the controller's COG coordinates.
+   */
+  const Eigen::Matrix3d rotation_world_cog =
+      getCurrentCogRotationWorld();
 
-  tf::Matrix3x3 desired_rotation_tf;
-  desired_rotation_tf.setRPY(target_rpy_.x(), target_rpy_.y(), target_rpy_.z());
+  target_omega_ =
+      eigenToTf(
+          rotation_world_cog.transpose()
+          * baselink_target.angular_velocity_world);
 
-  Eigen::Matrix3d desired_rotation_world;
-  tf::matrixTFToEigen(desired_rotation_tf, desired_rotation_world);
-
-  Vector6d position_error;
-  position_error.head<3>() = tfToEigen(target_pos_ - pos_);
-  position_error.tail<3>() = SpatialConstraint::orientationErrorWorld(desired_rotation_world, rotation_world_cog);
-
-  Vector6d velocity_error;
-  velocity_error.head<3>() = tfToEigen(target_vel_ - vel_);
-
-  const Eigen::Vector3d target_omega_world = rotation_world_cog * tfToEigen(target_omega_);
-  const Eigen::Vector3d omega_world = rotation_world_cog * tfToEigen(omega_);
-  velocity_error.tail<3>() = target_omega_world - omega_world;
-
-  ImpedanceInput input;
-  input.position_error = position_error;
-  input.velocity_error = velocity_error;
-  input.desired_acceleration.head<3>() = tfToEigen(target_acc_);
-  input.desired_acceleration.tail<3>() = rotation_world_cog * tfToEigen(target_ang_acc_);
-  input.active_dof = free_flight_active_dof_;
-  input.enabled = true;
-
-  const ImpedanceOutput output = interaction_controller_.calculateImpedance(input);
-
-  if(!output.valid)
-  {
-    return;
-  }
-
-  const double mass = gimbalrotor_robot_model_->getMass();
-  const Eigen::Matrix3d inertia_cog = gimbalrotor_robot_model_->getInertia<Eigen::Matrix3d>();
-  const Eigen::Vector3d linear_acceleration_world = output.commanded_wrench.head<3>() / mass;
-  const Eigen::Vector3d torque_cog = rotation_world_cog.transpose() * output.commanded_wrench.tail<3>();
-  const Eigen::Vector3d angular_acceleration_cog = inertia_cog.inverse() * torque_cog;
-
-  // This is the acceleration-equivalent feedforward produced by the
-  // impedance law. For a pure impedance controller, set the corresponding
-  // pose PID P/D gains to zero; otherwise PID acts in parallel.
-  target_acc_ = eigenToTf(linear_acceleration_world);
-  target_ang_acc_ = eigenToTf(angular_acceleration_cog);
+  target_ang_acc_ =
+      eigenToTf(
+          rotation_world_cog.transpose()
+          * baselink_target.angular_acceleration_world);
 }
 
 Eigen::Matrix3d

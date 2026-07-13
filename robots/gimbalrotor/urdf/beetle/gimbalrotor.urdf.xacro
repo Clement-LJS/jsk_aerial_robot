@@ -2,7 +2,7 @@
 <robot
     xmlns:xacro="http://www.ros.org/wiki/xacro" name="gimbalrotor_link" >
   <xacro:arg name="use_saw" default="false"/>
-  <xacro:arg name="use_hand" default="false"/>
+  <xacro:arg name="use_hand" default="true"/>
   
   <xacro:macro name="gimbalrotor_center_link" params="child1 child2 child3 child4">
     ## dummy

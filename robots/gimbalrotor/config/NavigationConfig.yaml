@@ -57,8 +57,8 @@ navigation:
   perching_pivot_source: manual
 
   hand_perching_center_offset_baselink_x: -0.33568
-  hand_perching_center_offset_baselink_y: 0.00193
-  hand_perching_center_offset_baselink_z: 0.08000
+  hand_perching_center_offset_baselink_y: 0
+  hand_perching_center_offset_baselink_z: 0.017
 
   perching_enable_topic: perching/enable
   perching_relock_topic: perching/relock

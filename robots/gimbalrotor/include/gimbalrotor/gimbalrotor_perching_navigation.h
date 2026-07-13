@@ -59,6 +59,9 @@ public:
       double coordinate_velocity = 0.0,
       double coordinate_acceleration = 0.0) const;
 
+  aerial_robot_control::SpatialConstraintTarget
+  convertBaselinkTargetToCogTarget(const aerial_robot_control::SpatialConstraintTarget& baselink_target) const;
+  
 protected:
   void rosParamInit() override;
   void naviCallback(const aerial_robot_msgs::FlightNavConstPtr& msg) override;
@@ -87,10 +90,11 @@ private:
   void addActiveCoordinate(double delta_rad);
 
   Eigen::Vector3d getCurrentCogPositionWorld() const;
-  Eigen::Matrix3d getCurrentCogRotationWorld() const;
   Eigen::Vector3d getCurrentBaselinkPositionWorld() const;
   Eigen::Matrix3d getCurrentBaselinkRotationWorld() const;
-  Eigen::Vector3d computePivotWorld() const;
+  Eigen::Vector3d computePivotWorld(
+      const Eigen::Vector3d& baselink_position_world,
+      const Eigen::Matrix3d& baselink_rotation_world) const;
 
   bool isManualPivotSource() const;
   bool isBranchPivotSource() const;
