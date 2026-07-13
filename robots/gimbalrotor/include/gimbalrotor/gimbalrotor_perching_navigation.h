@@ -1,40 +1,33 @@
 // -*- mode: c++ -*-
+
 #pragma once
+
+#include <cmath>
+#include <string>
 
 #include <gimbalrotor/gimbalrotor_navigation.h>
 
-#include <aerial_robot_control/control/spatial_constraint.h>
 #include <aerial_robot_msgs/FlightNav.h>
 
 #include <geometry_msgs/PointStamped.h>
 #include <geometry_msgs/PoseStamped.h>
+
 #include <std_msgs/Bool.h>
 #include <std_msgs/Empty.h>
 #include <std_msgs/Float64.h>
 
-#include <Eigen/Core>
-#include <Eigen/Geometry>
+#include <tf/tf.h>
 
-#include <string>
+#include <ros/ros.h>
 
 namespace aerial_robot_navigation
 {
 
-/*
- * Perching navigator responsibilities:
- *
- *   1. choose/capture the fixed perching pivot,
- *   2. explicitly define the allowed constraint DOF,
- *   3. generate the nominal constrained robot pose,
- *   4. expose the same SpatialConstraint to the interaction controller.
- *
- * The interaction controller never duplicates the perching geometry.
- */
 class GimbalrotorPerchingNavigator : public GimbalrotorNavigator
 {
 public:
   GimbalrotorPerchingNavigator();
-  ~GimbalrotorPerchingNavigator() override = default;
+  ~GimbalrotorPerchingNavigator() {}
 
   void initialize(
       ros::NodeHandle nh,
@@ -45,138 +38,124 @@ public:
 
   void update() override;
 
-  bool isPerchingEnabled() const;
-  bool isPerchingLocked() const;
-
-  const aerial_robot_control::SpatialConstraint&
-  getSpatialConstraint() const;
-
-  double getActiveConstraintCoordinate() const;
-
-  aerial_robot_control::SpatialConstraintTarget
-  calculateConstrainedTarget(
-      double coordinate,
-      double coordinate_velocity = 0.0,
-      double coordinate_acceleration = 0.0) const;
-
-  aerial_robot_control::SpatialConstraintTarget
-  convertBaselinkTargetToCogTarget(const aerial_robot_control::SpatialConstraintTarget& baselink_target) const;
-  
-protected:
+private:
   void rosParamInit() override;
   void naviCallback(const aerial_robot_msgs::FlightNavConstPtr& msg) override;
-  void reset() override;
-  void handleFinalTargetBaselinkRPYCommand(const geometry_msgs::Vector3StampedConstPtr& msg) override;
 
-private:
   void perchingEnableCallback(const std_msgs::BoolConstPtr& msg);
-  void relockCallback(const std_msgs::EmptyConstPtr& msg);
-  void resetConstraintCallback(const std_msgs::EmptyConstPtr& msg);
-
   void branchPoseCallback(const geometry_msgs::PoseStampedConstPtr& msg);
   void perchingPointCallback(const geometry_msgs::PointStampedConstPtr& msg);
+  void relockCallback(const std_msgs::EmptyConstPtr& msg);
+  void resetCallback(const std_msgs::EmptyConstPtr& msg);
+  void manualPitchDeltaCallback(const std_msgs::Float64ConstPtr& msg);
 
-  void targetAngleDegCallback(const std_msgs::Float64ConstPtr& msg);
-  void addAngleDegCallback(const std_msgs::Float64ConstPtr& msg);
-  void addAngleRadCallback(const std_msgs::Float64ConstPtr& msg);
+  bool tryLockPerching(const std::string& reason);
+  void resetPerchingLock();
 
-  bool tryLockConstraint(const std::string& reason);
-  void clearConstraint();
-  void applyActiveConstraintTarget();
+  void applyPerchingConstraint(aerial_robot_msgs::FlightNav& nav_msg);
 
-  bool hasConstraintAngleCommand(const aerial_robot_msgs::FlightNav& msg) const;
-  double getConstraintAngleCommand(const aerial_robot_msgs::FlightNav& msg) const;
+  void applyActivePerchingTarget();
+  aerial_robot_msgs::FlightNav buildActivePerchingNavCommand();
+  tf::Vector3 computeActiveHoldPosition() const;
+  double computeActiveHoldPitch() const;
+  double computeCompliantTargetY() const;
 
-  void setActiveCoordinateFromAngle(double angle_rad);
-  void setActiveCoordinateFromAbsoluteBaselinkAngle(double absolute_angle_rad);
-  void addActiveCoordinate(double delta_rad);
-  double getConstraintAngleFromBaselinkRpy(const tf::Vector3& baselink_rpy) const;
-  void commandBaselinkRotationTarget(const aerial_robot_control::SpatialConstraintTarget& baselink_target);
+  bool hasPitchCommand(const aerial_robot_msgs::FlightNav& nav_msg) const;
+  bool hasPositionCommand(const aerial_robot_msgs::FlightNav& nav_msg) const;
+  bool hasVelocityCommand(const aerial_robot_msgs::FlightNav& nav_msg) const;
 
-  Eigen::Vector3d getCurrentCogPositionWorld() const;
-  Eigen::Vector3d getCurrentBaselinkPositionWorld() const;
-  Eigen::Matrix3d getCurrentBaselinkRotationWorld() const;
-  Eigen::Vector3d computePivotWorld(
-      const Eigen::Vector3d& baselink_position_world,
-      const Eigen::Matrix3d& baselink_rotation_world) const;
+  double getCommandedPitch(const aerial_robot_msgs::FlightNav& nav_msg) const;
 
-  bool isManualPivotSource() const;
-  bool isBranchPivotSource() const;
-  bool hasBranchPivot() const;
+  tf::Vector3 getCurrentRobotPos() const;
+  tf::Vector3 getCurrentRobotRPY() const;
 
-  bool loadVector6Param(
-      const ros::NodeHandle& nh,
-      const std::string& name,
-      aerial_robot_control::Vector6d& value);
+  tf::Vector3 computeArcPositionFromPitch(double target_pitch) const;
+  tf::Vector3 projectPositionToPitchArc(const tf::Vector3& desired_pos) const;
+  tf::Vector3 projectVelocityToPitchArcTangent(const tf::Vector3& desired_vel) const;
 
-  bool loadVector3Param(
-      const ros::NodeHandle& nh,
-      const std::string& name,
-      Eigen::Vector3d& value);
+  tf::Vector3 getDesiredPosition(const aerial_robot_msgs::FlightNav& nav_msg) const;
+  tf::Vector3 getDesiredVelocity(const aerial_robot_msgs::FlightNav& nav_msg) const;
 
-  double lockedEulerComponent() const;
+  tf::Vector3 getCurrentBaselinkPos() const;
+  tf::Matrix3x3 getCurrentBaselinkRot() const;
+
+  tf::Vector3 computeHandPerchingCenterWorldFromBaselink() const;
+
+  bool isManualPivotMode() const;
+  bool isBranchPivotMode() const;
+  bool hasBranchPivotSource() const;
+
+  tf::Vector3 computeLockPivotWorld() const;
+
+  double clamp(double value, double min_value, double max_value) const;
   double normalizeAngle(double angle) const;
+  double norm2D(double x, double z) const;
+  double norm3D(const tf::Vector3& v) const;
 
-  void publishLockedState();
-  void publishCommandedState(const aerial_robot_control::SpatialConstraintTarget& target);
-
-private:
-  aerial_robot_control::SpatialConstraint spatial_constraint_;
-
-  bool perching_enabled_ = false;
-  bool perching_locked_ = false;
-  bool lock_once_ = true;
-  bool active_hold_enabled_ = true;
-  bool accept_uav_nav_angle_command_ = false;
-  bool command_angle_as_delta_ = true;
-
-  double minimum_valid_radius_ = 0.05;
-  double maximum_coordinate_ = 0.5235987756;
-  double coordinate_sign_ = 1.0;
-  double command_sign_ = 1.0;
-
-  double active_coordinate_ = 0.0;
-
-  aerial_robot_control::Vector6d allowed_dof_ = aerial_robot_control::Vector6d::Zero();
-
-  Eigen::Vector3d constraint_frame_rpy_ = Eigen::Vector3d::Zero();
-  Eigen::Vector3d hand_center_offset_baselink_ = Eigen::Vector3d::Zero();
-
-  std::string pivot_source_ = "manual";
-
-  std::string perching_enable_topic_ = "perching/enable";
-  std::string relock_topic_ = "perching/relock";
-  std::string reset_topic_ = "perching/reset";
-  std::string branch_pose_topic_ = "perching/branch_pose";
-  std::string perching_point_topic_ = "perching/point";
-  std::string target_angle_topic_ = "perching/target_angle_deg";
-  std::string add_angle_topic_ = "perching/add_angle_deg";
-  std::string legacy_target_pitch_topic_ = "perching/target_pitch_deg";
-  std::string legacy_add_pitch_topic_ = "perching/add_pitch_deg";
-  std::string legacy_manual_pitch_delta_topic_ = "perching/manual_pitch_delta";
-
-  bool has_branch_pose_ = false;
-  bool has_perching_point_ = false;
-
-  Eigen::Vector3d branch_position_world_ = Eigen::Vector3d::Zero();
-  Eigen::Vector3d perching_point_world_ = Eigen::Vector3d::Zero();
-  Eigen::Vector3d locked_rpy_ = Eigen::Vector3d::Zero();
-  Eigen::Vector3d locked_cog_target_rpy_ = Eigen::Vector3d::Zero();
+  void publishLockedDebugPose();
+  void publishLockedPivot();
+  void publishCommandedDebugPose(const tf::Vector3& pos, double pitch);
 
   ros::Subscriber perching_enable_sub_;
-  ros::Subscriber relock_sub_;
-  ros::Subscriber reset_sub_;
   ros::Subscriber branch_pose_sub_;
   ros::Subscriber perching_point_sub_;
-  ros::Subscriber target_angle_sub_;
-  ros::Subscriber add_angle_sub_;
-  ros::Subscriber legacy_target_pitch_sub_;
-  ros::Subscriber legacy_add_pitch_sub_;
-  ros::Subscriber legacy_manual_pitch_delta_sub_;
+  ros::Subscriber relock_sub_;
+  ros::Subscriber reset_sub_;
+  ros::Subscriber manual_pitch_delta_sub_;
 
   ros::Publisher locked_pose_pub_;
   ros::Publisher locked_pivot_pub_;
   ros::Publisher commanded_pose_pub_;
+
+  bool perching_enable_;
+  bool perching_locked_;
+  bool perching_lock_once_;
+
+  bool require_branch_point_;
+  bool command_pitch_as_delta_;
+  bool constrain_position_command_;
+  bool constrain_velocity_command_;
+  bool use_pitch_command_for_arc_;
+  bool hold_locked_pose_without_pitch_command_;
+
+  bool accept_uav_nav_pitch_command_;
+  bool active_perching_hold_enable_;
+
+  double min_valid_radius_;
+  double max_pitch_delta_;
+  double arc_pitch_sign_;
+  double command_pitch_sign_;
+  double y_compliance_deadband_;
+
+  std::string pivot_source_;
+
+  tf::Vector3 hand_perching_center_offset_baselink_; 
+  
+  std::string perching_enable_topic_;
+  std::string branch_pose_topic_;
+  std::string perching_point_topic_;
+  std::string locked_pivot_topic_;
+  std::string relock_topic_;
+  std::string reset_topic_;
+  std::string manual_pitch_delta_topic_;
+
+  bool has_branch_pose_;
+  bool has_perching_point_;
+
+  bool has_active_pitch_target_;
+  double active_target_pitch_;
+
+  tf::Vector3 branch_pos_world_;
+  tf::Vector3 perching_point_world_;
+
+  tf::Vector3 locked_robot_pos_world_;
+  tf::Vector3 locked_robot_rpy_;
+  tf::Vector3 locked_pivot_world_;
+  tf::Vector3 locked_radius_vec_world_;
+
+  double locked_radius_;
+  double locked_y_offset_;
+  double locked_x_side_;
 };
 
 }  // namespace aerial_robot_navigation

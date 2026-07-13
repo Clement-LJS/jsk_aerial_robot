@@ -1,14 +1,10 @@
-aerial_robot_control_name: aerial_robot_control/gimbalrotor_interaction_controller
+aerial_robot_control_name: aerial_robot_control/gimbalrotor_perching_impedance_controller
 
 controller:
   torque_allocation_matrix_inv_pub_interval: 0.05
   wrench_allocation_matrix_pub_interval: 0.1
-  gimbal_calc_in_fc: true
-
-  # The old PoseLinearController observer must stay disabled. The new observer
-  # is inside InteractionController and is called synchronously by the
-  # GimbalrotorInteractionController.
-  wrench_estimate_flag: false
+  gimbal_calc_in_fc : true
+  wrench_estimate_flag : true
 
   xy:
     p_gain: 10.0
@@ -24,7 +20,7 @@ controller:
     i_gain: 2.0
     d_gain: 5.0
     limit_err_p: 1.0
-    limit_sum: 25.0
+    limit_sum: 25.0 # N for clamping thrust force
     limit_p: 25.0
     limit_i: 20.0
     limit_d: 25.0
@@ -47,6 +43,7 @@ controller:
     limit_p: 20.0
     limit_i: 10.0
     limit_d: 20.0
+
     start_rp_integration_height: 0.15
 
   yaw:
@@ -58,52 +55,109 @@ controller:
     limit_p: 20.0
     limit_i: 5.0
     limit_d: 20.0
+
     need_d_control: true
 
-  interaction:
-    # admittance: estimated wrench -> constrained motion offset
-    # impedance: pose/velocity error -> physical commanded wrench
-    mode: admittance
+  impedance:
+    use_impedance: true
 
-    # Full topic: /gimbalrotor/cutting_enable
-    enable_topic: cutting_enable
+    impedance_enable_topic: impedance_enable
 
-    # world or cog. Perching always uses its own constraint frame.
+    external_wrench_topic: estimated_external_wrench
+
+    external_wrench_frame: world
     compliance_frame: world
 
-    # Free-flight interaction is disabled in this first configuration.
-    # During perching, this is replaced by the navigator's explicit
-    # perching_constraint_allowed_dof.
-    free_flight_active_dof: [0, 0, 0, 0, 0, 0]
+    force_lpf_alpha: 0.2
+    torque_lpf_alpha: 0.2
 
-    observer:
-      enabled: true
-      only_in_hover_land: true
-      gain: [10.0, 10.0, 10.0, 10.0, 10.0, 10.0]
-      maximum_dt: 0.1
+    # Keep your proven perching test setting.
+    # For normal flying impedance in all axes, you can later set x/y/z to 1.
+    enable_x: 0
+    enable_y: 0
+    enable_z: 0
 
-    admittance:
-      # [x, y, z, roll, pitch, yaw]
-      virtual_mass: [5.0, 5.0, 5.0, 0.08, 0.08, 0.08]
-      damping: [50.0, 50.0, 50.0, 0.5, 0.5, 0.5]
-      stiffness: [100.0, 100.0, 100.0, 1.0, 1.0, 1.0]
+    enable_roll: 0
+    enable_pitch: 1
+    enable_yaw: 0
 
-      reference_wrench: [0, 0, 0, 0, 0, 0]
-      wrench_error_limit: [3.0, 3.0, 3.0, 0.8, 0.2, 0.8]
+    force_ref_x: 0.0
+    force_ref_y: 0.0
+    force_ref_z: 0.0
 
-      position_offset_limit: [0.05, 0.05, 0.05, 0.15, 0.05236, 0.15]
-      velocity_offset_limit: [0.10, 0.10, 0.10, 0.50, 0.30, 0.50]
-      acceleration_offset_limit: [5.0, 5.0, 5.0, 5.0, 3.0, 5.0]
+    torque_ref_roll: 0.0
+    torque_ref_pitch: 0.0
+    torque_ref_yaw: 0.0
 
-      wrench_filter_time_constant: 0.03
-      maximum_dt: 0.1
+    mass_x: 5.0
+    mass_y: 5.0
+    mass_z: 5.0
 
-    # Included now so the generic module already supports actual impedance.
-    # For a pure impedance flight test, corresponding pose PID gains should be
-    # reduced/zeroed because PID otherwise acts in parallel.
-    impedance:
-      inertia: [5.0, 5.0, 5.0, 0.08, 0.08, 0.08]
-      damping: [35.0, 35.0, 35.0, 0.3, 0.3, 0.3]
-      stiffness: [25.0, 25.0, 25.0, 0.8, 0.8, 0.8]
-      wrench_limit: [3.0, 3.0, 3.0, 0.8, 0.8, 0.8]
-      use_inertia_feedforward: true
+    damping_x: 50.0
+    damping_y: 50.0
+    damping_z: 50.0
+
+    stiffness_x: 100.0
+    stiffness_y: 100.0
+    stiffness_z: 100.0
+
+    inertia_roll: 0.08
+    inertia_pitch: 0.08
+    inertia_yaw: 0.08
+
+    rot_damping_roll: 0.5
+    rot_damping_pitch: 0.5
+    rot_damping_yaw: 0.5
+
+    rot_stiffness_roll: 1.0
+    rot_stiffness_pitch: 1.0
+    rot_stiffness_yaw: 1.0
+
+    force_limit_x: 0.0
+    force_limit_y: 0.0
+    force_limit_z: 0.0
+
+    torque_limit_roll: 0.0
+    torque_limit_pitch: 0.2
+    torque_limit_yaw: 0.0
+
+    pos_offset_limit_x: 0.0
+    pos_offset_limit_y: 0.0
+    pos_offset_limit_z: 0.0
+
+    vel_offset_limit_x: 0.0
+    vel_offset_limit_y: 0.0
+    vel_offset_limit_z: 0.0
+
+    angle_offset_limit_roll: 0.0
+    angle_offset_limit_pitch: 0.05236
+    angle_offset_limit_yaw: 0.0
+
+    angular_vel_offset_limit_roll: 0.0
+    angular_vel_offset_limit_pitch: 0.3
+    angular_vel_offset_limit_yaw: 0.0
+
+    perching:
+      # Perching navigation state.
+      # Full topic: /gimbalrotor/perching/enable
+      perching_enable_topic: perching/enable
+
+      # Separate perching impedance trigger.
+      # Full topic: /gimbalrotor/perching/impedance_enable
+      perching_impedance_enable_topic: perching/impedance_enable
+
+      # These topics must match GimbalrotorPerchingNavigator.
+      perching_point_topic: perching/point
+      perching_branch_pose_topic: perching/branch_pose
+      perching_locked_pose_topic: perching/locked_pose
+      perching_locked_pivot_topic: perching/locked_pivot
+
+      # Do not use branch mocap as fallback pivot.
+      # The navigator publishes locked_pivot from the hand center.
+      use_branch_pose_if_no_point: false
+
+      require_perching_lock: true
+
+      perching_min_valid_radius: 0.05
+      perching_max_pitch_delta: 0.78539816339
+      perching_arc_pitch_sign: 1.0

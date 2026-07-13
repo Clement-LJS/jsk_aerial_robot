@@ -60,21 +60,10 @@ void GimbalrotorNavigator::targetBaselinkRotCallback(const geometry_msgs::Quater
     }
 }
 
-void GimbalrotorNavigator::setFinalTargetBaselinkRPY(const tf::Vector3& baselink_rpy)
+void GimbalrotorNavigator::targetBaselinkRPYCallback(const geometry_msgs::Vector3StampedConstPtr & msg)
 {
-  final_target_baselink_rot_.setRPY(baselink_rpy.x(), baselink_rpy.y(),baselink_rpy.z());
-
-  target_omega_.setValue(0.0, 0.0, 0.0);
-}
-
-void GimbalrotorNavigator::handleFinalTargetBaselinkRPYCommand(const geometry_msgs::Vector3StampedConstPtr& msg)
-{
-  setFinalTargetBaselinkRPY(tf::Vector3(msg->vector.x, msg->vector.y, msg->vector.z));
-}
-
-void GimbalrotorNavigator::targetBaselinkRPYCallback(const geometry_msgs::Vector3StampedConstPtr& msg)
-{
-  handleFinalTargetBaselinkRPYCommand(msg);
+  final_target_baselink_rot_.setRPY(msg->vector.x, msg->vector.y, msg->vector.z);
+  target_omega_.setValue(0,0,0); // for sure to reset the target angular velocity
 }
 
 
