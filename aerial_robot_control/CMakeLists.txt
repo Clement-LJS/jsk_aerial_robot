@@ -27,14 +27,11 @@ if (CMAKE_SYSTEM_PROCESSOR MATCHES "(aarch64)|(armhf)" AND $ENV{ROS_DISTRO} MATC
   add_definitions (-DARM_MELODIC)
 endif()
 
-
 # Eigen requires optimization to get good performance
-# http://eigen.tuxfamily.org/index.php?title=FAQ#Optimization
 if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE RelWithDebInfo)
 endif()
 set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O3 -g -DNDEBUG")
-
 
 catkin_package(
   INCLUDE_DIRS include
@@ -54,23 +51,25 @@ add_library(control_utils
   )
 target_link_libraries(control_utils ${EIGEN3_LIBRARIES})
 
-### flight control plugin
+### flight control plugin + generic interaction calculations
 add_library(flight_control_pluginlib
   src/control/base/pose_linear_controller.cpp
+  src/control/interaction_controller.cpp
+  src/control/spatial_constraint.cpp
   src/control/fully_actuated_controller.cpp
   src/control/under_actuated_controller.cpp
   src/control/under_actuated_lqi_controller.cpp
   src/control/under_actuated_tilted_lqi_controller.cpp)
 
 target_link_libraries(flight_control_pluginlib ${catkin_LIBRARIES} control_utils)
-add_dependencies(flight_control_pluginlib  ${PROJECT_NAME}_gencfg)
+add_dependencies(flight_control_pluginlib ${PROJECT_NAME}_gencfg)
 
 ### flight navigation
-add_library (flight_navigation src/flight_navigation.cpp src/util/joy_parser.cpp)
-target_link_libraries (flight_navigation ${catkin_LIBRARIES})
+add_library(flight_navigation src/flight_navigation.cpp src/util/joy_parser.cpp)
+target_link_libraries(flight_navigation ${catkin_LIBRARIES})
 
 ### trajectory generate based on dodgelib
-add_library (trajectory_generation
+add_library(trajectory_generation
   src/trajectory/reference_base.cpp
   src/trajectory/trajectory_reference/polynomial.cpp
   src/trajectory/trajectory_reference/polynomial_trajectory.cpp
@@ -83,12 +82,10 @@ add_library (trajectory_generation
   src/trajectory/utils/logger.cpp
   src/trajectory/utils/timer.cpp
   )
-target_link_libraries (trajectory_generation ${catkin_LIBRARIES})
+target_link_libraries(trajectory_generation ${catkin_LIBRARIES})
 
 add_executable(trajectory_generation_node src/trajectory/test.cpp)
-target_link_libraries (trajectory_generation_node ${catkin_LIBRARIES} trajectory_generation)
-
-
+target_link_libraries(trajectory_generation_node ${catkin_LIBRARIES} trajectory_generation)
 
 install(DIRECTORY include/${PROJECT_NAME}/
   DESTINATION ${CATKIN_PACKAGE_INCLUDE_DESTINATION})

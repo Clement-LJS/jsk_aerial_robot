@@ -243,6 +243,8 @@ namespace aerial_robot_control
     // time diff
     double du = ros::Time::now().toSec() - control_timestamp_;
 
+    modifyControlTarget(du);
+
     // x & y
     switch(navigator_->getXyControlMode())
       {

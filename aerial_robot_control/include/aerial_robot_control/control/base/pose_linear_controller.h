@@ -80,7 +80,6 @@ namespace aerial_robot_control
       target_wrench_acc_cog_ = target_wrench_acc_cog;
     }
 
-
   protected:
     ros::Publisher pid_pub_;
     ros::Publisher estimate_external_wrench_pub_;
@@ -112,16 +111,22 @@ namespace aerial_robot_control
     double prev_est_wrench_timestamp_;
     bool wrench_estimate_flag_;
     Eigen::VectorXd target_wrench_acc_cog_;
-    
+
+    /*
+     * Derived controllers may modify only the local target_* members after
+     * they are copied from the navigator and before PID is evaluated.
+     *
+     * The default implementation does nothing, so all existing controllers
+     * keep their current behavior.
+     */
+    virtual void modifyControlTarget(double dt) {}
 
     virtual void controlCore();
     virtual void sendCmd();
 
-
     void cfgPidCallback(aerial_robot_control::PIDConfig &config, uint32_t level, std::vector<int> controller_indices);
     void startWrenchEstimation();
     virtual void externalWrenchEstimate();
-
   };
 
 };

@@ -1,13 +1,16 @@
 <library path="lib/libgimbalrotor_controller">
-  <class name="aerial_robot_control/gimbalrotor_controller" type="aerial_robot_control::GimbalrotorController" base_class_type="aerial_robot_control::ControlBase">
-    <description>plugin for gimbalrotor control </description>
+  <class name="aerial_robot_control/gimbalrotor_controller"
+         type="aerial_robot_control::GimbalrotorController"
+         base_class_type="aerial_robot_control::ControlBase">
+    <description>Normal gimbalrotor flight controller.</description>
   </class>
 
-  <class name="aerial_robot_control/gimbalrotor_impedance_controller" type="aerial_robot_control::GimbalrotorImpedanceController" base_class_type="aerial_robot_control::ControlBase">
-    <description>plugin for gimbalrotor impedance control </description>
-  </class>
-
-  <class name="aerial_robot_control/gimbalrotor_perching_impedance_controller" type="aerial_robot_control::GimbalrotorPerchingImpedanceController" base_class_type="aerial_robot_control::ControlBase">
-    <description>plugin for gimbalrotor perching-constrained impedance control </description>
+  <class name="aerial_robot_control/gimbalrotor_interaction_controller"
+         type="aerial_robot_control::GimbalrotorInteractionController"
+         base_class_type="aerial_robot_control::ControlBase">
+    <description>
+      Gimbalrotor controller using the generic interaction calculation module
+      for admittance, impedance, wrench estimation, and perching constraints.
+    </description>
   </class>
 </library>

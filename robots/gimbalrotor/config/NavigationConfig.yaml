@@ -2,96 +2,75 @@
 
 navigation:
   xy_control_mode: 0
-  # World Pos Control Mode: 0
-  # World Vel Control Mode: 2
-  # Local Vel Control Mode: 3
-  # Attitude Control Mode: 4
 
-
-  takeoff_height: 0.3 #1.0
+  takeoff_height: 0.3
   outdoor_takeoff_height: 1.5
 
-  # teleop operation
   max_target_vel: 0.5
-  joy_target_vel_interval: 0.005  # 0.2 / 20 = 0.01, 0.005 ~ 0.01  m/s
+  joy_target_vel_interval: 0.005
   joy_target_z_interval: 0.02
-  max_target_yaw_rate: 0.1 #  0.05
+  max_target_yaw_rate: 0.1
   teleop_local_frame: fc
 
-  cmd_vel_lev2_gain : 2.0
-  # nav_vel_limit : 0.2
-  # vel_nav_threshold : 0.01
-
+  cmd_vel_lev2_gain: 2.0
   gain_tunning_mode: 0
   max_target_tilt_angle: 0.2
-  cmd_angle_lev2_gain : 1.5
+  cmd_angle_lev2_gain: 1.5
 
-  # gps waypoint
   gps_waypoint_threshold: 3.0
   gps_waypoint_check_du: 1.0
 
-  # desire tilt
   baselink_rot_pub_interval: 0.2
-  baselink_rot_change_thresh: 1.0 # 0.2 hz -> 0.04; 0.01 hz-> 0.02
+  baselink_rot_change_thresh: 1.0
 
-
-  ############################# PERCHING NAV #############################
-  # Keep false by default. Enable only when robot is near branch and ready for perching/cutting.
+  ######################## PERCHING CONSTRAINT ########################
   perching_enable: false
-
-  # If true, first enable locks pivot/radius once. Use /gimbalrotor/perching/relock to relock manually.
   perching_lock_once: true
+  perching_active_hold_enable: true
 
-  # false: target_pitch is absolute pitch [rad].
-  # true: target_pitch is delta pitch from locked pitch [rad].
-  perching_command_pitch_as_delta: true
+  # Current implementation: exactly one rotational DOF must be selected.
+  # [translation x, y, z, rotation x, y, z]
+  # Current pitch-like constraint:
+  perching_constraint_allowed_dof: [0, 0, 0, 0, 1, 0]
 
-  # If position command is sent while perching is enabled, constrain it onto branch pitch arc.
-  perching_constrain_position_command: true
+  # Orientation of the constraint frame in world, [roll, pitch, yaw] rad.
+  # Identity means its Y axis is world Y.
+  perching_constraint_frame_rpy: [0.0, 0.0, 0.0]
 
-  # If velocity command is sent while perching is enabled, remove radial velocity away/toward branch.
-  perching_constrain_velocity_command: true
+  # Change to -1 if positive q rotates in the physically wrong direction.
+  perching_constraint_coordinate_sign: 1.0
+  perching_command_sign: 1.0
 
-  # Main cutting mode: target_pitch command creates target position around branch arc.
-  perching_use_pitch_command_for_arc: true
-
-  # If perching enabled but no pitch command arrives, hold the locked pose instead of drifting to old command.
-  perching_hold_locked_pose_without_pitch_command: true
-
-  # Safety: invalid branch/robot distance below this will not lock.
+  # Maximum absolute q from the locked pose [rad].
+  perching_max_constraint_angle: 0.5235987756
   perching_min_valid_radius: 0.05
 
-  # Max allowed pitch change from locked pose [rad].
-  # 0.5236 = 30 deg
-  # 0.7854 = 45 deg
-  # 1.0472 = 60 deg
-  perching_max_pitch_delta: 0.5235987756
+  # true: incoming target angle is q relative to the locked pose.
+  # false: incoming target angle is an absolute roll/pitch/yaw angle.
+  perching_command_angle_as_delta: true
 
-  # If pitch arc direction is reversed, change to -1.0.
-  perching_arc_pitch_sign: 1.0
-  perching_command_pitch_sign: 1.0
-  
-  perching_enable_topic: "perching/enable"
-  perching_branch_pose_topic: "perching/branch_pose"
-  perching_point_topic: "perching/point"
-  perching_relock_topic: "perching/relock"
-  perching_reset_topic: "perching/reset"
+  # Keep false when a mission helper repeatedly publishes zero attitude.
+  perching_accept_uav_nav_angle_command: false
 
-  perching_active_hold_enable: true
-  perching_y_compliance_deadband: 0.03
-
-  perching_accept_uav_nav_pitch_command: false
-  perching_manual_pitch_delta_topic: perching/manual_pitch_delta
-  
+  # manual: base_link + configured hand-center offset
+  # branch: perching/point, otherwise perching/branch_pose
   perching_pivot_source: manual
-  perching_require_branch_point: false
 
-  # hand center from baselink 
   hand_perching_center_offset_baselink_x: -0.33568
   hand_perching_center_offset_baselink_y: 0.00193
   hand_perching_center_offset_baselink_z: 0.08000
 
-  # Latched pivot topic published by perching navigator after lock.
-  # Perching impedance controller uses this so both navigator and controller
-  # use exactly the same pivot.
-  perching_locked_pivot_topic: perching/locked_pivot
+  perching_enable_topic: perching/enable
+  perching_relock_topic: perching/relock
+  perching_reset_topic: perching/reset
+  perching_branch_pose_topic: perching/branch_pose
+  perching_point_topic: perching/point
+
+  # Generic names.
+  perching_target_angle_topic: perching/target_angle_deg
+  perching_add_angle_topic: perching/add_angle_deg
+
+  # Compatibility aliases for your current mission/keyboard tools.
+  perching_target_pitch_topic: perching/target_pitch_deg
+  perching_add_pitch_topic: perching/add_pitch_deg
+  perching_manual_pitch_delta_topic: perching/manual_pitch_delta

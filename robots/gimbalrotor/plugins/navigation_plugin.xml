@@ -1,8 +1,15 @@
 <library path="lib/libgimbalrotor_navigation">
-  <class name="aerial_robot_navigation/gimbalrotor_navigation" type="aerial_robot_navigation::GimbalrotorNavigator" base_class_type="aerial_robot_navigation::BaseNavigator">
-    <description>plugin for gimbalrotor navigation </description>
+  <class name="aerial_robot_navigation/gimbalrotor_navigation"
+         type="aerial_robot_navigation::GimbalrotorNavigator"
+         base_class_type="aerial_robot_navigation::BaseNavigator">
+    <description>Normal gimbalrotor navigation.</description>
   </class>
-  <class name="aerial_robot_navigation/gimbalrotor_perching_navigation" type="aerial_robot_navigation::GimbalrotorPerchingNavigator" base_class_type="aerial_robot_navigation::BaseNavigator">
-    <description>plugin for gimbalrotor perching navigation </description>
+
+  <class name="aerial_robot_navigation/gimbalrotor_perching_navigation"
+         type="aerial_robot_navigation::GimbalrotorPerchingNavigator"
+         base_class_type="aerial_robot_navigation::BaseNavigator">
+    <description>
+      Gimbalrotor navigation with one fixed spatial perching constraint.
+    </description>
   </class>
 </library>
