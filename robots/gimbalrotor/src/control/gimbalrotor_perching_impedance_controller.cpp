@@ -76,6 +76,10 @@ void GimbalrotorPerchingImpedanceController::initialize(
    */
   impedance_enable_sub_.shutdown();
 
+  R_world_constraint_.setIdentity();
+
+  constraint_axis_world_ = Eigen::Vector3d::UnitY();
+
   normal_impedance_enable_sub_ =
       nh_.subscribe(
           impedance_enable_topic_,
@@ -170,6 +174,10 @@ void GimbalrotorPerchingImpedanceController::reset()
 
   locked_radius_ = 0.0;
   locked_x_side_ = 1.0;
+  
+  R_world_constraint_.setIdentity();
+
+  constraint_axis_world_ = Eigen::Vector3d::UnitY();
 
   ROS_WARN("[GimbalrotorPerchingImpedanceController] perching impedance state reset.");
 }
@@ -287,6 +295,70 @@ void GimbalrotorPerchingImpedanceController::controlCore()
   updateEffectiveImpedanceEnable();
 
   GimbalrotorImpedanceController::controlCore();
+}
+
+
+Eigen::Matrix<double, 6, 1> GimbalrotorPerchingImpedanceController::getExternalWrenchWorld() const
+{
+  /*
+   * Base function returns:
+   * force: world coordinates
+   * torque: world coordinates
+   * torque reference point: COG
+   */
+  const Eigen::Matrix<double, 6, 1> wrench_cog_world = GimbalrotorImpedanceController::getExternalWrenchWorld();
+
+  /*
+   * During normal flight, preserve the normal COG-referenced wrench.
+   */
+  if(!perching_enabled_for_constraint_)
+  {
+    return wrench_cog_world;
+  }
+
+  /*
+   * A pivot transformation is not valid before
+   * the perching lock has been received.
+   *
+   * Return zero rather than integrating a wrench
+   * with the wrong reference point.
+   */
+  if(!has_locked_pose_)
+  {
+    return Eigen::Matrix<double, 6, 1>::Zero();
+  }
+
+  const tf::Vector3 cog_pos_world_tf = estimator_->getPos(Frame::COG, estimate_mode_);
+
+  const Eigen::Vector3d cog_pos_world(
+      cog_pos_world_tf.x(),
+      cog_pos_world_tf.y(),
+      cog_pos_world_tf.z());
+
+  const Eigen::Vector3d pivot_pos_world(
+      locked_pivot_world_.x(),
+      locked_pivot_world_.y(),
+      locked_pivot_world_.z());
+
+  const Eigen::Vector3d force_world = wrench_cog_world.head<3>();
+
+  const Eigen::Vector3d torque_cog_world = wrench_cog_world.tail<3>();
+
+  /*
+   * Vector from the perching pivot to the COG.
+   */
+  const Eigen::Vector3d pivot_to_cog_world = cog_pos_world - pivot_pos_world;
+
+  /*
+   * Change the torque reference point: tau_pivot = tau_cog + (p_cog - p_pivot) x force
+   */
+  const Eigen::Vector3d torque_pivot_world = torque_cog_world + pivot_to_cog_world.cross(force_world);
+
+  Eigen::Matrix<double, 6, 1> wrench_pivot_world = wrench_cog_world;
+
+  wrench_pivot_world.tail<3>() = torque_pivot_world;
+
+  return wrench_pivot_world;
 }
 
 void GimbalrotorPerchingImpedanceController::perchingEnableCallback(
@@ -408,11 +480,80 @@ void GimbalrotorPerchingImpedanceController::updateLockedConstraintFromLockedPos
 
   has_locked_pose_ = true;
 
+    /*
+  * Minimum implementation:
+  * the physical branch axis is assumed to be world Y.
+  */
+  constraint_axis_world_ = Eigen::Vector3d::UnitY();
+
+  Eigen::Vector3d radial_world(
+      locked_radius_vec_world_.x(),
+      locked_radius_vec_world_.y(),
+      locked_radius_vec_world_.z());
+
+  /*
+  * Remove the component along the branch.
+  */
+  radial_world -= constraint_axis_world_ * constraint_axis_world_.dot(radial_world);
+
+  const double radial_norm = radial_world.norm();
+
+  if(radial_norm < 1.0e-6)
+  {
+    has_locked_pose_ = false;
+
+    ROS_ERROR(
+        "[GimbalrotorPerchingAdmittanceController] "
+        "Cannot build constraint frame: invalid radial vector.");
+
+    return;
+  }
+
+  radial_world.normalize();
+
+  Eigen::Vector3d tangent_world = constraint_axis_world_.cross(radial_world);
+
+  const double tangent_norm = tangent_world.norm();
+
+  if(tangent_norm < 1.0e-6)
+  {
+    has_locked_pose_ = false;
+
+    ROS_ERROR(
+        "[GimbalrotorPerchingAdmittanceController] "
+        "Cannot build constraint frame: invalid tangent.");
+
+    return;
+  }
+
+  tangent_world.normalize();
+
+  /*
+  * Columns map constraint-frame vectors into world.
+  *
+  * constraint X = radial
+  * constraint Y = branch axis
+  * constraint Z = tangent
+  */
+  R_world_constraint_.col(0) = radial_world;
+  R_world_constraint_.col(1) = constraint_axis_world_;
+  R_world_constraint_.col(2) = tangent_world;
+      
   ROS_WARN("[GimbalrotorPerchingImpedanceController] locked perching constraint received.");
   ROS_WARN("[GimbalrotorPerchingImpedanceController] locked pivot: %.3f %.3f %.3f", locked_pivot_world_.x(), locked_pivot_world_.y(), locked_pivot_world_.z());
   ROS_WARN("[GimbalrotorPerchingImpedanceController] locked pos: %.3f %.3f %.3f", locked_robot_pos_world_.x(), locked_robot_pos_world_.y(), locked_robot_pos_world_.z());
   ROS_WARN("[GimbalrotorPerchingImpedanceController] locked pitch deg: %.2f", locked_robot_rpy_.y() * 180.0 / PI);
   ROS_WARN("[GimbalrotorPerchingImpedanceController] hand-center radius: %.3f", locked_radius_);
+}
+
+Eigen::Matrix3d GimbalrotorPerchingImpedanceController::getComplianceToWorldRotation() const
+{
+  if(perching_enabled_for_constraint_ && has_locked_pose_)
+  {
+    return R_world_constraint_;
+  }
+
+  return GimbalrotorImpedanceController::getComplianceToWorldRotation();
 }
 
 void GimbalrotorPerchingImpedanceController::normalImpedanceEnableCallback(
@@ -536,20 +677,29 @@ void GimbalrotorPerchingImpedanceController::applyImpedanceOutputToNavigator(
   }
 
   const double nominal_pitch = original_target_rpy.y();
-  const double impedance_pitch_offset = output.rpy_offset_world(1);
-  const double target_pitch = normalizeAngle(nominal_pitch + impedance_pitch_offset);
+  const double admittance_pitch_offset = output.angle_offset_compliance(1);
+  const double target_pitch = normalizeAngle(nominal_pitch + admittance_pitch_offset);
 
   tf::Vector3 modified_target_pos = computePerchingArcPositionFromPitch(target_pitch, original_target_pos);
 
-  /*
-   * Preserve normal branch-axis / world-Y target from the perching navigator.
-   *
-   * If later you enable Y impedance, allow only Y position offset here.
-   * X and Z arbitrary impedance offsets are intentionally ignored during
-   * perching, because X-Z must stay on the pitch arc.
-   */
-  modified_target_pos.setY(
-      original_target_pos.y() + output.pos_offset_world(1));
+ /*
+  * Translational compliance along the branch axis.
+  *
+  * output.pos_offset_compliance(1): scalar displacement along constraint Y
+  *
+  * constraint_axis_world_: branch-axis unit vector in world coordinates
+  */
+  const Eigen::Vector3d branch_offset_world = constraint_axis_world_ * output.pos_offset_compliance(1);
+
+ /*
+  * The arc function already provides the constrained radial/tangential position.
+  *
+  * Add only the permitted branch-axis displacement.
+  */
+  modified_target_pos += tf::Vector3(
+      branch_offset_world.x(),
+      branch_offset_world.y(),
+      branch_offset_world.z());
 
   tf::Vector3 modified_target_rpy = original_target_rpy;
 
@@ -574,7 +724,7 @@ void GimbalrotorPerchingImpedanceController::applyImpedanceOutputToNavigator(
       "nominal_pitch %.2f deg | d_pitch %.2f deg | target_pitch %.2f deg | "
       "target_pos %.3f %.3f %.3f",
       nominal_pitch * 180.0 / PI,
-      impedance_pitch_offset * 180.0 / PI,
+      admittance_pitch_offset * 180.0 / PI,
       target_pitch * 180.0 / PI,
       modified_target_pos.x(),
       modified_target_pos.y(),

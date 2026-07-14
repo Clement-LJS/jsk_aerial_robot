@@ -11,7 +11,9 @@ GimbalrotorImpedanceController::GimbalrotorImpedanceController()
     impedance_enable_topic_("impedance_enable"),
     external_wrench_frame_("world"),
     compliance_frame_("world"),
-    impedance_enabled_(false)
+    impedance_enabled_(false), 
+    has_external_wrench_(false),
+    external_wrench_timeout_(0.15)
 {
   raw_external_wrench_.setZero();
 }
@@ -77,6 +79,9 @@ void GimbalrotorImpedanceController::initialize(
                   << external_wrench_frame_);
   ROS_WARN_STREAM("[" << controllerName() << "] compliance_frame: "
                   << compliance_frame_);
+
+  last_external_wrench_receive_time_ = ros::Time(0);
+  has_external_wrench_ = false;
 }
 
 void GimbalrotorImpedanceController::reset()
@@ -84,9 +89,19 @@ void GimbalrotorImpedanceController::reset()
   GimbalrotorController::reset();
 
   impedance_enabled_ = false;
-  raw_external_wrench_.setZero();
+
+  {
+    std::lock_guard<std::mutex> lock(external_wrench_mutex_);
+
+    raw_external_wrench_.setZero();
+
+    last_external_wrench_receive_time_ = ros::Time(0);
+
+    has_external_wrench_ = false;
+  }
 
   impedance_core_.reset();
+
   impedance_output_ = ImpedanceCoreOutput();
 
   prev_impedance_time_ = ros::Time::now();
@@ -436,6 +451,12 @@ void GimbalrotorImpedanceController::rosParamInit()
       impedance_config_.angular_vel_offset_limit(2),
       0.50);
 
+  getParam<double>(
+      imp_nh,
+      "external_wrench_timeout",
+      external_wrench_timeout_,
+      0.15);
+  
   impedance_core_.setConfig(impedance_config_);
 
   ROS_INFO_STREAM("[" << controllerName() << "] use_impedance: "
@@ -553,16 +574,20 @@ void GimbalrotorImpedanceController::applyImpedanceOutputToNavigator(
   navigator_->setTargetRPY(modified_target_rpy);
 }
 
-void GimbalrotorImpedanceController::externalWrenchCallback(
-    const geometry_msgs::WrenchStamped::ConstPtr& msg)
+void GimbalrotorImpedanceController::externalWrenchCallback(const geometry_msgs::WrenchStamped::ConstPtr& msg)
 {
+  std::lock_guard<std::mutex> lock(external_wrench_mutex_);
+
   raw_external_wrench_(0) = msg->wrench.force.x;
   raw_external_wrench_(1) = msg->wrench.force.y;
   raw_external_wrench_(2) = msg->wrench.force.z;
-
   raw_external_wrench_(3) = msg->wrench.torque.x;
   raw_external_wrench_(4) = msg->wrench.torque.y;
   raw_external_wrench_(5) = msg->wrench.torque.z;
+
+  last_external_wrench_receive_time_ = ros::Time::now();
+
+  has_external_wrench_ = true;
 }
 
 void GimbalrotorImpedanceController::impedanceEnableCallback(
@@ -583,45 +608,81 @@ void GimbalrotorImpedanceController::impedanceEnableCallback(
       static_cast<int>(impedance_enabled_));
 }
 
-Eigen::Matrix<double, 6, 1>
-GimbalrotorImpedanceController::getExternalWrenchWorld() const
+Eigen::Matrix<double, 6, 1> GimbalrotorImpedanceController::getExternalWrenchWorld() const
 {
-  Eigen::Matrix<double, 6, 1> wrench_world =
-      raw_external_wrench_;
+  Eigen::Matrix<double, 6, 1> raw_wrench;
 
+  ros::Time receive_time;
+
+  bool has_wrench = false;
+
+  {
+    std::lock_guard<std::mutex> lock(external_wrench_mutex_);
+
+    raw_wrench = raw_external_wrench_;
+
+    receive_time = last_external_wrench_receive_time_;
+
+    has_wrench = has_external_wrench_;
+  }
+
+  if(!has_wrench)
+  {
+    ROS_WARN_THROTTLE(1.0, "[%s] No external wrench has been received.", controllerName());
+
+    return Eigen::Matrix<double, 6, 1>::Zero();
+  }
+
+  const double wrench_age = (ros::Time::now() - receive_time).toSec();
+
+  if(wrench_age > external_wrench_timeout_)
+  {
+    ROS_WARN_THROTTLE(1.0, "[%s] External wrench is stale: %.3f s.", controllerName(), wrench_age);
+
+    return Eigen::Matrix<double, 6, 1>::Zero();
+  }
+
+  /*
+   * The corrected momentum observer publishes:
+   *
+   *   header.frame_id = world
+   *
+   * so this is the active path for your experiment.
+   */
   if(external_wrench_frame_ == "world" ||
      external_wrench_frame_ == "map" ||
      external_wrench_frame_ == "odom")
-    {
-      return wrench_world;
-    }
+  {
+    return raw_wrench;
+  }
 
+  /*
+   * Preserve support for another wrench source that publishes all six components in body coordinates.
+   */
   if(external_wrench_frame_ == "cog" ||
      external_wrench_frame_ == "body" ||
      external_wrench_frame_ == "base_link")
-    {
-      tf::Matrix3x3 R_world_cog_tf =
-          estimator_->getOrientation(Frame::COG, estimate_mode_);
+  {
+    const tf::Matrix3x3 R_world_cog_tf = estimator_->getOrientation(Frame::COG, estimate_mode_);
 
-      Eigen::Matrix3d R_world_cog;
-      tf::matrixTFToEigen(R_world_cog_tf, R_world_cog);
+    Eigen::Matrix3d R_world_cog;
+    tf::matrixTFToEigen(R_world_cog_tf, R_world_cog);
 
-      wrench_world.segment<3>(0) =
-          R_world_cog * raw_external_wrench_.segment<3>(0);
+    Eigen::Matrix<double, 6, 1> wrench_world;
+    wrench_world.head<3>() = R_world_cog * raw_wrench.head<3>();
+    wrench_world.tail<3>() = R_world_cog * raw_wrench.tail<3>();
 
-      wrench_world.segment<3>(3) =
-          R_world_cog * raw_external_wrench_.segment<3>(3);
-
-      return wrench_world;
-    }
+    return wrench_world;
+  }
 
   ROS_WARN_THROTTLE(
       1.0,
-      "[%s] Unknown external_wrench_frame [%s]. Use world frame.",
+      "[%s] Unknown external_wrench_frame [%s]. "
+      "Treating the input as world frame.",
       controllerName(),
       external_wrench_frame_.c_str());
 
-  return wrench_world;
+  return raw_wrench;
 }
 
 Eigen::Matrix3d

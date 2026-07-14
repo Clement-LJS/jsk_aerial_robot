@@ -44,6 +44,9 @@ protected:
       const tf::Vector3& original_target_rpy,
       const ImpedanceCoreOutput& output) override;
 
+  virtual Eigen::Matrix<double, 6, 1>
+  getExternalWrenchWorld() const override;
+
 private:
   void perchingRosParamInit();
 
@@ -95,6 +98,8 @@ private:
       tf::Vector3& pos,
       tf::Vector3& rpy) const;
 
+  virtual Eigen::Matrix3d getComplianceToWorldRotation() const override;
+
 private:
   ros::Subscriber normal_impedance_enable_sub_;
   ros::Subscriber perching_impedance_enable_sub_;
@@ -140,6 +145,9 @@ private:
 
   double locked_radius_;
   double locked_x_side_;
+
+  Eigen::Matrix3d R_world_constraint_;
+  Eigen::Vector3d constraint_axis_world_;
 };
 
 } // namespace aerial_robot_control

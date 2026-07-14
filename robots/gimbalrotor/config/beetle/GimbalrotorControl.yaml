@@ -60,6 +60,7 @@ controller:
 
   impedance:
     use_impedance: true
+    external_wrench_timeout: 0.15
 
     impedance_enable_topic: impedance_enable
 
@@ -159,5 +160,5 @@ controller:
       require_perching_lock: true
 
       perching_min_valid_radius: 0.05
-      perching_max_pitch_delta: 0.78539816339
+      perching_max_pitch_delta: 0.5235987756
       perching_arc_pitch_sign: 1.0

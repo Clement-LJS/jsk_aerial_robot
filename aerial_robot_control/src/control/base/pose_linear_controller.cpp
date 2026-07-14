@@ -421,19 +421,37 @@ namespace aerial_robot_control
 
     est_external_wrench_ = momentum_observer_matrix_ * (sum_momentum - init_sum_momentum_ - integrate_term_);
 
-    Eigen::VectorXd est_external_wrench_cog = est_external_wrench_;
-    est_external_wrench_cog.head(3) = cog_rot.inverse() * est_external_wrench_.head(3);
+   /*
+    * Observer internal representation:
+    * force: world frame
+    * torque: COG/body frame, moment about COG
+    *
+    * Published representation:
+    * force: world frame
+    * torque: world frame, moment about COG
+    */
+    Eigen::VectorXd est_external_wrench_cog_world = est_external_wrench_;
+
+   /*
+    * Convert torque from COG/body coordinates to world coordinates. The reference point remains the COG.
+    */
+    est_external_wrench_cog_world.tail(3) = cog_rot * est_external_wrench_.tail(3);
 
     geometry_msgs::WrenchStamped wrench_msg;
-    wrench_msg.header.stamp.fromSec(estimator_->getImuLatestTimeStamp());
-    wrench_msg.wrench.force.x = est_external_wrench_(0);
-    wrench_msg.wrench.force.y = est_external_wrench_(1);
-    wrench_msg.wrench.force.z = est_external_wrench_(2);
-    wrench_msg.wrench.torque.x = est_external_wrench_(3);
-    wrench_msg.wrench.torque.y = est_external_wrench_(4);
-    wrench_msg.wrench.torque.z = est_external_wrench_(5);
-    estimate_external_wrench_pub_.publish(wrench_msg);
 
+    wrench_msg.header.stamp.fromSec(estimator_->getImuLatestTimeStamp());
+
+    wrench_msg.header.frame_id = "world";
+
+    wrench_msg.wrench.force.x = est_external_wrench_cog_world(0);
+    wrench_msg.wrench.force.y = est_external_wrench_cog_world(1);
+    wrench_msg.wrench.force.z = est_external_wrench_cog_world(2);
+    wrench_msg.wrench.torque.x = est_external_wrench_cog_world(3);
+    wrench_msg.wrench.torque.y = est_external_wrench_cog_world(4);
+    wrench_msg.wrench.torque.z = est_external_wrench_cog_world(5);
+
+    estimate_external_wrench_pub_.publish(wrench_msg);
+      
     prev_est_wrench_timestamp_ = ros::Time::now().toSec();
   }
   

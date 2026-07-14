@@ -17,6 +17,8 @@
 
 #include <string>
 
+#include <mutex>
+
 namespace aerial_robot_control
 {
 
@@ -63,15 +65,23 @@ protected:
   void impedanceEnableCallback(
       const std_msgs::Bool::ConstPtr& msg);
 
-  Eigen::Matrix<double, 6, 1> getExternalWrenchWorld() const;
+  virtual Eigen::Matrix<double, 6, 1> getExternalWrenchWorld() const;
 
-  Eigen::Matrix3d getComplianceToWorldRotation() const;
+  virtual Eigen::Matrix3d getComplianceToWorldRotation() const;
 
   tf::Vector3 eigenToTfVector3(
       const Eigen::Vector3d& v) const;
 
   Eigen::Vector3d tfVector3ToEigen(
       const tf::Vector3& v) const;
+
+  mutable std::mutex external_wrench_mutex_;
+
+  ros::Time last_external_wrench_receive_time_;
+
+  bool has_external_wrench_;
+
+  double external_wrench_timeout_;
 
 protected:
   ros::Subscriber external_wrench_sub_;
