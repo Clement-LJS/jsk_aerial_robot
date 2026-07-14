@@ -35,7 +35,9 @@ GimbalrotorPerchingImpedanceController::GimbalrotorPerchingImpedanceController()
     max_pitch_delta_(0.78539816339),
     arc_pitch_sign_(1.0),
     locked_radius_(0.0),
-    locked_x_side_(1.0)
+    locked_x_side_(1.0), 
+    maximum_lock_stamp_difference_(0.05),
+    admittance_reset_requested_(false)
 {
   perching_point_world_.setValue(0.0, 0.0, 0.0);
   branch_pos_world_.setValue(0.0, 0.0, 0.0);
@@ -43,6 +45,16 @@ GimbalrotorPerchingImpedanceController::GimbalrotorPerchingImpedanceController()
   locked_robot_rpy_.setValue(0.0, 0.0, 0.0);
   locked_pivot_world_.setValue(0.0, 0.0, 0.0);
   locked_radius_vec_world_.setValue(0.0, 0.0, 0.0);
+
+  locked_pose_stamp_ = ros::Time(0);
+  locked_pivot_stamp_ = ros::Time(0);
+
+  accepted_locked_pose_stamp_ = ros::Time(0);
+  accepted_locked_pivot_stamp_ = ros::Time(0);
+
+  R_world_constraint_.setIdentity();
+
+  constraint_axis_world_ = Eigen::Vector3d::UnitY();
 }
 
 void GimbalrotorPerchingImpedanceController::initialize(
@@ -75,10 +87,6 @@ void GimbalrotorPerchingImpedanceController::initialize(
    * normal/perching trigger separation.
    */
   impedance_enable_sub_.shutdown();
-
-  R_world_constraint_.setIdentity();
-
-  constraint_axis_world_ = Eigen::Vector3d::UnitY();
 
   normal_impedance_enable_sub_ =
       nh_.subscribe(
@@ -148,9 +156,14 @@ void GimbalrotorPerchingImpedanceController::initialize(
                   << perching_locked_pose_topic_);
 }
 
-void GimbalrotorPerchingImpedanceController::reset()
+void GimbalrotorPerchingImpedanceController::
+reset()
 {
-  GimbalrotorImpedanceController::reset();
+  GimbalrotorImpedanceController::
+      reset();
+
+  std::lock_guard<std::mutex> lock(
+      perching_state_mutex_);
 
   normal_impedance_enabled_ = false;
   perching_impedance_enabled_ = false;
@@ -164,22 +177,49 @@ void GimbalrotorPerchingImpedanceController::reset()
   has_locked_pivot_ = false;
   has_locked_pose_ = false;
 
-  perching_point_world_.setValue(0.0, 0.0, 0.0);
-  branch_pos_world_.setValue(0.0, 0.0, 0.0);
+  perching_point_world_.setValue(
+      0.0, 0.0, 0.0);
 
-  locked_robot_pos_world_.setValue(0.0, 0.0, 0.0);
-  locked_robot_rpy_.setValue(0.0, 0.0, 0.0);
-  locked_pivot_world_.setValue(0.0, 0.0, 0.0);
-  locked_radius_vec_world_.setValue(0.0, 0.0, 0.0);
+  branch_pos_world_.setValue(
+      0.0, 0.0, 0.0);
+
+  locked_robot_pos_world_.setValue(
+      0.0, 0.0, 0.0);
+
+  locked_robot_rpy_.setValue(
+      0.0, 0.0, 0.0);
+
+  locked_pivot_world_.setValue(
+      0.0, 0.0, 0.0);
+
+  locked_radius_vec_world_.setValue(
+      0.0, 0.0, 0.0);
 
   locked_radius_ = 0.0;
   locked_x_side_ = 1.0;
-  
+
+  locked_pose_stamp_ =
+      ros::Time(0);
+
+  locked_pivot_stamp_ =
+      ros::Time(0);
+
+  accepted_locked_pose_stamp_ =
+      ros::Time(0);
+
+  accepted_locked_pivot_stamp_ =
+      ros::Time(0);
+
   R_world_constraint_.setIdentity();
 
-  constraint_axis_world_ = Eigen::Vector3d::UnitY();
+  constraint_axis_world_ =
+      Eigen::Vector3d::UnitY();
 
-  ROS_WARN("[GimbalrotorPerchingImpedanceController] perching impedance state reset.");
+  admittance_reset_requested_ = false;
+
+  ROS_WARN(
+      "[GimbalrotorPerchingImpedanceController] "
+      "Perching admittance state reset.");
 }
 
 void GimbalrotorPerchingImpedanceController::perchingRosParamInit()
@@ -282,6 +322,23 @@ void GimbalrotorPerchingImpedanceController::perchingRosParamInit()
       perching_locked_pivot_topic_,
       std::string("perching/locked_pivot"));
 
+  getParam<double>(
+      imp_perch_nh,
+      "maximum_lock_stamp_difference",
+      maximum_lock_stamp_difference_,
+      0.05);
+
+  if(!std::isfinite(maximum_lock_stamp_difference_) || maximum_lock_stamp_difference_ <= 0.0)
+  {
+    ROS_WARN(
+        "[GimbalrotorPerchingImpedanceController] "
+        "Invalid maximum_lock_stamp_difference %.6f. "
+        "Using 0.05 seconds.",
+        maximum_lock_stamp_difference_);
+
+    maximum_lock_stamp_difference_ = 0.05;
+  }
+
   ROS_WARN("[GimbalrotorPerchingImpedanceController] perching_min_valid_radius: %.4f",
            min_valid_radius_);
   ROS_WARN("[GimbalrotorPerchingImpedanceController] perching_max_pitch_delta deg: %.2f",
@@ -292,93 +349,98 @@ void GimbalrotorPerchingImpedanceController::perchingRosParamInit()
 
 void GimbalrotorPerchingImpedanceController::controlCore()
 {
-  updateEffectiveImpedanceEnable();
+  bool effective_enabled = false;
+  bool reset_requested = false;
+
+  {
+    std::lock_guard<std::mutex> lock(perching_state_mutex_);
+
+    if(perching_enabled_for_constraint_)
+    {
+      effective_enabled = perching_impedance_enabled_;
+    }
+    else
+    {
+      effective_enabled = normal_impedance_enabled_;
+    }
+
+    /*
+     * Reset when effective enable changes.
+     */
+    if(effective_enabled != effective_impedance_enabled_)
+    {
+      reset_requested = true;
+    }
+
+    effective_impedance_enabled_ = effective_enabled;
+
+    /*
+     * Reset when mode, lock, pivot or constraint frame has changed.
+     */
+    if(admittance_reset_requested_)
+    {
+      reset_requested = true;
+      admittance_reset_requested_ = false;
+    }
+  }
+
+  /*
+   * This assignment now happens only in the main control thread.
+   */
+  impedance_enabled_ = effective_enabled;
+
+  if(reset_requested)
+  {
+    impedance_core_.reset();
+    impedance_output_ = ImpedanceCoreOutput();
+    prev_impedance_time_ = ros::Time::now();
+
+    ROS_WARN(
+        "[GimbalrotorPerchingImpedanceController] "
+        "Admittance state reset.");
+  }
 
   GimbalrotorImpedanceController::controlCore();
 }
 
-
-Eigen::Matrix<double, 6, 1> GimbalrotorPerchingImpedanceController::getExternalWrenchWorld() const
+void GimbalrotorPerchingImpedanceController::perchingEnableCallback(const std_msgs::Bool::ConstPtr& msg)
 {
-  /*
-   * Base function returns:
-   * force: world coordinates
-   * torque: world coordinates
-   * torque reference point: COG
-   */
-  const Eigen::Matrix<double, 6, 1> wrench_cog_world = GimbalrotorImpedanceController::getExternalWrenchWorld();
+  bool mode_changed = false;
 
-  /*
-   * During normal flight, preserve the normal COG-referenced wrench.
-   */
-  if(!perching_enabled_for_constraint_)
   {
-    return wrench_cog_world;
+    std::lock_guard<std::mutex> lock(perching_state_mutex_);
+
+    mode_changed = perching_enabled_for_constraint_ != msg->data;
+
+    perching_enabled_for_constraint_ = msg->data;
+
+    if(mode_changed)
+    {
+      admittance_reset_requested_ = true;
+    }
   }
 
-  /*
-   * A pivot transformation is not valid before
-   * the perching lock has been received.
-   *
-   * Return zero rather than integrating a wrench
-   * with the wrong reference point.
-   */
-  if(!has_locked_pose_)
+  if(msg->data)
   {
-    return Eigen::Matrix<double, 6, 1>::Zero();
+    ROS_WARN_STREAM(
+        "[GimbalrotorPerchingImpedanceController] "
+        "Perching navigation enabled. "
+        "Waiting for a valid lock and enable topic: "
+        << perching_impedance_enable_topic_);
   }
-
-  const tf::Vector3 cog_pos_world_tf = estimator_->getPos(Frame::COG, estimate_mode_);
-
-  const Eigen::Vector3d cog_pos_world(
-      cog_pos_world_tf.x(),
-      cog_pos_world_tf.y(),
-      cog_pos_world_tf.z());
-
-  const Eigen::Vector3d pivot_pos_world(
-      locked_pivot_world_.x(),
-      locked_pivot_world_.y(),
-      locked_pivot_world_.z());
-
-  const Eigen::Vector3d force_world = wrench_cog_world.head<3>();
-
-  const Eigen::Vector3d torque_cog_world = wrench_cog_world.tail<3>();
-
-  /*
-   * Vector from the perching pivot to the COG.
-   */
-  const Eigen::Vector3d pivot_to_cog_world = cog_pos_world - pivot_pos_world;
-
-  /*
-   * Change the torque reference point: tau_pivot = tau_cog + (p_cog - p_pivot) x force
-   */
-  const Eigen::Vector3d torque_pivot_world = torque_cog_world + pivot_to_cog_world.cross(force_world);
-
-  Eigen::Matrix<double, 6, 1> wrench_pivot_world = wrench_cog_world;
-
-  wrench_pivot_world.tail<3>() = torque_pivot_world;
-
-  return wrench_pivot_world;
+  else
+  {
+    ROS_WARN(
+        "[GimbalrotorPerchingImpedanceController] "
+        "Perching navigation disabled. "
+        "Normal admittance trigger is active.");
+  }
 }
 
-void GimbalrotorPerchingImpedanceController::perchingEnableCallback(
-    const std_msgs::Bool::ConstPtr& msg)
+void GimbalrotorPerchingImpedanceController::perchingPointCallback(const geometry_msgs::PointStamped::ConstPtr& msg)
 {
-  perching_enabled_for_constraint_ = msg->data;
-  updateEffectiveImpedanceEnable();
+  std::lock_guard<std::mutex> lock(perching_state_mutex_);
 
-  if(!perching_enabled_for_constraint_)
-  {
-    ROS_WARN("[GimbalrotorPerchingImpedanceController] perching navigation DISABLED; normal impedance trigger is active if enabled.");
-    return;
-  }
-
-  ROS_WARN("[GimbalrotorPerchingImpedanceController] perching navigation ENABLED; waiting for perching/impedance_enable for perching impedance.");
-}
-
-void GimbalrotorPerchingImpedanceController::perchingPointCallback(
-    const geometry_msgs::PointStamped::ConstPtr& msg)
-{
   perching_point_world_.setValue(
       msg->point.x,
       msg->point.y,
@@ -387,9 +449,10 @@ void GimbalrotorPerchingImpedanceController::perchingPointCallback(
   has_perching_point_ = true;
 }
 
-void GimbalrotorPerchingImpedanceController::branchPoseCallback(
-    const geometry_msgs::PoseStamped::ConstPtr& msg)
+void GimbalrotorPerchingImpedanceController::branchPoseCallback(const geometry_msgs::PoseStamped::ConstPtr& msg)
 {
+  std::lock_guard<std::mutex> lock(perching_state_mutex_);
+
   branch_pos_world_.setValue(
       msg->pose.position.x,
       msg->pose.position.y,
@@ -398,42 +461,109 @@ void GimbalrotorPerchingImpedanceController::branchPoseCallback(
   has_branch_pose_ = true;
 
   if(!has_perching_point_ && use_branch_pose_if_no_point_)
-    {
-      perching_point_world_ = branch_pos_world_;
-    }
+  {
+    perching_point_world_ = branch_pos_world_;
+  }
 }
 
-void GimbalrotorPerchingImpedanceController::lockedPivotCallback(
-    const geometry_msgs::PointStamped::ConstPtr& msg)
+void GimbalrotorPerchingImpedanceController::lockedPivotCallback(const geometry_msgs::PointStamped::ConstPtr& msg)
 {
-  locked_pivot_world_.setValue(
-      msg->point.x,
-      msg->point.y,
-      msg->point.z);
+  {
+    std::lock_guard<std::mutex> lock(perching_state_mutex_);
 
-  has_locked_pivot_ = true;
+    locked_pivot_world_.setValue(msg->point.x, msg->point.y, msg->point.z);
+
+    if(msg->header.stamp.isZero())
+    {
+      locked_pivot_stamp_ = ros::Time::now();
+    }
+    else
+    {
+      locked_pivot_stamp_ = msg->header.stamp;
+    }
+
+    has_locked_pivot_ = true;
+  }
 
   updateLockedConstraintFromLockedPoseAndPivot();
 }
 
 void GimbalrotorPerchingImpedanceController::lockedPoseCallback(const geometry_msgs::PoseStamped::ConstPtr& msg)
 {
-  poseMsgToTfPosRpy(*msg, locked_robot_pos_world_, locked_robot_rpy_);
+  {
+    std::lock_guard<std::mutex> lock(perching_state_mutex_);
 
-  has_locked_pose_msg_ = true;
+    poseMsgToTfPosRpy(*msg, locked_robot_pos_world_, locked_robot_rpy_);
 
+    /*
+     * The navigator normally provides a valid stamp. Use callback time only as a fallback.
+     */
+    if(msg->header.stamp.isZero())
+    {
+      locked_pose_stamp_ = ros::Time::now();
+    }
+    else
+    {
+      locked_pose_stamp_ = msg->header.stamp;
+    }
+
+    has_locked_pose_msg_ = true;
+  }
+
+  /*
+   * Do not hold the mutex before entering this function because it locks the same mutex itself.
+   */
   updateLockedConstraintFromLockedPoseAndPivot();
 }
 
 void GimbalrotorPerchingImpedanceController::updateLockedConstraintFromLockedPoseAndPivot()
 {
+  std::lock_guard<std::mutex> lock(perching_state_mutex_);
+
+  const bool previously_valid = has_locked_pose_;
+
+  /*
+   * A locked robot pose is always required.
+   */
   if(!has_locked_pose_msg_)
   {
+    has_locked_pose_ = false;
+
+    if(previously_valid)
+    {
+      admittance_reset_requested_ = true;
+    }
+
     return;
   }
 
+  /*
+   * If require_perching_lock is enabled, accept only
+   * the pivot published by the navigator's lock logic.
+   */
   if(!has_locked_pivot_)
   {
+    if(require_perching_lock_)
+    {
+      has_locked_pose_ = false;
+
+      if(previously_valid)
+      {
+        admittance_reset_requested_ = true;
+      }
+
+      ROS_WARN_THROTTLE(
+          1.0,
+          "[GimbalrotorPerchingImpedanceController] "
+          "Waiting for locked pivot from navigator.");
+
+      return;
+    }
+
+    /*
+     * Fallback behavior is allowed only when
+     * require_perching_lock is false.
+     */
     if(has_perching_point_)
     {
       locked_pivot_world_ = perching_point_world_;
@@ -445,16 +575,75 @@ void GimbalrotorPerchingImpedanceController::updateLockedConstraintFromLockedPos
     else
     {
       has_locked_pose_ = false;
-      ROS_WARN_THROTTLE(
-          1.0,
-          "[GimbalrotorPerchingImpedanceController] waiting for locked pivot from navigator.");
+
+      if(previously_valid)
+      {
+        admittance_reset_requested_ = true;
+      }
+
       return;
     }
   }
 
+  /*
+   * When using navigator lock messages, ensure that
+   * pose and pivot belong to the same lock operation.
+   */
+  if(require_perching_lock_)
+  {
+    if(locked_pose_stamp_.isZero() || locked_pivot_stamp_.isZero())
+    {
+      has_locked_pose_ = false;
+
+      if(previously_valid)
+      {
+        admittance_reset_requested_ = true;
+      }
+
+      ROS_WARN_THROTTLE(
+          1.0,
+          "[GimbalrotorPerchingImpedanceController] "
+          "Locked pose or pivot has an invalid timestamp.");
+
+      return;
+    }
+
+    const double stamp_difference = std::abs((locked_pose_stamp_ - locked_pivot_stamp_).toSec());
+
+    if(stamp_difference > maximum_lock_stamp_difference_)
+    {
+      has_locked_pose_ = false;
+
+      if(previously_valid)
+      {
+        admittance_reset_requested_ = true;
+      }
+
+      ROS_WARN_THROTTLE(
+          1.0,
+          "[GimbalrotorPerchingImpedanceController] "
+          "Locked pose and pivot do not belong to "
+          "the same lock operation. "
+          "Timestamp difference: %.3f s.",
+          stamp_difference);
+
+      return;
+    }
+  }
+
+  /*
+   * Ignore duplicate delivery of the already accepted
+   * latched pose/pivot pair.
+   */
+  if(has_locked_pose_ &&
+     locked_pose_stamp_ == accepted_locked_pose_stamp_ &&
+     locked_pivot_stamp_ == accepted_locked_pivot_stamp_)
+  {
+    return;
+  }
+
   perching_point_world_ = locked_pivot_world_;
   locked_radius_vec_world_ = locked_robot_pos_world_ - locked_pivot_world_;
-
   locked_radius_ = norm2D(locked_radius_vec_world_.x(), locked_radius_vec_world_.z());
 
   if(locked_robot_pos_world_.x() - locked_pivot_world_.x() >= 0.0)
@@ -470,20 +659,27 @@ void GimbalrotorPerchingImpedanceController::updateLockedConstraintFromLockedPos
   {
     has_locked_pose_ = false;
 
+    R_world_constraint_.setIdentity();
+
+    if(previously_valid)
+    {
+      admittance_reset_requested_ = true;
+    }
+
     ROS_WARN_THROTTLE(
         1.0,
-        "[GimbalrotorPerchingImpedanceController] locked constraint invalid: radius %.4f is too small.",
+        "[GimbalrotorPerchingImpedanceController] "
+        "Locked constraint is invalid: "
+        "radius %.4f is too small.",
         locked_radius_);
 
     return;
   }
 
-  has_locked_pose_ = true;
-
-    /*
-  * Minimum implementation:
-  * the physical branch axis is assumed to be world Y.
-  */
+  /*
+   * Minimum current implementation:
+   * physical branch axis is world Y.
+   */
   constraint_axis_world_ = Eigen::Vector3d::UnitY();
 
   Eigen::Vector3d radial_world(
@@ -492,8 +688,8 @@ void GimbalrotorPerchingImpedanceController::updateLockedConstraintFromLockedPos
       locked_radius_vec_world_.z());
 
   /*
-  * Remove the component along the branch.
-  */
+   * Remove the component parallel to the branch.
+   */
   radial_world -= constraint_axis_world_ * constraint_axis_world_.dot(radial_world);
 
   const double radial_norm = radial_world.norm();
@@ -502,16 +698,30 @@ void GimbalrotorPerchingImpedanceController::updateLockedConstraintFromLockedPos
   {
     has_locked_pose_ = false;
 
+    R_world_constraint_.setIdentity();
+
+    if(previously_valid)
+    {
+      admittance_reset_requested_ = true;
+    }
+
     ROS_ERROR(
-        "[GimbalrotorPerchingAdmittanceController] "
-        "Cannot build constraint frame: invalid radial vector.");
+        "[GimbalrotorPerchingImpedanceController] "
+        "Cannot build constraint frame: "
+        "invalid radial vector.");
 
     return;
   }
 
   radial_world.normalize();
 
-  Eigen::Vector3d tangent_world = constraint_axis_world_.cross(radial_world);
+  /*
+   * Use radial x branch axis so the resulting frame
+   * is right-handed:
+   *
+   * constraint X x constraint Y = constraint Z.
+   */
+  Eigen::Vector3d tangent_world = radial_world.cross(constraint_axis_world_);
 
   const double tangent_norm = tangent_world.norm();
 
@@ -519,9 +729,17 @@ void GimbalrotorPerchingImpedanceController::updateLockedConstraintFromLockedPos
   {
     has_locked_pose_ = false;
 
+    R_world_constraint_.setIdentity();
+
+    if(previously_valid)
+    {
+      admittance_reset_requested_ = true;
+    }
+
     ROS_ERROR(
-        "[GimbalrotorPerchingAdmittanceController] "
-        "Cannot build constraint frame: invalid tangent.");
+        "[GimbalrotorPerchingImpedanceController] "
+        "Cannot build constraint frame: "
+        "invalid tangent vector.");
 
     return;
   }
@@ -529,199 +747,324 @@ void GimbalrotorPerchingImpedanceController::updateLockedConstraintFromLockedPos
   tangent_world.normalize();
 
   /*
-  * Columns map constraint-frame vectors into world.
-  *
-  * constraint X = radial
-  * constraint Y = branch axis
-  * constraint Z = tangent
-  */
+   * Columns transform constraint-frame vectors
+   * into world-frame vectors:
+   *
+   * constraint X = radial
+   * constraint Y = branch axis
+   * constraint Z = tangent
+   */
   R_world_constraint_.col(0) = radial_world;
   R_world_constraint_.col(1) = constraint_axis_world_;
   R_world_constraint_.col(2) = tangent_world;
-      
-  ROS_WARN("[GimbalrotorPerchingImpedanceController] locked perching constraint received.");
-  ROS_WARN("[GimbalrotorPerchingImpedanceController] locked pivot: %.3f %.3f %.3f", locked_pivot_world_.x(), locked_pivot_world_.y(), locked_pivot_world_.z());
-  ROS_WARN("[GimbalrotorPerchingImpedanceController] locked pos: %.3f %.3f %.3f", locked_robot_pos_world_.x(), locked_robot_pos_world_.y(), locked_robot_pos_world_.z());
-  ROS_WARN("[GimbalrotorPerchingImpedanceController] locked pitch deg: %.2f", locked_robot_rpy_.y() * 180.0 / PI);
-  ROS_WARN("[GimbalrotorPerchingImpedanceController] hand-center radius: %.3f", locked_radius_);
+
+  const double determinant = R_world_constraint_.determinant();
+
+  if(std::abs(determinant - 1.0) > 1.0e-3)
+  {
+    has_locked_pose_ = false;
+
+    R_world_constraint_.setIdentity();
+
+    if(previously_valid)
+    {
+      admittance_reset_requested_ = true;
+    }
+
+    ROS_ERROR(
+        "[GimbalrotorPerchingImpedanceController] "
+        "Invalid constraint rotation determinant: "
+        "%.6f",
+        determinant);
+
+    return;
+  }
+
+  has_locked_pose_ = true;
+  accepted_locked_pose_stamp_ = locked_pose_stamp_;
+  accepted_locked_pivot_stamp_ = locked_pivot_stamp_;
+
+  /*
+   * A new pivot/frame must not inherit displacement,
+   * velocity or filtering state from the old frame.
+   */
+  admittance_reset_requested_ = true;
+
+  ROS_WARN(
+      "[GimbalrotorPerchingImpedanceController] "
+      "Locked perching constraint accepted.");
+
+  ROS_WARN(
+      "[GimbalrotorPerchingImpedanceController] "
+      "Locked pivot: %.3f %.3f %.3f",
+      locked_pivot_world_.x(),
+      locked_pivot_world_.y(),
+      locked_pivot_world_.z());
+
+  ROS_WARN(
+      "[GimbalrotorPerchingImpedanceController] "
+      "Locked position: %.3f %.3f %.3f",
+      locked_robot_pos_world_.x(),
+      locked_robot_pos_world_.y(),
+      locked_robot_pos_world_.z());
+
+  ROS_WARN(
+      "[GimbalrotorPerchingImpedanceController] "
+      "Locked pitch: %.2f deg",
+      locked_robot_rpy_.y() *
+      180.0 / PI);
+
+  ROS_WARN(
+      "[GimbalrotorPerchingImpedanceController] "
+      "Pitch-plane radius: %.3f m",
+      locked_radius_);
+
+  ROS_WARN(
+      "[GimbalrotorPerchingImpedanceController] "
+      "Constraint determinant: %.6f",
+      determinant);
 }
 
 Eigen::Matrix3d GimbalrotorPerchingImpedanceController::getComplianceToWorldRotation() const
 {
-  if(perching_enabled_for_constraint_ && has_locked_pose_)
+  bool use_constraint_frame = false;
+
+  Eigen::Matrix3d R_world_constraint = Eigen::Matrix3d::Identity();
+
   {
-    return R_world_constraint_;
+    std::lock_guard<std::mutex> lock(perching_state_mutex_);
+    use_constraint_frame = perching_enabled_for_constraint_ && has_locked_pose_;
+    R_world_constraint = R_world_constraint_;
+  }
+
+  if(use_constraint_frame)
+  {
+    return R_world_constraint;
   }
 
   return GimbalrotorImpedanceController::getComplianceToWorldRotation();
 }
 
-void GimbalrotorPerchingImpedanceController::normalImpedanceEnableCallback(
-    const std_msgs::Bool::ConstPtr& msg)
+void GimbalrotorPerchingImpedanceController::perchingImpedanceEnableCallback(const std_msgs::Bool::ConstPtr& msg)
 {
-  normal_impedance_enabled_ = msg->data;
-  updateEffectiveImpedanceEnable();
+  {
+    std::lock_guard<std::mutex> lock(perching_state_mutex_);
+
+    if(perching_impedance_enabled_ != msg->data)
+    {
+      perching_impedance_enabled_ = msg->data;
+
+      admittance_reset_requested_ = true;
+    }
+  }
 
   ROS_WARN(
-      "[GimbalrotorPerchingImpedanceController] normal_impedance_enabled: %d",
-      static_cast<int>(normal_impedance_enabled_));
+      "[GimbalrotorPerchingImpedanceController] "
+      "perching_admittance_enabled: %d",
+      static_cast<int>(msg->data));
 }
 
-void GimbalrotorPerchingImpedanceController::perchingImpedanceEnableCallback(
-    const std_msgs::Bool::ConstPtr& msg)
+void GimbalrotorPerchingImpedanceController::normalImpedanceEnableCallback(const std_msgs::Bool::ConstPtr& msg)
 {
-  perching_impedance_enabled_ = msg->data;
-  updateEffectiveImpedanceEnable();
+  {
+    std::lock_guard<std::mutex> lock(perching_state_mutex_);
+
+    if(normal_impedance_enabled_ != msg->data)
+    {
+      normal_impedance_enabled_ = msg->data;
+
+      admittance_reset_requested_ = true;
+    }
+  }
 
   ROS_WARN(
-      "[GimbalrotorPerchingImpedanceController] perching_impedance_enabled: %d",
-      static_cast<int>(perching_impedance_enabled_));
+      "[GimbalrotorPerchingImpedanceController] "
+      "normal_admittance_enabled: %d",
+      static_cast<int>(msg->data));
 }
 
-void GimbalrotorPerchingImpedanceController::updateEffectiveImpedanceEnable()
+Eigen::Matrix<double, 6, 1> GimbalrotorPerchingImpedanceController::getExternalWrenchWorld() const
 {
-  const bool previous_effective = effective_impedance_enabled_;
+  /*
+   * Base result:
+   * force: world coordinates
+   * torque: world coordinates
+   *
+   * torque reference point: COG
+   */
+  const Eigen::Matrix<double, 6, 1> wrench_cog_world = GimbalrotorImpedanceController::getExternalWrenchWorld();
 
-  if(perching_enabled_for_constraint_)
+  bool perching_active = false;
+  bool lock_valid = false;
+
+  tf::Vector3 pivot_world_tf;
+
   {
-    effective_impedance_enabled_ = perching_impedance_enabled_;
-  }
-  else
-  {
-    effective_impedance_enabled_ = normal_impedance_enabled_;
+    std::lock_guard<std::mutex> lock(perching_state_mutex_);
+
+    perching_active = perching_enabled_for_constraint_;
+    lock_valid = has_locked_pose_;
+    pivot_world_tf = locked_pivot_world_;
   }
 
-  impedance_enabled_ = effective_impedance_enabled_;
-
-  if(previous_effective && !effective_impedance_enabled_)
+  if(!perching_active)
   {
-    impedance_core_.reset();
-    impedance_output_ = ImpedanceCoreOutput();
+    return wrench_cog_world;
   }
+
+  /*
+   * Do not integrate a COG-referenced wrench while
+   * the controller believes it is in pivot mode.
+   */
+  if(!lock_valid)
+  {
+    return Eigen::Matrix<double, 6, 1>::Zero();
+  }
+
+  const tf::Vector3 cog_pos_world_tf = estimator_->getPos(Frame::COG, estimate_mode_);
+
+  const Eigen::Vector3d cog_pos_world(
+      cog_pos_world_tf.x(),
+      cog_pos_world_tf.y(),
+      cog_pos_world_tf.z());
+
+  const Eigen::Vector3d pivot_pos_world(
+      pivot_world_tf.x(),
+      pivot_world_tf.y(),
+      pivot_world_tf.z());
+
+  const Eigen::Vector3d force_world = wrench_cog_world.head<3>();
+  const Eigen::Vector3d torque_cog_world = wrench_cog_world.tail<3>();
+  const Eigen::Vector3d pivot_to_cog_world = cog_pos_world - pivot_pos_world;
+
+  /*
+   * Shift torque from COG to perching pivot:
+   * tau_pivot = tau_cog + (p_cog - p_pivot) x force.
+   */
+  const Eigen::Vector3d torque_pivot_world = torque_cog_world + pivot_to_cog_world.cross(force_world);
+
+  Eigen::Matrix<double, 6, 1> wrench_pivot_world = wrench_cog_world;
+
+  wrench_pivot_world.tail<3>() = torque_pivot_world;
+
+  return wrench_pivot_world;
 }
 
-bool GimbalrotorPerchingImpedanceController::hasValidPerchingConstraint() const
-{
-  if(!perching_enabled_for_constraint_)
-  {
-    return false;
-  }
-
-  if(!perching_impedance_enabled_)
-  {
-    return false;
-  }
-
-  if(require_perching_lock_ && !has_locked_pose_)
-  {
-    return false;
-  }
-
-  if(locked_radius_ < min_valid_radius_)
-  {
-    return false;
-  }
-
-  return true;
-}
-
-void GimbalrotorPerchingImpedanceController::applyImpedanceOutputToNavigator(
+void GimbalrotorPerchingImpedanceController::
+applyImpedanceOutputToNavigator(
     const tf::Vector3& original_target_pos,
     const tf::Vector3& original_target_rpy,
     const ImpedanceCoreOutput& output)
 {
-  /*
-   * Case 1: Normal flight.
-   * Use normal impedance only when /gimbalrotor/impedance_enable is true.
-   */
-  if(!perching_enabled_for_constraint_)
-  {
-    GimbalrotorImpedanceController::applyImpedanceOutputToNavigator(
-        original_target_pos,
-        original_target_rpy,
-        output);
+  bool perching_active = false;
 
-    ROS_WARN_THROTTLE(
-        1.0,
-        "[GimbalrotorPerchingImpedanceController] using NORMAL impedance.");
+  {
+    std::lock_guard<std::mutex> lock(
+        perching_state_mutex_);
+
+    perching_active =
+        perching_enabled_for_constraint_;
+  }
+
+  /*
+   * Normal-flight path.
+   */
+  if(!perching_active)
+  {
+    GimbalrotorImpedanceController::
+        applyImpedanceOutputToNavigator(
+            original_target_pos,
+            original_target_rpy,
+            output);
 
     return;
   }
 
-  /*
-   * Case 2: Perching navigation is enabled, but perching impedance is not enabled.
-   * Do not fall back to normal impedance here. This is exactly your requested behavior: perching navigation + normal PID
-   */
-  if(!perching_impedance_enabled_)
-  {
-    ROS_WARN_THROTTLE(
-        1.0,
-        "[GimbalrotorPerchingImpedanceController] perching navigation active, "
-        "perching impedance disabled -> PID only.");
+  tf::Vector3 modified_target_pos;
+  tf::Vector3 modified_target_rpy;
 
-    return;
+  double nominal_pitch = 0.0;
+  double admittance_pitch_offset = 0.0;
+  double target_pitch = 0.0;
+
+  {
+    std::lock_guard<std::mutex> lock(
+        perching_state_mutex_);
+
+    /*
+     * Recheck the state while holding the lock.
+     * It may have changed after the first snapshot.
+     */
+    if(!perching_enabled_for_constraint_ ||
+       !perching_impedance_enabled_ ||
+       !has_locked_pose_ ||
+       locked_radius_ < min_valid_radius_)
+    {
+      return;
+    }
+
+    nominal_pitch =
+        original_target_rpy.y();
+
+    /*
+     * Constraint coordinate Y is the branch axis.
+     * Rotational admittance Y therefore produces
+     * the perching pitch correction.
+     */
+    admittance_pitch_offset =
+        output.angle_offset_compliance(1);
+
+    target_pitch =
+        normalizeAngle(
+            nominal_pitch +
+            admittance_pitch_offset);
+
+    /*
+     * This function reads locked geometry.
+     * The perching-state mutex is held here.
+     */
+    modified_target_pos =
+        computePerchingArcPositionFromPitch(
+            target_pitch,
+            original_target_pos);
+
+    /*
+     * Translational constraint Y is motion along
+     * the branch axis.
+     */
+    const Eigen::Vector3d branch_offset_world =
+        constraint_axis_world_ *
+        output.pos_offset_compliance(1);
+
+    modified_target_pos +=
+        tf::Vector3(
+            branch_offset_world.x(),
+            branch_offset_world.y(),
+            branch_offset_world.z());
+
+    modified_target_rpy = original_target_rpy;
+
+    /*
+     * Roll and yaw remain zero with the current YAML because those admittance axes are disabled.
+     */
+    modified_target_rpy.setX(modified_target_rpy.x() + output.rpy_offset_world(0));
+    modified_target_rpy.setY(target_pitch);
+    modified_target_rpy.setZ(modified_target_rpy.z() + output.rpy_offset_world(2));
   }
 
   /*
-   * Case 3: Perching impedance was requested, but the perching lock/pivot is not valid.
-   * Do not use normal impedance during perching.
+   * Do not hold the state mutex while calling into navigator code.
    */
-  if(!hasValidPerchingConstraint())
-  {
-    ROS_WARN_THROTTLE(
-        1.0,
-        "[GimbalrotorPerchingImpedanceController] perching impedance requested, "
-        "but perching constraint is invalid -> PID only.");
-
-    return;
-  }
-
-  const double nominal_pitch = original_target_rpy.y();
-  const double admittance_pitch_offset = output.angle_offset_compliance(1);
-  const double target_pitch = normalizeAngle(nominal_pitch + admittance_pitch_offset);
-
-  tf::Vector3 modified_target_pos = computePerchingArcPositionFromPitch(target_pitch, original_target_pos);
-
- /*
-  * Translational compliance along the branch axis.
-  *
-  * output.pos_offset_compliance(1): scalar displacement along constraint Y
-  *
-  * constraint_axis_world_: branch-axis unit vector in world coordinates
-  */
-  const Eigen::Vector3d branch_offset_world = constraint_axis_world_ * output.pos_offset_compliance(1);
-
- /*
-  * The arc function already provides the constrained radial/tangential position.
-  *
-  * Add only the permitted branch-axis displacement.
-  */
-  modified_target_pos += tf::Vector3(
-      branch_offset_world.x(),
-      branch_offset_world.y(),
-      branch_offset_world.z());
-
-  tf::Vector3 modified_target_rpy = original_target_rpy;
-
-  /*
-   * Roll and yaw can still use normal small impedance offsets if enabled.
-   * For your current YAML, roll/yaw are disabled, so these are normally zero.
-   */
-  modified_target_rpy.setX(
-      modified_target_rpy.x() + output.rpy_offset_world(0));
-
-  modified_target_rpy.setY(target_pitch);
-
-  modified_target_rpy.setZ(
-      modified_target_rpy.z() + output.rpy_offset_world(2));
-
   navigator_->setTargetPos(modified_target_pos);
   navigator_->setTargetRPY(modified_target_rpy);
 
   ROS_WARN_THROTTLE(
       0.5,
-      "[GimbalrotorPerchingImpedanceController] PERCHING impedance | "
-      "nominal_pitch %.2f deg | d_pitch %.2f deg | target_pitch %.2f deg | "
+      "[GimbalrotorPerchingImpedanceController] "
+      "PERCHING admittance | "
+      "nominal_pitch %.2f deg | "
+      "d_pitch %.2f deg | "
+      "target_pitch %.2f deg | "
       "target_pos %.3f %.3f %.3f",
       nominal_pitch * 180.0 / PI,
       admittance_pitch_offset * 180.0 / PI,

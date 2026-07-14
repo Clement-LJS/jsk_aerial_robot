@@ -162,3 +162,7 @@ controller:
       perching_min_valid_radius: 0.05
       perching_max_pitch_delta: 0.5235987756
       perching_arc_pitch_sign: 1.0
+
+      # Maximum allowed time difference between the
+      # separately published locked pose and pivot.
+      maximum_lock_stamp_difference: 0.05

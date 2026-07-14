@@ -11,6 +11,8 @@
 
 #include <string>
 
+#include <mutex>
+
 namespace aerial_robot_control
 {
 
@@ -71,11 +73,7 @@ private:
   void lockedPivotCallback(
       const geometry_msgs::PointStamped::ConstPtr& msg);
 
-  void updateEffectiveImpedanceEnable();
-
   void updateLockedConstraintFromLockedPoseAndPivot();
-
-  bool hasValidPerchingConstraint() const;
 
   tf::Vector3 computePerchingArcPositionFromPitch(
       double target_pitch,
@@ -148,6 +146,18 @@ private:
 
   Eigen::Matrix3d R_world_constraint_;
   Eigen::Vector3d constraint_axis_world_;
+
+  mutable std::mutex perching_state_mutex_;
+
+  ros::Time locked_pose_stamp_;
+  ros::Time locked_pivot_stamp_;
+
+  ros::Time accepted_locked_pose_stamp_;
+  ros::Time accepted_locked_pivot_stamp_;
+
+  double maximum_lock_stamp_difference_;
+
+  bool admittance_reset_requested_;
 };
 
 } // namespace aerial_robot_control
