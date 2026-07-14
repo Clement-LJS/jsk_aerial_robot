@@ -10,9 +10,9 @@
 namespace aerial_robot_control
 {
 
-struct ImpedanceCoreConfig
+struct AdmittanceCoreConfig
 {
-  bool use_impedance = true;
+  bool use_admittance = true;
 
   Eigen::Vector3d trans_enable = Eigen::Vector3d::Ones();
   Eigen::Vector3d rot_enable = Eigen::Vector3d::Ones();
@@ -41,7 +41,7 @@ struct ImpedanceCoreConfig
   double torque_lpf_alpha = 0.2;
 };
 
-struct ImpedanceCoreInput
+struct AdmittanceCoreInput
 {
   /*
    * external_wrench_world:
@@ -71,7 +71,7 @@ struct ImpedanceCoreInput
   bool enabled = false;
 };
 
-struct ImpedanceCoreOutput
+struct AdmittanceCoreOutput
 {
   bool valid = false;
 
@@ -100,29 +100,29 @@ struct ImpedanceCoreOutput
   Eigen::Vector3d angular_acc_offset_world = Eigen::Vector3d::Zero();
 };
 
-class ImpedanceCore
+class AdmittanceCore
 {
 public:
-  ImpedanceCore()
+  AdmittanceCore()
   {
     reset();
     sanitizeConfig();
   }
 
-  explicit ImpedanceCore(const ImpedanceCoreConfig& config)
+  explicit AdmittanceCore(const AdmittanceCoreConfig& config)
     : config_(config)
   {
     reset();
     sanitizeConfig();
   }
 
-  void setConfig(const ImpedanceCoreConfig& config)
+  void setConfig(const AdmittanceCoreConfig& config)
   {
     config_ = config;
     sanitizeConfig();
   }
 
-  const ImpedanceCoreConfig& getConfig() const
+  const AdmittanceCoreConfig& getConfig() const
   {
     return config_;
   }
@@ -140,12 +140,12 @@ public:
     angular_vel_offset_compliance_.setZero();
     angular_acc_offset_compliance_.setZero();
 
-    last_output_ = ImpedanceCoreOutput();
+    last_output_ = AdmittanceCoreOutput();
   }
 
-  ImpedanceCoreOutput update(const ImpedanceCoreInput& input)
+  AdmittanceCoreOutput update(const AdmittanceCoreInput& input)
   {
-    if(!config_.use_impedance || !input.enabled)
+    if(!config_.use_admittance || !input.enabled)
       {
         reset();
         return last_output_;
@@ -257,7 +257,7 @@ public:
     return last_output_;
   }
 
-  const ImpedanceCoreOutput& getLastOutput() const
+  const AdmittanceCoreOutput& getLastOutput() const
   {
     return last_output_;
   }
@@ -359,7 +359,7 @@ private:
   }
 
 private:
-  ImpedanceCoreConfig config_;
+  AdmittanceCoreConfig config_;
 
   Eigen::Vector3d force_world_lpf_;
   Eigen::Vector3d torque_world_lpf_;
@@ -372,7 +372,7 @@ private:
   Eigen::Vector3d angular_vel_offset_compliance_;
   Eigen::Vector3d angular_acc_offset_compliance_;
 
-  ImpedanceCoreOutput last_output_;
+  AdmittanceCoreOutput last_output_;
 };
 
 } // namespace aerial_robot_control

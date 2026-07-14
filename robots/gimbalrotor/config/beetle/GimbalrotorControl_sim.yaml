@@ -62,8 +62,8 @@ controller:
 
     need_d_control: true
 
-  impedance:
-    use_impedance: true
+  admittance:
+    use_admittance: true
 
     external_wrench_topic: estimated_external_wrench
     is_cutting_topic: isCutting

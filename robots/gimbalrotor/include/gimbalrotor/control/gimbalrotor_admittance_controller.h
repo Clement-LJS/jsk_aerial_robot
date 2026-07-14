@@ -3,7 +3,7 @@
 
 #include <gimbalrotor/control/gimbalrotor_controller.h>
 
-#include <aerial_robot_control/control/impedance_core.h>
+#include <aerial_robot_control/control/admittance_core.h>
 
 #include <ros/ros.h>
 
@@ -22,11 +22,11 @@
 namespace aerial_robot_control
 {
 
-class GimbalrotorImpedanceController : public GimbalrotorController
+class GimbalrotorAdmittanceController : public GimbalrotorController
 {
 public:
-  GimbalrotorImpedanceController();
-  virtual ~GimbalrotorImpedanceController() = default;
+  GimbalrotorAdmittanceController();
+  virtual ~GimbalrotorAdmittanceController() = default;
 
   virtual void initialize(
       ros::NodeHandle nh,
@@ -45,24 +45,24 @@ protected:
   /*
    * This is the important refactor.
    *
-   * Normal GimbalrotorImpedanceController uses normal impedance injection.
-   * A subclass, such as GimbalrotorPerchingImpedanceController, can override
-   * only this function and keep all existing impedance/wrench/core logic.
+   * Normal GimbalrotorAdmittanceController uses normal admittance injection.
+   * A subclass, such as GimbalrotorPerchingAdmittanceController, can override
+   * only this function and keep all existing admittance/wrench/core logic.
    */
-  virtual void applyImpedanceOutputToNavigator(
+  virtual void applyAdmittanceOutputToNavigator(
       const tf::Vector3& original_target_pos,
       const tf::Vector3& original_target_rpy,
-      const ImpedanceCoreOutput& output);
+      const AdmittanceCoreOutput& output);
 
   virtual const char* controllerName() const
   {
-    return "GimbalrotorImpedanceController";
+    return "GimbalrotorAdmittanceController";
   }
 
   void externalWrenchCallback(
       const geometry_msgs::WrenchStamped::ConstPtr& msg);
 
-  void impedanceEnableCallback(
+  void admittanceEnableCallback(
       const std_msgs::Bool::ConstPtr& msg);
 
   virtual Eigen::Matrix<double, 6, 1> getExternalWrenchWorld() const;
@@ -85,10 +85,10 @@ protected:
 
 protected:
   ros::Subscriber external_wrench_sub_;
-  ros::Subscriber impedance_enable_sub_;
+  ros::Subscriber admittance_enable_sub_;
 
   std::string external_wrench_topic_;
-  std::string impedance_enable_topic_;
+  std::string admittance_enable_topic_;
 
   /*
    * external_wrench_frame:
@@ -103,22 +103,22 @@ protected:
   /*
    * compliance_frame:
    *   world / map / odom:
-   *     impedance axes are fixed in world frame
+   *     admittance axes are fixed in world frame
    *
    *   cog / body / base_link:
-   *     impedance axes rotate with robot body
+   *     admittance axes rotate with robot body
    */
   std::string compliance_frame_;
 
-  bool impedance_enabled_;
+  bool admittance_enabled_;
 
   Eigen::Matrix<double, 6, 1> raw_external_wrench_;
 
-  ros::Time prev_impedance_time_;
+  ros::Time prev_admittance_time_;
 
-  ImpedanceCore impedance_core_;
-  ImpedanceCoreConfig impedance_config_;
-  ImpedanceCoreOutput impedance_output_;
+  AdmittanceCore admittance_core_;
+  AdmittanceCoreConfig admittance_config_;
+  AdmittanceCoreOutput admittance_output_;
 };
 
 } // namespace aerial_robot_control

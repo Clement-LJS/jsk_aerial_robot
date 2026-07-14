@@ -1,4 +1,4 @@
-aerial_robot_control_name: aerial_robot_control/gimbalrotor_perching_impedance_controller
+aerial_robot_control_name: aerial_robot_control/gimbalrotor_perching_admittance_controller
 
 controller:
   torque_allocation_matrix_inv_pub_interval: 0.05
@@ -58,11 +58,11 @@ controller:
 
     need_d_control: true
 
-  impedance:
-    use_impedance: true
+  admittance:
+    use_admittance: true
     external_wrench_timeout: 0.15
 
-    impedance_enable_topic: impedance_enable
+    admittance_enable_topic: admittance_enable
 
     external_wrench_topic: estimated_external_wrench
 
@@ -73,7 +73,7 @@ controller:
     torque_lpf_alpha: 0.2
 
     # Keep your proven perching test setting.
-    # For normal flying impedance in all axes, you can later set x/y/z to 1.
+    # For normal flying admittance in all axes, you can later set x/y/z to 1.
     enable_x: 0
     enable_y: 0
     enable_z: 0
@@ -143,9 +143,9 @@ controller:
       # Full topic: /gimbalrotor/perching/enable
       perching_enable_topic: perching/enable
 
-      # Separate perching impedance trigger.
-      # Full topic: /gimbalrotor/perching/impedance_enable
-      perching_impedance_enable_topic: perching/impedance_enable
+      # Separate perching admittance trigger.
+      # Full topic: /gimbalrotor/perching/admittance_enable
+      perching_admittance_enable_topic: perching/admittance_enable
 
       # These topics must match GimbalrotorPerchingNavigator.
       perching_point_topic: perching/point

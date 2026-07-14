@@ -1,24 +1,24 @@
-#include <gimbalrotor/control/gimbalrotor_impedance_controller.h>
+#include <gimbalrotor/control/gimbalrotor_admittance_controller.h>
 
 #include <pluginlib/class_list_macros.h>
 
 namespace aerial_robot_control
 {
 
-GimbalrotorImpedanceController::GimbalrotorImpedanceController()
+GimbalrotorAdmittanceController::GimbalrotorAdmittanceController()
   : GimbalrotorController(),
     external_wrench_topic_("estimated_external_wrench"),
-    impedance_enable_topic_("impedance_enable"),
+    admittance_enable_topic_("admittance_enable"),
     external_wrench_frame_("world"),
     compliance_frame_("world"),
-    impedance_enabled_(false), 
+    admittance_enabled_(false), 
     has_external_wrench_(false),
     external_wrench_timeout_(0.15)
 {
   raw_external_wrench_.setZero();
 }
 
-void GimbalrotorImpedanceController::initialize(
+void GimbalrotorAdmittanceController::initialize(
     ros::NodeHandle nh,
     ros::NodeHandle nhp,
     boost::shared_ptr<aerial_robot_model::RobotModel> robot_model,
@@ -35,7 +35,7 @@ void GimbalrotorImpedanceController::initialize(
    *   - normal gimbal command
    *   - normal four-axis command
    *
-   * This class only inserts impedance correction before normal controlCore().
+   * This class only inserts admittance correction before normal controlCore().
    */
   GimbalrotorController::initialize(
       nh,
@@ -50,31 +50,31 @@ void GimbalrotorImpedanceController::initialize(
    * GimbalrotorController::rosParamInit(), not virtual rosParamInit().
    * Therefore, call this class param initialization here.
    */
-  GimbalrotorImpedanceController::rosParamInit();
+  GimbalrotorAdmittanceController::rosParamInit();
 
-  impedance_core_.setConfig(impedance_config_);
+  admittance_core_.setConfig(admittance_config_);
 
   external_wrench_sub_ =
       nh_.subscribe(
           external_wrench_topic_,
           1,
-          &GimbalrotorImpedanceController::externalWrenchCallback,
+          &GimbalrotorAdmittanceController::externalWrenchCallback,
           this);
 
-  impedance_enable_sub_ =
+  admittance_enable_sub_ =
       nh_.subscribe(
-          impedance_enable_topic_,
+          admittance_enable_topic_,
           1,
-          &GimbalrotorImpedanceController::impedanceEnableCallback,
+          &GimbalrotorAdmittanceController::admittanceEnableCallback,
           this);
 
-  prev_impedance_time_ = ros::Time::now();
+  prev_admittance_time_ = ros::Time::now();
 
   ROS_WARN_STREAM("[" << controllerName() << "] initialized.");
   ROS_WARN_STREAM("[" << controllerName() << "] external_wrench_topic: "
                   << external_wrench_topic_);
-  ROS_WARN_STREAM("[" << controllerName() << "] impedance_enable_topic: "
-                  << impedance_enable_topic_);
+  ROS_WARN_STREAM("[" << controllerName() << "] admittance_enable_topic: "
+                  << admittance_enable_topic_);
   ROS_WARN_STREAM("[" << controllerName() << "] external_wrench_frame: "
                   << external_wrench_frame_);
   ROS_WARN_STREAM("[" << controllerName() << "] compliance_frame: "
@@ -84,11 +84,11 @@ void GimbalrotorImpedanceController::initialize(
   has_external_wrench_ = false;
 }
 
-void GimbalrotorImpedanceController::reset()
+void GimbalrotorAdmittanceController::reset()
 {
   GimbalrotorController::reset();
 
-  impedance_enabled_ = false;
+  admittance_enabled_ = false;
 
   {
     std::lock_guard<std::mutex> lock(external_wrench_mutex_);
@@ -100,16 +100,16 @@ void GimbalrotorImpedanceController::reset()
     has_external_wrench_ = false;
   }
 
-  impedance_core_.reset();
+  admittance_core_.reset();
 
-  impedance_output_ = ImpedanceCoreOutput();
+  admittance_output_ = AdmittanceCoreOutput();
 
-  prev_impedance_time_ = ros::Time::now();
+  prev_admittance_time_ = ros::Time::now();
 
   ROS_WARN_STREAM("[" << controllerName() << "] reset.");
 }
 
-void GimbalrotorImpedanceController::rosParamInit()
+void GimbalrotorAdmittanceController::rosParamInit()
 {
   /*
    * Load normal gimbalrotor params first.
@@ -119,12 +119,12 @@ void GimbalrotorImpedanceController::rosParamInit()
    */
   GimbalrotorController::rosParamInit();
 
-  ros::NodeHandle imp_nh(nh_, "controller/impedance");
+  ros::NodeHandle imp_nh(nh_, "controller/admittance");
 
   getParam<bool>(
       imp_nh,
-      "use_impedance",
-      impedance_config_.use_impedance,
+      "use_admittance",
+      admittance_config_.use_admittance,
       true);
 
   getParam<std::string>(
@@ -135,9 +135,9 @@ void GimbalrotorImpedanceController::rosParamInit()
 
   getParam<std::string>(
       imp_nh,
-      "impedance_enable_topic",
-      impedance_enable_topic_,
-      std::string("impedance_enable"));
+      "admittance_enable_topic",
+      admittance_enable_topic_,
+      std::string("admittance_enable"));
 
   getParam<std::string>(
       imp_nh,
@@ -154,301 +154,301 @@ void GimbalrotorImpedanceController::rosParamInit()
   getParam<double>(
       imp_nh,
       "force_lpf_alpha",
-      impedance_config_.force_lpf_alpha,
+      admittance_config_.force_lpf_alpha,
       0.2);
 
   getParam<double>(
       imp_nh,
       "torque_lpf_alpha",
-      impedance_config_.torque_lpf_alpha,
+      admittance_config_.torque_lpf_alpha,
       0.2);
 
   getParam<double>(
       imp_nh,
       "enable_x",
-      impedance_config_.trans_enable(0),
+      admittance_config_.trans_enable(0),
       1.0);
 
   getParam<double>(
       imp_nh,
       "enable_y",
-      impedance_config_.trans_enable(1),
+      admittance_config_.trans_enable(1),
       1.0);
 
   getParam<double>(
       imp_nh,
       "enable_z",
-      impedance_config_.trans_enable(2),
+      admittance_config_.trans_enable(2),
       1.0);
 
   getParam<double>(
       imp_nh,
       "enable_roll",
-      impedance_config_.rot_enable(0),
+      admittance_config_.rot_enable(0),
       1.0);
 
   getParam<double>(
       imp_nh,
       "enable_pitch",
-      impedance_config_.rot_enable(1),
+      admittance_config_.rot_enable(1),
       1.0);
 
   getParam<double>(
       imp_nh,
       "enable_yaw",
-      impedance_config_.rot_enable(2),
+      admittance_config_.rot_enable(2),
       1.0);
 
   getParam<double>(
       imp_nh,
       "mass_x",
-      impedance_config_.trans_virtual_mass(0),
+      admittance_config_.trans_virtual_mass(0),
       5.0);
 
   getParam<double>(
       imp_nh,
       "mass_y",
-      impedance_config_.trans_virtual_mass(1),
+      admittance_config_.trans_virtual_mass(1),
       5.0);
 
   getParam<double>(
       imp_nh,
       "mass_z",
-      impedance_config_.trans_virtual_mass(2),
+      admittance_config_.trans_virtual_mass(2),
       5.0);
 
   getParam<double>(
       imp_nh,
       "damping_x",
-      impedance_config_.trans_damping(0),
+      admittance_config_.trans_damping(0),
       30.0);
 
   getParam<double>(
       imp_nh,
       "damping_y",
-      impedance_config_.trans_damping(1),
+      admittance_config_.trans_damping(1),
       30.0);
 
   getParam<double>(
       imp_nh,
       "damping_z",
-      impedance_config_.trans_damping(2),
+      admittance_config_.trans_damping(2),
       30.0);
 
   getParam<double>(
       imp_nh,
       "stiffness_x",
-      impedance_config_.trans_stiffness(0),
+      admittance_config_.trans_stiffness(0),
       60.0);
 
   getParam<double>(
       imp_nh,
       "stiffness_y",
-      impedance_config_.trans_stiffness(1),
+      admittance_config_.trans_stiffness(1),
       60.0);
 
   getParam<double>(
       imp_nh,
       "stiffness_z",
-      impedance_config_.trans_stiffness(2),
+      admittance_config_.trans_stiffness(2),
       60.0);
 
   getParam<double>(
       imp_nh,
       "force_ref_x",
-      impedance_config_.force_ref(0),
+      admittance_config_.force_ref(0),
       0.0);
 
   getParam<double>(
       imp_nh,
       "force_ref_y",
-      impedance_config_.force_ref(1),
+      admittance_config_.force_ref(1),
       0.0);
 
   getParam<double>(
       imp_nh,
       "force_ref_z",
-      impedance_config_.force_ref(2),
+      admittance_config_.force_ref(2),
       0.0);
 
   getParam<double>(
       imp_nh,
       "force_limit_x",
-      impedance_config_.force_limit(0),
+      admittance_config_.force_limit(0),
       3.0);
 
   getParam<double>(
       imp_nh,
       "force_limit_y",
-      impedance_config_.force_limit(1),
+      admittance_config_.force_limit(1),
       3.0);
 
   getParam<double>(
       imp_nh,
       "force_limit_z",
-      impedance_config_.force_limit(2),
+      admittance_config_.force_limit(2),
       3.0);
 
   getParam<double>(
       imp_nh,
       "pos_offset_limit_x",
-      impedance_config_.pos_offset_limit(0),
+      admittance_config_.pos_offset_limit(0),
       0.05);
 
   getParam<double>(
       imp_nh,
       "pos_offset_limit_y",
-      impedance_config_.pos_offset_limit(1),
+      admittance_config_.pos_offset_limit(1),
       0.05);
 
   getParam<double>(
       imp_nh,
       "pos_offset_limit_z",
-      impedance_config_.pos_offset_limit(2),
+      admittance_config_.pos_offset_limit(2),
       0.05);
 
   getParam<double>(
       imp_nh,
       "vel_offset_limit_x",
-      impedance_config_.vel_offset_limit(0),
+      admittance_config_.vel_offset_limit(0),
       0.10);
 
   getParam<double>(
       imp_nh,
       "vel_offset_limit_y",
-      impedance_config_.vel_offset_limit(1),
+      admittance_config_.vel_offset_limit(1),
       0.10);
 
   getParam<double>(
       imp_nh,
       "vel_offset_limit_z",
-      impedance_config_.vel_offset_limit(2),
+      admittance_config_.vel_offset_limit(2),
       0.10);
 
   getParam<double>(
       imp_nh,
       "inertia_roll",
-      impedance_config_.rot_virtual_inertia(0),
+      admittance_config_.rot_virtual_inertia(0),
       0.08);
 
   getParam<double>(
       imp_nh,
       "inertia_pitch",
-      impedance_config_.rot_virtual_inertia(1),
+      admittance_config_.rot_virtual_inertia(1),
       0.08);
 
   getParam<double>(
       imp_nh,
       "inertia_yaw",
-      impedance_config_.rot_virtual_inertia(2),
+      admittance_config_.rot_virtual_inertia(2),
       0.08);
 
   getParam<double>(
       imp_nh,
       "rot_damping_roll",
-      impedance_config_.rot_damping(0),
+      admittance_config_.rot_damping(0),
       0.35);
 
   getParam<double>(
       imp_nh,
       "rot_damping_pitch",
-      impedance_config_.rot_damping(1),
+      admittance_config_.rot_damping(1),
       0.35);
 
   getParam<double>(
       imp_nh,
       "rot_damping_yaw",
-      impedance_config_.rot_damping(2),
+      admittance_config_.rot_damping(2),
       0.35);
 
   getParam<double>(
       imp_nh,
       "rot_stiffness_roll",
-      impedance_config_.rot_stiffness(0),
+      admittance_config_.rot_stiffness(0),
       0.8);
 
   getParam<double>(
       imp_nh,
       "rot_stiffness_pitch",
-      impedance_config_.rot_stiffness(1),
+      admittance_config_.rot_stiffness(1),
       0.8);
 
   getParam<double>(
       imp_nh,
       "rot_stiffness_yaw",
-      impedance_config_.rot_stiffness(2),
+      admittance_config_.rot_stiffness(2),
       0.8);
 
   getParam<double>(
       imp_nh,
       "torque_ref_roll",
-      impedance_config_.torque_ref(0),
+      admittance_config_.torque_ref(0),
       0.0);
 
   getParam<double>(
       imp_nh,
       "torque_ref_pitch",
-      impedance_config_.torque_ref(1),
+      admittance_config_.torque_ref(1),
       0.0);
 
   getParam<double>(
       imp_nh,
       "torque_ref_yaw",
-      impedance_config_.torque_ref(2),
+      admittance_config_.torque_ref(2),
       0.0);
 
   getParam<double>(
       imp_nh,
       "torque_limit_roll",
-      impedance_config_.torque_limit(0),
+      admittance_config_.torque_limit(0),
       0.8);
 
   getParam<double>(
       imp_nh,
       "torque_limit_pitch",
-      impedance_config_.torque_limit(1),
+      admittance_config_.torque_limit(1),
       0.8);
 
   getParam<double>(
       imp_nh,
       "torque_limit_yaw",
-      impedance_config_.torque_limit(2),
+      admittance_config_.torque_limit(2),
       0.8);
 
   getParam<double>(
       imp_nh,
       "angle_offset_limit_roll",
-      impedance_config_.angle_offset_limit(0),
+      admittance_config_.angle_offset_limit(0),
       0.15);
 
   getParam<double>(
       imp_nh,
       "angle_offset_limit_pitch",
-      impedance_config_.angle_offset_limit(1),
+      admittance_config_.angle_offset_limit(1),
       0.15);
 
   getParam<double>(
       imp_nh,
       "angle_offset_limit_yaw",
-      impedance_config_.angle_offset_limit(2),
+      admittance_config_.angle_offset_limit(2),
       0.15);
 
   getParam<double>(
       imp_nh,
       "angular_vel_offset_limit_roll",
-      impedance_config_.angular_vel_offset_limit(0),
+      admittance_config_.angular_vel_offset_limit(0),
       0.50);
 
   getParam<double>(
       imp_nh,
       "angular_vel_offset_limit_pitch",
-      impedance_config_.angular_vel_offset_limit(1),
+      admittance_config_.angular_vel_offset_limit(1),
       0.50);
 
   getParam<double>(
       imp_nh,
       "angular_vel_offset_limit_yaw",
-      impedance_config_.angular_vel_offset_limit(2),
+      admittance_config_.angular_vel_offset_limit(2),
       0.50);
 
   getParam<double>(
@@ -457,40 +457,40 @@ void GimbalrotorImpedanceController::rosParamInit()
       external_wrench_timeout_,
       0.15);
   
-  impedance_core_.setConfig(impedance_config_);
+  admittance_core_.setConfig(admittance_config_);
 
-  ROS_INFO_STREAM("[" << controllerName() << "] use_impedance: "
-                  << impedance_config_.use_impedance);
+  ROS_INFO_STREAM("[" << controllerName() << "] use_admittance: "
+                  << admittance_config_.use_admittance);
 
   ROS_INFO_STREAM("[" << controllerName() << "] enable xyz: "
-                  << impedance_config_.trans_enable(0) << ", "
-                  << impedance_config_.trans_enable(1) << ", "
-                  << impedance_config_.trans_enable(2));
+                  << admittance_config_.trans_enable(0) << ", "
+                  << admittance_config_.trans_enable(1) << ", "
+                  << admittance_config_.trans_enable(2));
 
   ROS_INFO_STREAM("[" << controllerName() << "] enable rpy: "
-                  << impedance_config_.rot_enable(0) << ", "
-                  << impedance_config_.rot_enable(1) << ", "
-                  << impedance_config_.rot_enable(2));
+                  << admittance_config_.rot_enable(0) << ", "
+                  << admittance_config_.rot_enable(1) << ", "
+                  << admittance_config_.rot_enable(2));
 }
 
-void GimbalrotorImpedanceController::controlCore()
+void GimbalrotorAdmittanceController::controlCore()
 {
   const ros::Time now = ros::Time::now();
-  const double dt = (now - prev_impedance_time_).toSec();
-  prev_impedance_time_ = now;
+  const double dt = (now - prev_admittance_time_).toSec();
+  prev_admittance_time_ = now;
 
-  ImpedanceCoreInput input;
+  AdmittanceCoreInput input;
   input.external_wrench_world = getExternalWrenchWorld();
   input.R_world_compliance = getComplianceToWorldRotation();
   input.dt = dt;
-  input.enabled = impedance_enabled_;
+  input.enabled = admittance_enabled_;
 
-  impedance_output_ = impedance_core_.update(input);
+  admittance_output_ = admittance_core_.update(input);
 
   /*
    * Important architecture:
    *
-   * ImpedanceCore does NOT touch navigator.
+   * AdmittanceCore does NOT touch navigator.
    * This wrapper temporarily injects the offset only because the existing
    * PoseLinearController reads targets from navigator_ inside controlCore().
    *
@@ -503,28 +503,28 @@ void GimbalrotorImpedanceController::controlCore()
   const tf::Vector3 original_target_rpy =
       navigator_->getTargetRPY();
 
-  if(impedance_output_.valid)
+  if(admittance_output_.valid)
     {
-      applyImpedanceOutputToNavigator(
+      applyAdmittanceOutputToNavigator(
           original_target_pos,
           original_target_rpy,
-          impedance_output_);
+          admittance_output_);
     }
 
   GimbalrotorController::controlCore();
 
   /*
-   * Restore navigation target so impedance does not become navigation logic.
+   * Restore navigation target so admittance does not become navigation logic.
    * Navigation remains navigation.
-   * Impedance remains only a correction used during this controller cycle.
+   * Admittance remains only a correction used during this controller cycle.
    */
-  if(impedance_output_.valid)
+  if(admittance_output_.valid)
     {
       navigator_->setTargetPos(original_target_pos);
       navigator_->setTargetRPY(original_target_rpy);
     }
 
-  if(impedance_output_.valid)
+  if(admittance_output_.valid)
     {
       ROS_WARN_THROTTLE(
           0.5,
@@ -534,25 +534,25 @@ void GimbalrotorImpedanceController::controlCore()
           "dx_world: %.4f %.4f %.4f | "
           "drpy_world: %.4f %.4f %.4f",
           controllerName(),
-          impedance_output_.force_compliance(0),
-          impedance_output_.force_compliance(1),
-          impedance_output_.force_compliance(2),
-          impedance_output_.torque_compliance(0),
-          impedance_output_.torque_compliance(1),
-          impedance_output_.torque_compliance(2),
-          impedance_output_.pos_offset_world(0),
-          impedance_output_.pos_offset_world(1),
-          impedance_output_.pos_offset_world(2),
-          impedance_output_.rpy_offset_world(0),
-          impedance_output_.rpy_offset_world(1),
-          impedance_output_.rpy_offset_world(2));
+          admittance_output_.force_compliance(0),
+          admittance_output_.force_compliance(1),
+          admittance_output_.force_compliance(2),
+          admittance_output_.torque_compliance(0),
+          admittance_output_.torque_compliance(1),
+          admittance_output_.torque_compliance(2),
+          admittance_output_.pos_offset_world(0),
+          admittance_output_.pos_offset_world(1),
+          admittance_output_.pos_offset_world(2),
+          admittance_output_.rpy_offset_world(0),
+          admittance_output_.rpy_offset_world(1),
+          admittance_output_.rpy_offset_world(2));
     }
 }
 
-void GimbalrotorImpedanceController::applyImpedanceOutputToNavigator(
+void GimbalrotorAdmittanceController::applyAdmittanceOutputToNavigator(
     const tf::Vector3& original_target_pos,
     const tf::Vector3& original_target_rpy,
-    const ImpedanceCoreOutput& output)
+    const AdmittanceCoreOutput& output)
 {
   const Eigen::Vector3d original_target_pos_eigen =
       tfVector3ToEigen(original_target_pos);
@@ -574,7 +574,7 @@ void GimbalrotorImpedanceController::applyImpedanceOutputToNavigator(
   navigator_->setTargetRPY(modified_target_rpy);
 }
 
-void GimbalrotorImpedanceController::externalWrenchCallback(const geometry_msgs::WrenchStamped::ConstPtr& msg)
+void GimbalrotorAdmittanceController::externalWrenchCallback(const geometry_msgs::WrenchStamped::ConstPtr& msg)
 {
   std::lock_guard<std::mutex> lock(external_wrench_mutex_);
 
@@ -590,25 +590,25 @@ void GimbalrotorImpedanceController::externalWrenchCallback(const geometry_msgs:
   has_external_wrench_ = true;
 }
 
-void GimbalrotorImpedanceController::impedanceEnableCallback(
+void GimbalrotorAdmittanceController::admittanceEnableCallback(
     const std_msgs::Bool::ConstPtr& msg)
 {
-  const bool previous_enabled = impedance_enabled_;
-  impedance_enabled_ = msg->data;
+  const bool previous_enabled = admittance_enabled_;
+  admittance_enabled_ = msg->data;
 
-  if(previous_enabled && !impedance_enabled_)
+  if(previous_enabled && !admittance_enabled_)
     {
-      impedance_core_.reset();
-      impedance_output_ = ImpedanceCoreOutput();
+      admittance_core_.reset();
+      admittance_output_ = AdmittanceCoreOutput();
     }
 
   ROS_WARN(
-      "[%s] impedance_enabled: %d",
+      "[%s] admittance_enabled: %d",
       controllerName(),
-      static_cast<int>(impedance_enabled_));
+      static_cast<int>(admittance_enabled_));
 }
 
-Eigen::Matrix<double, 6, 1> GimbalrotorImpedanceController::getExternalWrenchWorld() const
+Eigen::Matrix<double, 6, 1> GimbalrotorAdmittanceController::getExternalWrenchWorld() const
 {
   Eigen::Matrix<double, 6, 1> raw_wrench;
 
@@ -686,7 +686,7 @@ Eigen::Matrix<double, 6, 1> GimbalrotorImpedanceController::getExternalWrenchWor
 }
 
 Eigen::Matrix3d
-GimbalrotorImpedanceController::getComplianceToWorldRotation() const
+GimbalrotorAdmittanceController::getComplianceToWorldRotation() const
 {
   if(compliance_frame_ == "world" ||
      compliance_frame_ == "map" ||
@@ -717,13 +717,13 @@ GimbalrotorImpedanceController::getComplianceToWorldRotation() const
   return Eigen::Matrix3d::Identity();
 }
 
-tf::Vector3 GimbalrotorImpedanceController::eigenToTfVector3(
+tf::Vector3 GimbalrotorAdmittanceController::eigenToTfVector3(
     const Eigen::Vector3d& v) const
 {
   return tf::Vector3(v(0), v(1), v(2));
 }
 
-Eigen::Vector3d GimbalrotorImpedanceController::tfVector3ToEigen(
+Eigen::Vector3d GimbalrotorAdmittanceController::tfVector3ToEigen(
     const tf::Vector3& v) const
 {
   return Eigen::Vector3d(v.x(), v.y(), v.z());
@@ -732,5 +732,5 @@ Eigen::Vector3d GimbalrotorImpedanceController::tfVector3ToEigen(
 } // namespace aerial_robot_control
 
 PLUGINLIB_EXPORT_CLASS(
-    aerial_robot_control::GimbalrotorImpedanceController,
+    aerial_robot_control::GimbalrotorAdmittanceController,
     aerial_robot_control::ControlBase)

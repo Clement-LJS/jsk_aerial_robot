@@ -1,7 +1,7 @@
 // -*- mode: c++ -*-
 #pragma once
 
-#include <gimbalrotor/control/gimbalrotor_impedance_controller.h>
+#include <gimbalrotor/control/gimbalrotor_admittance_controller.h>
 
 #include <geometry_msgs/PointStamped.h>
 #include <geometry_msgs/PoseStamped.h>
@@ -16,12 +16,12 @@
 namespace aerial_robot_control
 {
 
-class GimbalrotorPerchingImpedanceController
-  : public GimbalrotorImpedanceController
+class GimbalrotorPerchingAdmittanceController
+  : public GimbalrotorAdmittanceController
 {
 public:
-  GimbalrotorPerchingImpedanceController();
-  virtual ~GimbalrotorPerchingImpedanceController() = default;
+  GimbalrotorPerchingAdmittanceController();
+  virtual ~GimbalrotorPerchingAdmittanceController() = default;
 
   virtual void initialize(
       ros::NodeHandle nh,
@@ -38,13 +38,13 @@ protected:
 
   virtual const char* controllerName() const override
   {
-    return "GimbalrotorPerchingImpedanceController";
+    return "GimbalrotorPerchingAdmittanceController";
   }
 
-  virtual void applyImpedanceOutputToNavigator(
+  virtual void applyAdmittanceOutputToNavigator(
       const tf::Vector3& original_target_pos,
       const tf::Vector3& original_target_rpy,
-      const ImpedanceCoreOutput& output) override;
+      const AdmittanceCoreOutput& output) override;
 
   virtual Eigen::Matrix<double, 6, 1>
   getExternalWrenchWorld() const override;
@@ -52,10 +52,10 @@ protected:
 private:
   void perchingRosParamInit();
 
-  void normalImpedanceEnableCallback(
+  void normalAdmittanceEnableCallback(
       const std_msgs::Bool::ConstPtr& msg);
 
-  void perchingImpedanceEnableCallback(
+  void perchingAdmittanceEnableCallback(
       const std_msgs::Bool::ConstPtr& msg);
 
   void perchingEnableCallback(
@@ -99,8 +99,8 @@ private:
   virtual Eigen::Matrix3d getComplianceToWorldRotation() const override;
 
 private:
-  ros::Subscriber normal_impedance_enable_sub_;
-  ros::Subscriber perching_impedance_enable_sub_;
+  ros::Subscriber normal_admittance_enable_sub_;
+  ros::Subscriber perching_admittance_enable_sub_;
 
   ros::Subscriber perching_enable_sub_for_constraint_;
   ros::Subscriber perching_point_sub_;
@@ -109,15 +109,15 @@ private:
   ros::Subscriber locked_pivot_sub_;
 
   std::string perching_enable_topic_for_constraint_;
-  std::string perching_impedance_enable_topic_;
+  std::string perching_admittance_enable_topic_;
   std::string perching_point_topic_;
   std::string perching_branch_pose_topic_;
   std::string perching_locked_pose_topic_;
   std::string perching_locked_pivot_topic_;
 
-  bool normal_impedance_enabled_;
-  bool perching_impedance_enabled_;
-  bool effective_impedance_enabled_;
+  bool normal_admittance_enabled_;
+  bool perching_admittance_enabled_;
+  bool effective_admittance_enabled_;
 
   bool perching_enabled_for_constraint_;
   bool has_perching_point_;

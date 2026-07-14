@@ -92,6 +92,6 @@ navigation:
   hand_perching_center_offset_baselink_z: 0.017
 
   # Latched pivot topic published by perching navigator after lock.
-  # Perching impedance controller uses this so both navigator and controller
+  # Perching admittance controller uses this so both navigator and controller
   # use exactly the same pivot.
   perching_locked_pivot_topic: perching/locked_pivot

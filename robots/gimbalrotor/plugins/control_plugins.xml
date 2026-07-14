@@ -3,11 +3,11 @@
     <description>plugin for gimbalrotor control </description>
   </class>
 
-  <class name="aerial_robot_control/gimbalrotor_impedance_controller" type="aerial_robot_control::GimbalrotorImpedanceController" base_class_type="aerial_robot_control::ControlBase">
-    <description>plugin for gimbalrotor impedance control </description>
+  <class name="aerial_robot_control/gimbalrotor_admittance_controller" type="aerial_robot_control::GimbalrotorAdmittanceController" base_class_type="aerial_robot_control::ControlBase">
+    <description>plugin for gimbalrotor admittance control </description>
   </class>
 
-  <class name="aerial_robot_control/gimbalrotor_perching_impedance_controller" type="aerial_robot_control::GimbalrotorPerchingImpedanceController" base_class_type="aerial_robot_control::ControlBase">
-    <description>plugin for gimbalrotor perching-constrained impedance control </description>
+  <class name="aerial_robot_control/gimbalrotor_perching_admittance_controller" type="aerial_robot_control::GimbalrotorPerchingAdmittanceController" base_class_type="aerial_robot_control::ControlBase">
+    <description>plugin for gimbalrotor perching-constrained admittance control </description>
   </class>
 </library>
