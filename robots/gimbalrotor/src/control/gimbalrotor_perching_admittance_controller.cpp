@@ -37,6 +37,9 @@ GimbalrotorPerchingAdmittanceController::GimbalrotorPerchingAdmittanceController
     locked_radius_(0.0),
     locked_x_side_(1.0), 
     maximum_lock_stamp_difference_(0.05),
+    equilibrium_wrench_required_samples_(80),
+    equilibrium_wrench_sample_count_(0),
+    equilibrium_wrench_ready_(false),
     admittance_reset_requested_(false)
 {
   perching_point_world_.setValue(0.0, 0.0, 0.0);
@@ -55,6 +58,9 @@ GimbalrotorPerchingAdmittanceController::GimbalrotorPerchingAdmittanceController
   R_world_constraint_.setIdentity();
 
   constraint_axis_world_ = Eigen::Vector3d::UnitY();
+
+  equilibrium_wrench_pivot_world_.setZero();
+  equilibrium_wrench_sum_.setZero();
 }
 
 void GimbalrotorPerchingAdmittanceController::initialize(
@@ -156,14 +162,11 @@ void GimbalrotorPerchingAdmittanceController::initialize(
                   << perching_locked_pose_topic_);
 }
 
-void GimbalrotorPerchingAdmittanceController::
-reset()
+void GimbalrotorPerchingAdmittanceController::reset()
 {
-  GimbalrotorAdmittanceController::
-      reset();
+  GimbalrotorAdmittanceController::reset();
 
-  std::lock_guard<std::mutex> lock(
-      perching_state_mutex_);
+  std::lock_guard<std::mutex> lock(perching_state_mutex_);
 
   normal_admittance_enabled_ = false;
   perching_admittance_enabled_ = false;
@@ -198,22 +201,16 @@ reset()
   locked_radius_ = 0.0;
   locked_x_side_ = 1.0;
 
-  locked_pose_stamp_ =
-      ros::Time(0);
-
-  locked_pivot_stamp_ =
-      ros::Time(0);
-
-  accepted_locked_pose_stamp_ =
-      ros::Time(0);
-
-  accepted_locked_pivot_stamp_ =
-      ros::Time(0);
+  locked_pose_stamp_ = ros::Time(0);
+  locked_pivot_stamp_ = ros::Time(0);
+  accepted_locked_pose_stamp_ = ros::Time(0);
+  accepted_locked_pivot_stamp_ = ros::Time(0);
 
   R_world_constraint_.setIdentity();
 
-  constraint_axis_world_ =
-      Eigen::Vector3d::UnitY();
+  constraint_axis_world_ = Eigen::Vector3d::UnitY();
+
+  resetEquilibriumWrenchUnsafe();
 
   admittance_reset_requested_ = false;
 
@@ -339,12 +336,45 @@ void GimbalrotorPerchingAdmittanceController::perchingRosParamInit()
     maximum_lock_stamp_difference_ = 0.05;
   }
 
+  getParam<int>(
+    imp_perch_nh,
+    "equilibrium_wrench_required_samples",
+    equilibrium_wrench_required_samples_,
+    80);
+
+  if(equilibrium_wrench_required_samples_ < 1)
+  {
+    ROS_WARN(
+        "[GimbalrotorPerchingAdmittanceController] "
+        "Invalid equilibrium_wrench_required_samples: %d. "
+        "Using 80 samples.",
+        equilibrium_wrench_required_samples_);
+
+    equilibrium_wrench_required_samples_ = 80;
+  }
+
+  ROS_WARN(
+      "[GimbalrotorPerchingAdmittanceController] "
+      "equilibrium_wrench_required_samples: %d",
+      equilibrium_wrench_required_samples_);
+
+
   ROS_WARN("[GimbalrotorPerchingAdmittanceController] perching_min_valid_radius: %.4f",
            min_valid_radius_);
   ROS_WARN("[GimbalrotorPerchingAdmittanceController] perching_max_pitch_delta deg: %.2f",
            max_pitch_delta_ * 180.0 / PI);
   ROS_WARN("[GimbalrotorPerchingAdmittanceController] perching_arc_pitch_sign: %.2f",
            arc_pitch_sign_);
+}
+
+void GimbalrotorPerchingAdmittanceController::resetEquilibriumWrenchUnsafe() const
+{
+  /* The caller must already hold perching_state_mutex_. */
+  equilibrium_wrench_pivot_world_.setZero();
+  equilibrium_wrench_sum_.setZero();
+
+  equilibrium_wrench_sample_count_ = 0;
+  equilibrium_wrench_ready_ = false;
 }
 
 void GimbalrotorPerchingAdmittanceController::controlCore()
@@ -416,6 +446,13 @@ void GimbalrotorPerchingAdmittanceController::perchingEnableCallback(const std_m
 
     if(mode_changed)
     {
+      /*
+       * A mode change invalidates the previous tare because
+       * the wrench reference point and contact condition may
+       * have changed.
+       */
+      resetEquilibriumWrenchUnsafe();
+
       admittance_reset_requested_ = true;
     }
   }
@@ -425,14 +462,16 @@ void GimbalrotorPerchingAdmittanceController::perchingEnableCallback(const std_m
     ROS_WARN_STREAM(
         "[GimbalrotorPerchingAdmittanceController] "
         "Perching navigation enabled. "
-        "Waiting for a valid lock and enable topic: "
-        << perching_admittance_enable_topic_);
+        "Collecting equilibrium wrench while admittance "
+        "is disabled. Required samples: "
+        << equilibrium_wrench_required_samples_);
   }
   else
   {
     ROS_WARN(
         "[GimbalrotorPerchingAdmittanceController] "
         "Perching navigation disabled. "
+        "Equilibrium wrench has been cleared. "
         "Normal admittance trigger is active.");
   }
 }
@@ -780,15 +819,23 @@ void GimbalrotorPerchingAdmittanceController::updateLockedConstraintFromLockedPo
     return;
   }
 
+
   has_locked_pose_ = true;
   accepted_locked_pose_stamp_ = locked_pose_stamp_;
   accepted_locked_pivot_stamp_ = locked_pivot_stamp_;
 
   /*
-   * A new pivot/frame must not inherit displacement,
-   * velocity or filtering state from the old frame.
-   */
+  * A new lock means the pivot, radius, nominal pose or constraint frame may have changed.
+  *
+  * The previous equilibrium wrench must not be reused.
+  */
+  resetEquilibriumWrenchUnsafe();
+
+  /*
+  * A new pivot/frame must not inherit displacement, velocity or filtering state from the old frame.
+  */
   admittance_reset_requested_ = true;
+
 
   ROS_WARN(
       "[GimbalrotorPerchingAdmittanceController] "
@@ -847,21 +894,96 @@ Eigen::Matrix3d GimbalrotorPerchingAdmittanceController::getComplianceToWorldRot
 
 void GimbalrotorPerchingAdmittanceController::perchingAdmittanceEnableCallback(const std_msgs::Bool::ConstPtr& msg)
 {
+  bool enable_accepted = false;
+  bool lock_valid = false;
+  bool tare_ready = false;
+  int collected_samples = 0;
+
   {
     std::lock_guard<std::mutex> lock(perching_state_mutex_);
 
-    if(perching_admittance_enabled_ != msg->data)
+    lock_valid = perching_enabled_for_constraint_ && has_locked_pose_;
+    tare_ready = equilibrium_wrench_ready_;
+    collected_samples = equilibrium_wrench_sample_count_;
+
+    if(!msg->data)
     {
-      perching_admittance_enabled_ = msg->data;
+      /*
+       * Publishing false is also the command to start a
+       * fresh equilibrium-wrench collection.
+       */
+      perching_admittance_enabled_ = false;
+
+      resetEquilibriumWrenchUnsafe();
 
       admittance_reset_requested_ = true;
+      enable_accepted = true;
+    }
+    else if(!lock_valid)
+    {
+      /*
+       * Never enable pivot admittance without a valid
+       * perching lock.
+       */
+      perching_admittance_enabled_ = false;
+      admittance_reset_requested_ = true;
+      enable_accepted = false;
+    }
+    else if(!tare_ready)
+    {
+      /*
+       * Do not enable admittance before the no-contact
+       * equilibrium wrench has been collected.
+       */
+      perching_admittance_enabled_ = false;
+      admittance_reset_requested_ = true;
+      enable_accepted = false;
+    }
+    else
+    {
+      if(!perching_admittance_enabled_)
+      {
+        perching_admittance_enabled_ = true;
+        admittance_reset_requested_ = true;
+      }
+
+      enable_accepted = true;
     }
   }
 
-  ROS_WARN(
-      "[GimbalrotorPerchingAdmittanceController] "
-      "perching_admittance_enabled: %d",
-      static_cast<int>(msg->data));
+  if(!msg->data)
+  {
+    ROS_WARN(
+        "[GimbalrotorPerchingAdmittanceController] "
+        "Perching admittance disabled. "
+        "Equilibrium-wrench collection restarted.");
+  }
+  else if(!lock_valid)
+  {
+    ROS_ERROR(
+        "[GimbalrotorPerchingAdmittanceController] "
+        "Cannot enable perching admittance: "
+        "no valid perching lock.");
+  }
+  else if(!tare_ready)
+  {
+    ROS_ERROR(
+        "[GimbalrotorPerchingAdmittanceController] "
+        "Cannot enable perching admittance: "
+        "equilibrium wrench is not ready. "
+        "Collected %d / %d samples. "
+        "Keep the robot untouched and enable again after "
+        "the ready message appears.",
+        collected_samples,
+        equilibrium_wrench_required_samples_);
+  }
+  else if(enable_accepted)
+  {
+    ROS_WARN(
+        "[GimbalrotorPerchingAdmittanceController] "
+        "Perching admittance enabled using the collected "
+        "equilibrium pivot wrench.");
+  }
 }
 
 void GimbalrotorPerchingAdmittanceController::normalAdmittanceEnableCallback(const std_msgs::Bool::ConstPtr& msg)
@@ -886,13 +1008,40 @@ void GimbalrotorPerchingAdmittanceController::normalAdmittanceEnableCallback(con
 Eigen::Matrix<double, 6, 1> GimbalrotorPerchingAdmittanceController::getExternalWrenchWorld() const
 {
   /*
-   * Base result:
-   * force: world coordinates
-   * torque: world coordinates
+   * Base-controller result:
    *
-   * torque reference point: COG
+   * force:
+   *   world coordinates
+   *
+   * torque:
+   *   world coordinates, moment about the COG
    */
   const Eigen::Matrix<double, 6, 1> wrench_cog_world = GimbalrotorAdmittanceController::getExternalWrenchWorld();
+
+  /*
+   * Do not build a tare from missing or stale wrench data.
+   *
+   * The base function returns zero for missing/stale data,
+   * but zero could also be a physically valid measurement.
+   * Therefore, explicitly check the receive state here.
+   */
+  bool wrench_is_fresh = false;
+
+  {
+    std::lock_guard<std::mutex> lock(external_wrench_mutex_);
+
+    if(has_external_wrench_)
+    {
+      const double wrench_age = (ros::Time::now() - last_external_wrench_receive_time_).toSec();
+
+      wrench_is_fresh = wrench_age >= 0.0 && wrench_age <= external_wrench_timeout_;
+    }
+  }
+
+  if(!wrench_is_fresh)
+  {
+    return Eigen::Matrix<double, 6, 1>::Zero();
+  }
 
   bool perching_active = false;
   bool lock_valid = false;
@@ -901,27 +1050,33 @@ Eigen::Matrix<double, 6, 1> GimbalrotorPerchingAdmittanceController::getExternal
 
   {
     std::lock_guard<std::mutex> lock(perching_state_mutex_);
-
     perching_active = perching_enabled_for_constraint_;
     lock_valid = has_locked_pose_;
     pivot_world_tf = locked_pivot_world_;
   }
 
+  /*
+   * Normal-flight path:
+   * preserve the normal COG-referenced wrench.
+   */
   if(!perching_active)
   {
     return wrench_cog_world;
   }
 
   /*
-   * Do not integrate a COG-referenced wrench while
-   * the controller believes it is in pivot mode.
+   * Never pass a COG-referenced wrench into the perching
+   * admittance calculation when the pivot lock is invalid.
    */
   if(!lock_valid)
   {
     return Eigen::Matrix<double, 6, 1>::Zero();
   }
 
-  const tf::Vector3 cog_pos_world_tf = estimator_->getPos(Frame::COG, estimate_mode_);
+  const tf::Vector3 cog_pos_world_tf =
+      estimator_->getPos(
+          Frame::COG,
+          estimate_mode_);
 
   const Eigen::Vector3d cog_pos_world(
       cog_pos_world_tf.x(),
@@ -933,21 +1088,165 @@ Eigen::Matrix<double, 6, 1> GimbalrotorPerchingAdmittanceController::getExternal
       pivot_world_tf.y(),
       pivot_world_tf.z());
 
-  const Eigen::Vector3d force_world = wrench_cog_world.head<3>();
-  const Eigen::Vector3d torque_cog_world = wrench_cog_world.tail<3>();
-  const Eigen::Vector3d pivot_to_cog_world = cog_pos_world - pivot_pos_world;
+  const Eigen::Vector3d force_world =
+      wrench_cog_world.head<3>();
+
+  const Eigen::Vector3d torque_cog_world =
+      wrench_cog_world.tail<3>();
+
+  const Eigen::Vector3d pivot_to_cog_world =
+      cog_pos_world -
+      pivot_pos_world;
 
   /*
-   * Shift torque from COG to perching pivot:
-   * tau_pivot = tau_cog + (p_cog - p_pivot) x force.
+   * Shift the torque reference point:
+   *
+   * tau_pivot =
+   *     tau_cog +
+   *     (p_cog - p_pivot) x force
    */
-  const Eigen::Vector3d torque_pivot_world = torque_cog_world + pivot_to_cog_world.cross(force_world);
+  const Eigen::Vector3d torque_pivot_world =
+      torque_cog_world +
+      pivot_to_cog_world.cross(force_world);
 
-  Eigen::Matrix<double, 6, 1> wrench_pivot_world = wrench_cog_world;
+  Eigen::Matrix<double, 6, 1>
+      wrench_pivot_world =
+          wrench_cog_world;
 
-  wrench_pivot_world.tail<3>() = torque_pivot_world;
+  wrench_pivot_world.tail<3>() =
+      torque_pivot_world;
 
-  return wrench_pivot_world;
+  Eigen::Matrix<double, 6, 1>
+      residual_wrench_pivot_world =
+          Eigen::Matrix<double, 6, 1>::Zero();
+
+  Eigen::Matrix<double, 6, 1>
+      accepted_equilibrium_wrench =
+          Eigen::Matrix<double, 6, 1>::Zero();
+
+  bool admittance_enabled_now = false;
+  bool tare_ready_now = false;
+  bool tare_completed_now = false;
+
+  int collected_samples = 0;
+
+  {
+    std::lock_guard<std::mutex> lock(perching_state_mutex_);
+
+    /*
+     * Recheck the state because it may have changed while
+     * the wrench and current COG position were calculated.
+     */
+    if(!perching_enabled_for_constraint_ || !has_locked_pose_)
+    {
+      return Eigen::Matrix<double, 6, 1>::Zero();
+    }
+
+    admittance_enabled_now = perching_admittance_enabled_;
+
+    /*
+     * Collect the no-contact equilibrium only while
+     * perching admittance is disabled.
+     *
+     * During these samples:
+     *   - do not touch the robot,
+     *   - keep the nominal pitch fixed,
+     *   - keep the saw off,
+     *   - keep the robot perched.
+     */
+    if(!admittance_enabled_now)
+    {
+      if(!equilibrium_wrench_ready_)
+      {
+        equilibrium_wrench_sum_ += wrench_pivot_world;
+
+        ++equilibrium_wrench_sample_count_;
+
+        if(equilibrium_wrench_sample_count_ >= equilibrium_wrench_required_samples_)
+        {
+          equilibrium_wrench_pivot_world_ = equilibrium_wrench_sum_ / static_cast<double>(equilibrium_wrench_sample_count_);
+
+          equilibrium_wrench_ready_ = true;
+          tare_completed_now = true;
+        }
+      }
+
+      tare_ready_now = equilibrium_wrench_ready_;
+      collected_samples = equilibrium_wrench_sample_count_;
+      accepted_equilibrium_wrench = equilibrium_wrench_pivot_world_;
+    }
+    else
+    {
+      tare_ready_now = equilibrium_wrench_ready_;
+      collected_samples = equilibrium_wrench_sample_count_;
+      accepted_equilibrium_wrench = equilibrium_wrench_pivot_world_;
+
+      if(tare_ready_now)
+      {
+        /*
+         * This is the wrench that enters the admittance
+         * controller:
+         *
+         * residual = current pivot wrench - no-contact equilibrium pivot wrench
+         */
+        residual_wrench_pivot_world = wrench_pivot_world - equilibrium_wrench_pivot_world_;
+      }
+    }
+  }
+
+  if(tare_completed_now)
+  {
+    ROS_WARN(
+        "[GimbalrotorPerchingAdmittanceController] "
+        "Equilibrium pivot wrench ready after %d samples. "
+        "F_eq = %.3f %.3f %.3f N, "
+        "T_eq = %.3f %.3f %.3f Nm.",
+        collected_samples,
+        accepted_equilibrium_wrench(0),
+        accepted_equilibrium_wrench(1),
+        accepted_equilibrium_wrench(2),
+        accepted_equilibrium_wrench(3),
+        accepted_equilibrium_wrench(4),
+        accepted_equilibrium_wrench(5));
+  }
+
+  if(!admittance_enabled_now)
+  {
+    ROS_INFO_THROTTLE(
+        1.0,
+        "[GimbalrotorPerchingAdmittanceController] "
+        "Collecting equilibrium pivot wrench: %d / %d.",
+        collected_samples,
+        equilibrium_wrench_required_samples_);
+
+    /*
+     * Admittance is disabled, so do not pass the raw biased
+     * pivot wrench to the core.
+     */
+    return Eigen::Matrix<double, 6, 1>::Zero();
+  }
+
+  if(!tare_ready_now)
+  {
+    ROS_ERROR_THROTTLE(
+        1.0,
+        "[GimbalrotorPerchingAdmittanceController] "
+        "Perching admittance has no valid equilibrium "
+        "wrench. Returning zero wrench.");
+
+    return Eigen::Matrix<double, 6, 1>::Zero();
+  }
+
+  ROS_INFO_THROTTLE(
+      0.5,
+      "[GimbalrotorPerchingAdmittanceController] "
+      "Pivot torque Y: current %.3f, "
+      "equilibrium %.3f, residual %.3f Nm.",
+      wrench_pivot_world(4),
+      accepted_equilibrium_wrench(4),
+      residual_wrench_pivot_world(4));
+
+  return residual_wrench_pivot_world;
 }
 
 void GimbalrotorPerchingAdmittanceController::

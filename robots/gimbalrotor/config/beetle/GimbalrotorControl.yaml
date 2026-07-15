@@ -166,3 +166,10 @@ controller:
       # Maximum allowed time difference between the
       # separately published locked pose and pivot.
       maximum_lock_stamp_difference: 0.05
+
+      # Number of controller cycles used to average the
+      # no-contact equilibrium pivot wrench.
+      #
+      # Main controller runs at approximately 40 Hz:
+      # 80 samples = approximately 2 seconds.
+      equilibrium_wrench_required_samples: 80

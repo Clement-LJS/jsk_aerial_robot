@@ -175,6 +175,17 @@ public:
     Eigen::Vector3d force_compliance = R_compliance_world * force_world_lpf_;
     Eigen::Vector3d torque_compliance = R_compliance_world * torque_world_lpf_;
 
+
+    const Eigen::Vector3d force_error_compliance =
+    clampVectorElementwise(
+        force_compliance - config_.force_ref,
+        config_.force_limit);
+
+    const Eigen::Vector3d torque_error_compliance =
+        clampVectorElementwise(
+            torque_compliance - config_.torque_ref,
+            config_.torque_limit);
+            
     force_compliance = clampVectorElementwise(force_compliance, config_.force_limit);
     torque_compliance = clampVectorElementwise(torque_compliance, config_.torque_limit);
 
@@ -192,7 +203,7 @@ public:
             continue;
           }
 
-        const double force_error = force_compliance(i) - config_.force_ref(i);
+        const double force_error = force_error_compliance(i);
 
         acc_offset_compliance_(i) = (force_error - config_.trans_damping(i) * vel_offset_compliance_(i) - config_.trans_stiffness(i) * pos_offset_compliance_(i)) / config_.trans_virtual_mass(i);
 
@@ -217,8 +228,8 @@ public:
             continue;
           }
 
-        const double torque_error = torque_compliance(i) - config_.torque_ref(i);
-
+        const double torque_error = torque_error_compliance(i);
+        
         angular_acc_offset_compliance_(i) = (torque_error - config_.rot_damping(i) * angular_vel_offset_compliance_(i) - config_.rot_stiffness(i) * angle_offset_compliance_(i)) / config_.rot_virtual_inertia(i);
         
         angular_vel_offset_compliance_(i) += angular_acc_offset_compliance_(i) * input.dt;

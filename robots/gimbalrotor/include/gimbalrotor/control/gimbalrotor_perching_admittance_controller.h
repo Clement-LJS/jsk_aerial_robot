@@ -75,6 +75,8 @@ private:
 
   void updateLockedConstraintFromLockedPoseAndPivot();
 
+  void resetEquilibriumWrenchUnsafe() const;
+
   tf::Vector3 computePerchingArcPositionFromPitch(
       double target_pitch,
       const tf::Vector3& original_target_pos) const;
@@ -156,6 +158,25 @@ private:
   ros::Time accepted_locked_pivot_stamp_;
 
   double maximum_lock_stamp_difference_;
+
+  /*
+  * Number of control cycles used to calculate the average no-contact wrench while the robot is perched.
+  *
+  * At a 40 Hz control rate: 80 samples = approximately 2 seconds.
+  */
+  int equilibrium_wrench_required_samples_;
+
+  /*
+  * getExternalWrenchWorld() is const because it overrides the
+  * base controller function. These members are mutable because
+  * tare collection is performed inside that function.
+  */
+  mutable Eigen::Matrix<double, 6, 1> equilibrium_wrench_pivot_world_;
+
+  mutable Eigen::Matrix<double, 6, 1> equilibrium_wrench_sum_;
+
+  mutable int equilibrium_wrench_sample_count_;
+  mutable bool equilibrium_wrench_ready_;
 
   bool admittance_reset_requested_;
 };
