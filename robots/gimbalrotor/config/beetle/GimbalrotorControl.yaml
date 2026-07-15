@@ -29,7 +29,7 @@ controller:
   roll:
     p_gain: 17.0
     i_gain: 0.5 # or 0.3
-    d_gain: 10.0
+    d_gain: 14.0
     limit_sum: 20.0
     limit_p: 20.0
     limit_i: 0.6
@@ -49,7 +49,7 @@ controller:
   yaw:
     p_gain: 15.0
     i_gain: 1.0
-    d_gain: 6.0
+    d_gain: 8.0
     limit_err_p: 0.4
     limit_sum: 20.0
     limit_p: 20.0
@@ -111,7 +111,7 @@ controller:
     rot_damping_yaw: 0.5
 
     rot_stiffness_roll: 1.0
-    rot_stiffness_pitch: 1.0
+    rot_stiffness_pitch: 5.0
     rot_stiffness_yaw: 1.0
 
     force_limit_x: 0.0
