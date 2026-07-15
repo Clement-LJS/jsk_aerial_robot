@@ -37,7 +37,7 @@ controller:
 
   pitch:
     p_gain: 15.0
-    i_gain: 0.0
+    i_gain: 3.0
     d_gain: 7.0
     limit_sum: 20.0
     limit_p: 20.0
@@ -69,8 +69,8 @@ controller:
     external_wrench_frame: world
     compliance_frame: world
 
-    force_lpf_alpha: 0.2
-    torque_lpf_alpha: 0.2
+    force_lpf_alpha: 0.15
+    torque_lpf_alpha: 0.10
 
     # Keep your proven perching test setting.
     # For normal flying admittance in all axes, you can later set x/y/z to 1.
@@ -103,11 +103,11 @@ controller:
     stiffness_z: 100.0
 
     inertia_roll: 0.08
-    inertia_pitch: 0.08
+    inertia_pitch: 0.20
     inertia_yaw: 0.08
 
     rot_damping_roll: 0.5
-    rot_damping_pitch: 0.5
+    rot_damping_pitch: 2.0
     rot_damping_yaw: 0.5
 
     rot_stiffness_roll: 1.0
@@ -119,7 +119,7 @@ controller:
     force_limit_z: 0.0
 
     torque_limit_roll: 0.0
-    torque_limit_pitch: 0.2
+    torque_limit_pitch: 0.15
     torque_limit_yaw: 0.0
 
     pos_offset_limit_x: 0.0
@@ -131,11 +131,11 @@ controller:
     vel_offset_limit_z: 0.0
 
     angle_offset_limit_roll: 0.0
-    angle_offset_limit_pitch: 0.05236
+    angle_offset_limit_pitch: 0.0349066
     angle_offset_limit_yaw: 0.0
 
     angular_vel_offset_limit_roll: 0.0
-    angular_vel_offset_limit_pitch: 0.3
+    angular_vel_offset_limit_pitch: 0.15
     angular_vel_offset_limit_yaw: 0.0
 
     perching:
