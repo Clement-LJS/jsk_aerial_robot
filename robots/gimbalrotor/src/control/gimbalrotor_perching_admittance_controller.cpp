@@ -40,7 +40,9 @@ GimbalrotorPerchingAdmittanceController::GimbalrotorPerchingAdmittanceController
     equilibrium_wrench_required_samples_(80),
     equilibrium_wrench_sample_count_(0),
     equilibrium_wrench_ready_(false),
-    admittance_reset_requested_(false)
+    admittance_reset_requested_(false),
+    normal_pitch_i_limit_(0.0),
+    pitch_i_limit_suppressed_(false)
 {
   perching_point_world_.setValue(0.0, 0.0, 0.0);
   branch_pos_world_.setValue(0.0, 0.0, 0.0);
@@ -86,6 +88,14 @@ void GimbalrotorPerchingAdmittanceController::initialize(
       ctrl_loop_rate);
 
   perchingRosParamInit();
+
+  /*
+   * Save the normal pitch integral-output limit.
+   * With the current GimbalrotorControl.yaml, this should normally be 10.0.
+   */
+  normal_pitch_i_limit_ = pid_controllers_.at(PITCH).getLimitI();
+
+  ROS_WARN("[GimbalrotorPerchingAdmittanceController] Normal pitch I limit: %.6f", normal_pitch_i_limit_);
 
   /*
    * The base admittance controller subscribed to admittance_enable_topic_.
@@ -164,6 +174,18 @@ void GimbalrotorPerchingAdmittanceController::initialize(
 
 void GimbalrotorPerchingAdmittanceController::reset()
 {
+  /*
+   * Restore the normal pitch integral limit before resetting
+   * the parent controller.
+   */
+  if(pitch_i_limit_suppressed_ && pid_controllers_.size() > PITCH)
+  {
+    PID& pitch_pid = pid_controllers_.at(PITCH);
+    pitch_pid.setLimitI(normal_pitch_i_limit_);
+    pitch_pid.setErrI(0.0);
+    pitch_i_limit_suppressed_ = false;
+  }
+
   GimbalrotorAdmittanceController::reset();
 
   std::lock_guard<std::mutex> lock(perching_state_mutex_);
@@ -382,8 +404,18 @@ void GimbalrotorPerchingAdmittanceController::controlCore()
   bool effective_enabled = false;
   bool reset_requested = false;
 
+  /*
+   * Suppress the ROS pitch integral term only while
+   * perching admittance is actually enabled.
+   *
+   * Perching mode by itself does not suppress the integral.
+   */
+  bool suppress_pitch_i_limit = false;
+
   {
     std::lock_guard<std::mutex> lock(perching_state_mutex_);
+
+    suppress_pitch_i_limit = perching_enabled_for_constraint_ && perching_admittance_enabled_;
 
     if(perching_enabled_for_constraint_)
     {
@@ -395,7 +427,7 @@ void GimbalrotorPerchingAdmittanceController::controlCore()
     }
 
     /*
-     * Reset when effective enable changes.
+     * Reset admittance when effective enable changes.
      */
     if(effective_enabled != effective_admittance_enabled_)
     {
@@ -405,7 +437,7 @@ void GimbalrotorPerchingAdmittanceController::controlCore()
     effective_admittance_enabled_ = effective_enabled;
 
     /*
-     * Reset when mode, lock, pivot or constraint frame has changed.
+     * Reset when the perching mode, lock, pivot or constraint frame changes.
      */
     if(admittance_reset_requested_)
     {
@@ -414,8 +446,61 @@ void GimbalrotorPerchingAdmittanceController::controlCore()
     }
   }
 
+  PID& pitch_pid = pid_controllers_.at(PITCH);
+
+  if(suppress_pitch_i_limit)
+  {
+    /*
+     * This runs once when perching admittance becomes enabled.
+     */
+    if(!pitch_i_limit_suppressed_)
+    {
+      /*
+       * Save the current normal limit before changing it.
+       *
+       * Normally this is the YAML value 10.0.
+       */
+      normal_pitch_i_limit_ = pitch_pid.getLimitI();
+
+      pitch_i_limit_suppressed_ = true;
+
+      ROS_WARN(
+          "[GimbalrotorPerchingAdmittanceController] "
+          "Perching admittance enabled: pitch limit_i changed from %.6f to 0.0.",
+          normal_pitch_i_limit_);
+    }
+
+    /*
+     * Force the integral output limit to zero.
+     */
+    pitch_pid.setLimitI(0.0);
+
+    /*
+     * limit_i = 0 only forces the resulting I term to zero.
+     * The stored integral error would otherwise continue
+     * accumulating, so clear it before PID::update().
+     */
+    pitch_pid.setErrI(0.0);
+  }
+  else if(pitch_i_limit_suppressed_)
+  {
+    /*
+     * Perching admittance was disabled.
+     *
+     * Restore the normal limit and restart the integrator from zero.
+     */
+    pitch_pid.setErrI(0.0);
+    pitch_pid.setLimitI(normal_pitch_i_limit_);
+    pitch_i_limit_suppressed_ = false;
+
+    ROS_WARN(
+        "[GimbalrotorPerchingAdmittanceController] "
+        "Perching admittance disabled: pitch limit_i restored to %.6f.",
+        normal_pitch_i_limit_);
+  }
+
   /*
-   * This assignment now happens only in the main control thread.
+   * This assignment remains in the main control thread.
    */
   admittance_enabled_ = effective_enabled;
 
@@ -423,14 +508,29 @@ void GimbalrotorPerchingAdmittanceController::controlCore()
   {
     admittance_core_.reset();
     admittance_output_ = AdmittanceCoreOutput();
+
     prev_admittance_time_ = ros::Time::now();
 
-    ROS_WARN(
-        "[GimbalrotorPerchingAdmittanceController] "
-        "Admittance state reset.");
+    ROS_WARN("[GimbalrotorPerchingAdmittanceController] Admittance state reset.");
   }
 
+  /*
+   * This eventually calls PID::update().
+   *
+   * When perching is enabled, pitch limit_i is already zero,
+   * so the calculated pitch I term will be clamped to zero.
+   */
   GimbalrotorAdmittanceController::controlCore();
+
+  /*
+   * PID::update() still integrates err_i even when limit_i
+   * is zero. Clear the stored error after the update so it
+   * cannot build up while perching.
+   */
+  if(suppress_pitch_i_limit)
+  {
+    pitch_pid.setErrI(0.0);
+  }
 }
 
 void GimbalrotorPerchingAdmittanceController::perchingEnableCallback(const std_msgs::Bool::ConstPtr& msg)

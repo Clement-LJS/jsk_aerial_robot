@@ -179,6 +179,19 @@ private:
   mutable bool equilibrium_wrench_ready_;
 
   bool admittance_reset_requested_;
+
+  /*
+   * Normal pitch integral-term output limit.
+   *This stores controller/pitch/limit_i from the YAML file.
+   * It is restored when perching mode is disabled.
+   */
+  double normal_pitch_i_limit_;
+
+  /*
+   * Indicates that pitch limit_i is currently forced to zero.
+   */
+  bool pitch_i_limit_suppressed_;
+
 };
 
 } // namespace aerial_robot_control
