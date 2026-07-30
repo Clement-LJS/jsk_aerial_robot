@@ -173,3 +173,17 @@ controller:
       # Main controller runs at approximately 40 Hz:
       # 80 samples = approximately 2 seconds.
       equilibrium_wrench_required_samples: 80
+
+      # Contact-gated perching admittance.
+      contact_torque_filter_alpha: 0.10
+
+      contact_on_threshold: 0.04
+      contact_off_threshold: 0.02
+
+      contact_on_duration: 0.10
+      contact_off_duration: 0.20
+
+      recovery_angle_epsilon: 0.00174533
+      recovery_rate_epsilon: 0.01
+
+      perching_pitch_torque_sign: 1.0

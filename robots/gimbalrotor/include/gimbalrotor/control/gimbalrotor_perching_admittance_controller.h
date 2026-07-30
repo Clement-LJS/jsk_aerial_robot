@@ -6,6 +6,7 @@
 #include <geometry_msgs/PointStamped.h>
 #include <geometry_msgs/PoseStamped.h>
 #include <std_msgs/Bool.h>
+#include <std_msgs/Float64.h>
 
 #include <tf/transform_datatypes.h>
 
@@ -77,6 +78,37 @@ private:
 
   void resetEquilibriumWrenchUnsafe() const;
 
+  /*
+   * The caller must already hold perching_state_mutex_.
+   */
+  void resetContactGateUnsafe();
+
+  /*
+   * Remove external admittance forcing while preserving a valid
+   * nonzero admittance state so stiffness and damping can return
+   * the pitch correction smoothly to zero.
+   *
+   * The caller must already hold perching_state_mutex_.
+   */
+  void enterZeroInputRecoveryUnsafe();
+
+  void preparePerchingAdmittanceInput();
+
+  void updateContactGate(
+      double residual_pitch_torque,
+      double dt);
+
+  bool recoveryComplete() const;
+
+  bool perchingPitchAdmittanceConfigValid() const;
+
+  bool perchingPitchOutputFinite(
+      const AdmittanceCoreOutput& output) const;
+
+  double safeAdmittanceDt() const;
+
+  void publishContactAdmittanceDiagnostics() const;
+
   tf::Vector3 computePerchingArcPositionFromPitch(
       double target_pitch,
       const tf::Vector3& original_target_pos) const;
@@ -110,6 +142,12 @@ private:
   ros::Subscriber locked_pose_sub_;
   ros::Subscriber locked_pivot_sub_;
 
+  ros::Publisher contact_active_pub_;
+  ros::Publisher recovery_active_pub_;
+  ros::Publisher pivot_torque_raw_pub_;
+  ros::Publisher pivot_torque_filtered_pub_;
+  ros::Publisher pitch_offset_pub_;
+
   std::string perching_enable_topic_for_constraint_;
   std::string perching_admittance_enable_topic_;
   std::string perching_point_topic_;
@@ -134,6 +172,15 @@ private:
   double min_valid_radius_;
   double max_pitch_delta_;
   double arc_pitch_sign_;
+
+  double contact_torque_filter_alpha_;
+  double contact_on_threshold_;
+  double contact_off_threshold_;
+  double contact_on_duration_;
+  double contact_off_duration_;
+  double recovery_angle_epsilon_;
+  double recovery_rate_epsilon_;
+  double perching_pitch_torque_sign_;
 
   tf::Vector3 perching_point_world_;
   tf::Vector3 branch_pos_world_;
@@ -179,6 +226,26 @@ private:
   mutable bool equilibrium_wrench_ready_;
 
   bool admittance_reset_requested_;
+
+  bool contact_active_;
+  bool recovery_active_;
+
+  double contact_on_timer_;
+  double contact_off_timer_;
+
+  double residual_pitch_torque_raw_;
+  double residual_pitch_torque_filtered_;
+
+  ros::Time previous_contact_gate_time_;
+
+  /*
+   * These two values are prepared from the same locked-pivot
+   * snapshot and are consumed together by the parent admittance
+   * controller.
+   */
+  Eigen::Matrix<double, 6, 1> prepared_perching_admittance_wrench_world_;
+
+  Eigen::Matrix3d prepared_R_world_constraint_;
 
   /*
    * Normal pitch integral-term output limit.
