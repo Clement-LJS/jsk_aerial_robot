@@ -62,6 +62,11 @@ controller:
     use_admittance: true
     external_wrench_timeout: 0.15
 
+    # Maximum valid AdmittanceCore integration interval.
+    # The normal controller is approximately 40 Hz, so 0.10 s
+    # provides margin while rejecting large control gaps.
+    max_dt: 0.10
+
     admittance_enable_topic: admittance_enable
 
     external_wrench_topic: estimated_external_wrench
@@ -173,3 +178,48 @@ controller:
       # Main controller runs at approximately 40 Hz:
       # 80 samples = approximately 2 seconds.
       equilibrium_wrench_required_samples: 80
+
+      # Hybrid PID-admittance supervisor (perching cutting).
+      #
+      # When false, the controller reproduces the legacy behavior exactly
+      # (admittance active immediately after enable, symmetric compliance,
+      # abrupt integral clearing) for regression comparison.
+      hybrid:
+        enabled: true
+
+        # Full topic: /gimbalrotor/perching/cutting_active
+        cutting_active_topic: perching/cutting_active
+        require_cutting_active: true
+
+        # All thresholds below are initial test values only.
+        # Tune from no-contact and cutting rosbags before flight use.
+        contact_filter_time_constant: 0.03
+        admittance_filter_time_constant: 0.08
+
+        contact_on_sigma_multiplier: 5.0
+        contact_off_sigma_multiplier: 2.5
+        contact_on_min_torque: 0.03       # Nm; tune from bags
+        contact_off_min_torque: 0.015     # Nm; tune from bags
+        contact_on_duration: 0.15         # s
+        contact_off_duration: 0.30        # s
+        recontact_on_duration: 0.15       # s
+
+        authority_ramp_up_time: 0.30      # s
+
+        # Must be verified experimentally with a small safe pitch command
+        # before cutting: +1 means positive pitch offset relieves load,
+        # -1 means negative pitch offset relieves load.
+        relief_pitch_sign: -1.0
+        penetration_torque_ratio: 0.0
+        directional_deadband_sigma_multiplier: 2.0
+        directional_deadband_min_torque: 0.01     # Nm; tune from bags
+
+        recovery_angle_epsilon: 0.002     # rad
+        recovery_rate_epsilon: 0.01       # rad/s
+
+        hard_residual_pivot_torque_limit: 0.80
+        cutting_active_timeout: 0.30
+        max_control_dt: 0.10
+        max_tare_torque_stddev: 0.06
+        abort_request_topic: perching/hybrid/abort_request
+        hold_relief_target_on_measurement_fault: true

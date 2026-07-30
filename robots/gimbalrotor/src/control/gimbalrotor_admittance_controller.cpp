@@ -456,6 +456,12 @@ void GimbalrotorAdmittanceController::rosParamInit()
       "external_wrench_timeout",
       external_wrench_timeout_,
       0.15);
+
+  getParam<double>(
+      imp_nh,
+      "max_dt",
+      admittance_config_.max_dt,
+      0.1);
   
   admittance_core_.setConfig(admittance_config_);
 
@@ -497,18 +503,12 @@ void GimbalrotorAdmittanceController::controlCore()
    * After normal GimbalrotorController::controlCore(), original navigation
    * target is restored immediately.
    */
-  const tf::Vector3 original_target_pos =
-      navigator_->getTargetPos();
-
-  const tf::Vector3 original_target_rpy =
-      navigator_->getTargetRPY();
+  const tf::Vector3 original_target_pos = navigator_->getTargetPos();
+  const tf::Vector3 original_target_rpy = navigator_->getTargetRPY();
 
   if(admittance_output_.valid)
     {
-      applyAdmittanceOutputToNavigator(
-          original_target_pos,
-          original_target_rpy,
-          admittance_output_);
+      applyAdmittanceOutputToNavigator(original_target_pos, original_target_rpy, admittance_output_);
     }
 
   GimbalrotorController::controlCore();

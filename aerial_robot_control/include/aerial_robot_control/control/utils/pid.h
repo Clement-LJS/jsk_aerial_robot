@@ -52,7 +52,7 @@ namespace aerial_robot_control
         const double limit_err_p = 1e6, const double limit_err_i = 1e6, const double limit_err_d = 1e6):
       name_(name), result_(0), err_p_(0), err_i_(0), err_i_prev_(0), err_d_(0),
       target_p_(0), target_d_(0), val_p_(0), val_d_(0),
-      p_term_(0), i_term_(0), d_term_(0)
+      p_term_(0), i_term_(0), d_term_(0), integrator_frozen_(false)
     {
       setGains(p_gain, i_gain, d_gain);
       setLimits(limit_sum, limit_p, limit_i, limit_d, limit_err_p, limit_err_i, limit_err_d);
@@ -64,7 +64,17 @@ namespace aerial_robot_control
     {
       err_p_ = clamp(err_p, -limit_err_p_, limit_err_p_);
       err_i_prev_ = err_i_;
-      err_i_ = clamp(err_i_ + err_p_ * du, -limit_err_i_, limit_err_i_);
+
+      /*
+       * While frozen: do not accumulate error, but keep using the
+       * previously stored err_i_ so the existing I contribution is
+       * retained instead of being cleared or removed abruptly.
+       */
+      if(!integrator_frozen_)
+      {
+        err_i_ = clamp(err_i_ + err_p_ * du, -limit_err_i_, limit_err_i_);
+      }
+
       err_d_ = clamp(err_d, -limit_err_d_, limit_err_d_);
 
       p_term_ = clamp(err_p_ * p_gain_, -limit_p_, limit_p_);
@@ -78,9 +88,17 @@ namespace aerial_robot_control
 
     void reset()
     {
-      err_i_ = 0;
-      err_i_prev_ = 0;
-      result_ = 0;
+      err_p_ = 0.0;
+      err_i_ = 0.0;
+      err_i_prev_ = 0.0;
+      err_d_ = 0.0;
+
+      p_term_ = 0.0;
+      i_term_ = 0.0;
+      d_term_ = 0.0;
+
+      result_ = 0.0;
+      integrator_frozen_ = false;
     }
 
     const double& getPGain() const { return p_gain_; }
@@ -133,6 +151,16 @@ namespace aerial_robot_control
     const double& getITerm() const { return i_term_; }
     const double& getDTerm() const { return d_term_; }
 
+    /*
+     * While frozen, update() does not accumulate err_i_ but keeps using
+     * the previously stored value, so the existing I contribution is
+     * retained instead of being cleared or removed abruptly. This is
+     * intended for anti-windup during a temporary external disturbance
+     * (e.g. contact-gated admittance), not as a general-purpose reset.
+     */
+    void setIntegratorFrozen(const bool frozen) { integrator_frozen_ = frozen; }
+    bool isIntegratorFrozen() const { return integrator_frozen_; }
+
   protected:
 
     std::string name_;
@@ -144,6 +172,7 @@ namespace aerial_robot_control
     double limit_err_p_, limit_err_i_, limit_err_d_;
     double target_p_, target_d_;
     double val_p_, val_d_;
+    bool integrator_frozen_;
   };
 
 };

@@ -40,7 +40,10 @@ add_library(gimbalrotor_navigation
   src/gimbalrotor_perching_navigation.cpp)
 target_link_libraries(gimbalrotor_navigation ${catkin_LIBRARIES})
 
-install(DIRECTORY config plugins launch
+install(DIRECTORY
+  config
+  plugins
+  launch
   DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}
   USE_SOURCE_PERMISSIONS
   )

@@ -1,0 +1,60 @@
+<launch>
+  <!--
+    No default is provided intentionally.
+    Pass a physically verified saw-off PWM value.
+
+    run with: roslaunch gimbalrotor saw_control.launch \
+  safe_pwm:=<VERIFIED_SAW_OFF_PWM>
+  -->
+  <arg name="safe_pwm" />
+
+  <arg name="motor_index" default="4" />
+  <arg name="step" default="0.1" />
+  <arg name="min_pwm" default="0.5" />
+  <arg name="max_pwm" default="0.9" />
+  <arg name="running_threshold" default="0.5" />
+  <arg name="publish_rate" default="10.0" />
+
+  <node
+      pkg="gimbalrotor"
+      type="saw_control.py"
+      name="saw_control"
+      output="screen">
+
+    <param
+        name="safe_pwm"
+        value="$(arg safe_pwm)" />
+
+    <param
+        name="motor_index"
+        value="$(arg motor_index)" />
+
+    <param
+        name="step"
+        value="$(arg step)" />
+
+    <param
+        name="min"
+        value="$(arg min_pwm)" />
+
+    <param
+        name="max"
+        value="$(arg max_pwm)" />
+
+    <param
+        name="threshold"
+        value="$(arg running_threshold)" />
+
+    <param
+        name="publish_rate"
+        value="$(arg publish_rate)" />
+
+    <param
+        name="abort_topic"
+        value="/gimbalrotor/perching/hybrid/abort_request" />
+
+    <param
+        name="cutting_active_topic"
+        value="/gimbalrotor/perching/cutting_active" />
+  </node>
+</launch>
