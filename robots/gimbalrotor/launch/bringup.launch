@@ -21,6 +21,9 @@
   <arg name="robot_id" default="" />
   <arg name="robot_ns" value="gimbalrotor$(arg robot_id)" />
   <arg name="airframe" default="quad" />
+  <arg name="mujoco" default="False" />
+  <arg name="launch_mujoco_backend" default="True" />
+  <arg name="launch_mujoco_controller" default="True" />
 
   ###########  Parameters  ###########
   <group ns="$(arg robot_ns)">
@@ -66,8 +69,8 @@
   </node>
 
   ###########  Robot Model  ###########
-  <arg name="description_mode" value="urdf" unless="$(arg simulation)" />
-  <arg name="description_mode" value="gazebo" if="$(arg simulation)" />
+  <arg name="description_mode" value="urdf" if="$(eval not arg('simulation') or arg('mujoco'))" />
+  <arg name="description_mode" value="gazebo" if="$(eval arg('simulation') and not arg('mujoco'))" />
   <include file="$(find aerial_robot_model)/launch/aerial_robot_model.launch" >
     <arg name="headless" value="$(arg headless)" />
     <arg name="robot_model" value="$(find gimbalrotor)/robots/$(arg airframe)/gimbalrotor.$(arg description_mode).xacro"/>
@@ -85,10 +88,12 @@
   </include >
 
   ###########  Servo Bridge  ###########
-  <node pkg="aerial_robot_model" type="servo_bridge_node" name="servo_bridge" ns="$(arg robot_ns)" output="screen" />
+  <node pkg="aerial_robot_model" type="servo_bridge_node" name="servo_bridge" ns="$(arg robot_ns)" output="screen">
+    <param name="use_mujoco" value="true" if="$(arg mujoco)" />
+  </node>
 
   ########## Simulation in Gazebo #########
-  <include file="$(find aerial_robot_simulation)/launch/gazebo.launch" if = "$(eval arg('simulation') and not arg('real_machine'))" >
+  <include file="$(find aerial_robot_simulation)/launch/gazebo.launch" if = "$(eval arg('simulation') and not arg('real_machine') and not arg('mujoco'))" >
     <arg name="robot_ns" default="$(arg robot_ns)" />
     <arg name="gui" default="false" if="$(arg headless)"/>
     <arg name="headless" default="$(arg headless)" />
@@ -98,6 +103,15 @@
     <arg name="spawn_y" value="$(arg spawn_y)" />
     <arg name="spawn_z" value="$(arg spawn_z)" />
     <arg name="spawn_yaw" value="$(arg spawn_yaw)" />
+  </include>
+
+  ########## Simulation in MuJoCo #########
+  <include file="$(find aerial_robot_simulation)/launch/mujoco.launch" if="$(eval arg('simulation') and not arg('real_machine') and arg('mujoco'))" >
+    <arg name="robot_ns" value="$(arg robot_ns)" />
+    <arg name="headless" value="$(arg headless)" />
+    <arg name="mujoco_model" value="$(find gimbalrotor)/mujoco/$(arg airframe)/robot.xml" />
+    <arg name="launch_backend" value="$(arg launch_mujoco_backend)" />
+    <arg name="launch_controller" value="$(arg launch_mujoco_controller)" />
   </include>
 
   ############### Hand state ###############

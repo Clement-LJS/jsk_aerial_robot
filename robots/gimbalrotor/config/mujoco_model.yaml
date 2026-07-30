@@ -1,0 +1,11 @@
+package:
+  ["gimbalrotor"]
+
+gimbalrotor:
+  input:
+    ["robots/beetle/gimbalrotor.urdf.xacro"]
+
+  filename:
+    ["beetle"]
+
+  meshdir: urdf/beetle/mesh
