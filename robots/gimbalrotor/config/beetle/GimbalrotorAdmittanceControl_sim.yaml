@@ -1,0 +1,140 @@
+aerial_robot_control_name: aerial_robot_control/gimbalrotor_admittance_controller
+
+controller:
+  torque_allocation_matrix_inv_pub_interval: 0.05
+  wrench_allocation_matrix_pub_interval: 0.1
+  gimbal_calc_in_fc : false
+  wrench_estimate_flag : true
+
+  compensate_multilink_inertia: true
+  inertia_dot_lpf_rate: 0.15
+  nonlinear_ang_acc_limit: 5.0
+
+  xy:
+    p_gain: 2.0
+    i_gain: 0.05
+    d_gain: 1.5
+    limit_sum: 4.0
+    limit_p: 12.0
+    limit_i: 12.0
+    limit_d: 12.0
+
+  z:
+    p_gain: 5.0
+    i_gain: 1.0
+    d_gain: 2.5
+    limit_err_p: 1.0
+    limit_sum: 25.0
+    limit_p: 25.0
+    limit_i: 25.0
+    limit_d: 25.0
+    force_landing_descending_rate: -0.5
+
+  roll:
+    p_gain: 15.0
+    i_gain: 1.0
+    d_gain: 10.0
+    limit_sum: 20.0
+    limit_p: 20.0
+    limit_i: 20.0
+    limit_d: 20.0
+
+  pitch:
+    p_gain: 15.0
+    i_gain: 1.0
+    d_gain: 10.0
+    limit_sum: 20.0
+    limit_p: 20.0
+    limit_i: 20.0
+    limit_d: 20.0
+
+    start_rp_integration_height: 0.01
+
+  yaw:
+    p_gain: 5.0
+    i_gain: 1.0
+    d_gain: 4.0
+    limit_err_p: 0.4
+    limit_sum: 20.0
+    limit_p: 20.0
+    limit_i: 20.0
+    limit_d: 20.0
+
+    need_d_control: true
+
+  admittance:
+    use_admittance: true
+    external_wrench_timeout: 0.15
+    max_dt: 0.10
+
+    admittance_enable_topic: admittance_enable
+    external_wrench_topic: estimated_external_wrench
+    external_wrench_frame: world
+    compliance_frame: world
+
+    force_lpf_alpha: 0.2
+    torque_lpf_alpha: 0.10
+
+    enable_x: 1
+    enable_y: 0
+    enable_z: 0
+
+    enable_roll: 0
+    enable_pitch: 0
+    enable_yaw: 0
+
+    force_ref_x: 0.0
+    force_ref_y: 0.0
+    force_ref_z: 0.0
+
+    torque_ref_roll: 0.0
+    torque_ref_pitch: 0.0
+    torque_ref_yaw: 0.0
+
+    mass_x: 5.0
+    mass_y: 5.0
+    mass_z: 5.0
+
+    damping_x: 40.0
+    damping_y: 80.0
+    damping_z: 80.0
+
+    stiffness_x: 30.0
+    stiffness_y: 150.0
+    stiffness_z: 150.0
+
+    inertia_roll: 0.08
+    inertia_pitch: 0.20
+    inertia_yaw: 0.08
+
+    rot_damping_roll: 0.5
+    rot_damping_pitch: 2.0
+    rot_damping_yaw: 0.5
+
+    rot_stiffness_roll: 1.0
+    rot_stiffness_pitch: 5.0
+    rot_stiffness_yaw: 1.0
+
+    force_limit_x: 1.0
+    force_limit_y: 1.0
+    force_limit_z: 1.0
+
+    torque_limit_roll: 0.0
+    torque_limit_pitch: 0.0
+    torque_limit_yaw: 0.0
+
+    pos_offset_limit_x: 0.03
+    pos_offset_limit_y: 0.005
+    pos_offset_limit_z: 0.005
+
+    vel_offset_limit_x: 0.05
+    vel_offset_limit_y: 0.02
+    vel_offset_limit_z: 0.02
+
+    angle_offset_limit_roll: 0.0
+    angle_offset_limit_pitch: 0.0
+    angle_offset_limit_yaw: 0.0
+
+    angular_vel_offset_limit_roll: 0.0
+    angular_vel_offset_limit_pitch: 0.0
+    angular_vel_offset_limit_yaw: 0.0

@@ -18,6 +18,8 @@
   <arg name="spawn_z" default="0.0"/>
   <arg name="spawn_yaw" default="0.0"/>
   <arg name="config_dir" default="$(find gimbalrotor)/config"/>
+  <arg name="control_config" default="$(arg airframe)/GimbalrotorControl.yaml" />
+  <arg name="sim_control_config" default="$(arg airframe)/GimbalrotorControl_sim.yaml" />
   <arg name="robot_id" default="" />
   <arg name="robot_ns" value="gimbalrotor$(arg robot_id)" />
   <arg name="airframe" default="quad" />
@@ -48,8 +50,8 @@
    <rosparam file="$(arg config_dir)/Battery.yaml" command="load" />
 
    ###########  Control  ###########
-   <rosparam file="$(arg config_dir)/$(arg airframe)/GimbalrotorControl.yaml" command="load" unless="$(arg simulation)"/>
-   <rosparam file="$(arg config_dir)/$(arg airframe)/GimbalrotorControl_sim.yaml" command="load" if="$(arg simulation)"/>
+   <rosparam file="$(arg config_dir)/$(arg control_config)" command="load" unless="$(arg simulation)"/>
+   <rosparam file="$(arg config_dir)/$(arg sim_control_config)" command="load" if="$(arg simulation)"/>
 
    ###########  Sensor Fusion  ###########
    <rosparam file="$(arg config_dir)/StateEstimation.yaml" command="load" />

@@ -1,0 +1,13 @@
+<?xml version="1.0"?>
+<launch>
+  <arg name="headless" default="false" />
+
+  <include file="$(find gimbalrotor)/launch/bringup.launch">
+    <arg name="simulation" value="true" />
+    <arg name="real_machine" value="false" />
+    <arg name="mujoco" value="true" />
+    <arg name="airframe" value="beetle" />
+    <arg name="headless" value="$(arg headless)" />
+    <arg name="sim_control_config" value="beetle/GimbalrotorAdmittanceControl_sim.yaml" />
+  </include>
+</launch>
