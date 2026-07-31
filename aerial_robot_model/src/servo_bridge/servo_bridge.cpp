@@ -35,6 +35,65 @@
 
 
 #include <aerial_robot_model/servo_bridge.h>
+#include <sstream>
+
+namespace
+{
+constexpr int32_t kDefaultRawLowerLimit = 0;
+constexpr int32_t kDefaultRawUpperLimit = 4095;
+}
+
+std::string ServoBridge::servoErrorToString(uint8_t error) const
+{
+  std::vector<std::string> error_list;
+  if(error & 0b10000000) error_list.push_back("Encoder Connection Error");
+  if(error & 0b01000000) error_list.push_back("Resolution Ratio Error");
+  if(error & 0b00100000) error_list.push_back("Overload Error");
+  if(error & 0b00010000) error_list.push_back("Electrical Shock Error");
+  if(error & 0b00001000) error_list.push_back("Motor Encoder Error");
+  if(error & 0b00000100) error_list.push_back("Overheating Error");
+  if(error & 0b00000010) error_list.push_back("Pulley Skip Error");
+  if(error & 0b00000001) error_list.push_back("Input Voltage Error");
+
+  if(error_list.empty()) return "No Error";
+
+  std::ostringstream oss;
+  for(size_t i = 0; i < error_list.size(); ++i)
+    {
+      if(i > 0) oss << ", ";
+      oss << error_list[i];
+    }
+  return oss.str();
+}
+
+void ServoBridge::reportServoErrorState(int servo_index, uint8_t error, const std::string& servo_group_name)
+{
+  const ServoErrorKey key(servo_group_name, servo_index);
+  auto prev_it = servo_error_states_.find(key);
+  if(prev_it != servo_error_states_.end() && prev_it->second == error) return;
+
+  servo_error_states_[key] = error;
+
+  std::string servo_name = "unknown";
+  auto group_it = servos_handler_.find(servo_group_name);
+  if(group_it != servos_handler_.end())
+    {
+      auto servo_handler = find_if(group_it->second.begin(), group_it->second.end(),
+                                   [&](SingleServoHandlePtr s) {return servo_index == s->getId();});
+      if(servo_handler != group_it->second.end()) servo_name = (*servo_handler)->getName();
+    }
+
+  if(error == 0)
+    {
+      if(prev_it != servo_error_states_.end() && prev_it->second != 0)
+        ROS_INFO("[servo bridge] servo %d (%s, group: %s) error cleared",
+                 servo_index, servo_name.c_str(), servo_group_name.c_str());
+      return;
+    }
+
+  ROS_WARN("[servo bridge] servo %d (%s, group: %s) error: %s",
+           servo_index, servo_name.c_str(), servo_group_name.c_str(), servoErrorToString(error).c_str());
+}
 
 ServoBridge::ServoBridge(ros::NodeHandle nh, ros::NodeHandle nhp): nh_(nh),nhp_(nhp)
 {
@@ -80,7 +139,7 @@ ServoBridge::ServoBridge(ros::NodeHandle nh, ros::NodeHandle nhp): nh_(nh),nhp_(
   joint_profile_pub_ = nh_.advertise<spinal::JointProfiles>("joint_profiles",1);
   /* subscriber: uav info */
   uav_info_sub_ = nh_.subscribe<spinal::UavInfo>("uav_info", 1, &ServoBridge::uavInfoCallback, this);
-
+  servo_target_states_debug_sub_ = nh_.subscribe<spinal::ServoControlCmd>("servo/target_states_debug", 1, &ServoBridge::servoTargetStatesDebugCallback, this);
 
   /* get additional config for servos from ros parameters */
   XmlRpc::XmlRpcValue all_servos_params;
@@ -148,6 +207,25 @@ ServoBridge::ServoBridge(ros::NodeHandle nh, ros::NodeHandle nhp): nh_(nh),nhp_(
                 servo_params.second["zero_point_offset"]:servo_group_params.second["zero_point_offset"];
               double angle_scale = servo_params.second.hasMember("angle_scale")?
                 servo_params.second["angle_scale"]:servo_group_params.second["angle_scale"];
+              int32_t raw_lower_limit = kDefaultRawLowerLimit;
+              int32_t raw_upper_limit = kDefaultRawUpperLimit;
+              const bool has_raw_lower_limit = servo_params.second.hasMember("raw_lower_limit") || servo_group_params.second.hasMember("raw_lower_limit");
+              const bool has_raw_upper_limit = servo_params.second.hasMember("raw_upper_limit") || servo_group_params.second.hasMember("raw_upper_limit");
+              if(has_raw_lower_limit)
+                raw_lower_limit = servo_params.second.hasMember("raw_lower_limit") ?
+                  static_cast<int32_t>(servo_params.second["raw_lower_limit"]) :
+                  static_cast<int32_t>(servo_group_params.second["raw_lower_limit"]);
+              if(has_raw_upper_limit)
+                raw_upper_limit = servo_params.second.hasMember("raw_upper_limit") ?
+                  static_cast<int32_t>(servo_params.second["raw_upper_limit"]) :
+                  static_cast<int32_t>(servo_group_params.second["raw_upper_limit"]);
+              if(!(has_raw_lower_limit && has_raw_upper_limit))
+                {
+                  const std::string servo_name = static_cast<std::string>(servo_params.second["name"]);
+                  if(raw_limit_default_warned_servos_.insert(servo_name).second)
+                    ROS_WARN("[servo bridge] servo %s uses fallback raw limits [%d, %d]",
+                             servo_name.c_str(), kDefaultRawLowerLimit, kDefaultRawUpperLimit);
+                }
 
               double torque_scale = servo_group_params.second.hasMember("torque_scale")?
                 servo_group_params.second["torque_scale"]:(servo_params.second.hasMember("torque_scale")?servo_params.second["torque_scale"]: XmlRpc::XmlRpcValue(1.0));
@@ -160,7 +238,7 @@ ServoBridge::ServoBridge(ros::NodeHandle nh, ros::NodeHandle nhp): nh_(nh),nhp_(
               double cutoff_freq = servo_group_params.second.hasMember("cutoff_freq")?
                 servo_group_params.second["cutoff_freq"]:(servo_params.second.hasMember("cutoff_freq")?servo_params.second["cutoff_freq"]: XmlRpc::XmlRpcValue(0.0));
 
-              servo_group_handler.push_back(SingleServoHandlePtr(new SingleServoHandle(servo_params.second["name"], servo_params.second["id"], angle_sgn, zero_point_offset, angle_scale, upper_limit, lower_limit, torque_scale, !no_real_state_flags_.at(group_name), filter_flag, sample_freq, cutoff_freq)));
+              servo_group_handler.push_back(SingleServoHandlePtr(new SingleServoHandle(servo_params.second["name"], servo_params.second["id"], angle_sgn, zero_point_offset, angle_scale, upper_limit, lower_limit, torque_scale, raw_lower_limit, raw_upper_limit, !no_real_state_flags_.at(group_name), filter_flag, sample_freq, cutoff_freq)));
 
               /* rosparam and load controller for gazebo */
               if(simulation_mode_)
@@ -229,7 +307,76 @@ ServoBridge::ServoBridge(ros::NodeHandle nh, ros::NodeHandle nhp): nh_(nh),nhp_(
       servos_handler_.insert(make_pair(servo_group_params.first, servo_group_handler));
     }
 
-  if(!simulation_mode_) servo_states_pub_ = nh_.advertise<sensor_msgs::JointState>("joint_states", 1);
+std::map<int, std::string> servo_id_to_group;
+for(const auto& servo_group : servos_handler_)
+  {
+    for(const auto& servo : servo_group.second)
+      {
+        const int servo_id = servo->getId();
+
+        auto prev = servo_id_to_group.find(servo_id);
+        if(prev != servo_id_to_group.end())
+          {
+            ROS_ERROR("[servo bridge] duplicate servo id %d in groups '%s' and '%s'. "
+                      "servo/target_states_debug cannot be converted safely.",
+                      servo_id,
+                      prev->second.c_str(),
+                      servo_group.first.c_str());
+          }
+        else
+          {
+            servo_id_to_group[servo_id] = servo_group.first;
+          }
+      }
+  }
+
+  if(!simulation_mode_)
+  {
+    joint_states_pub_ = nh_.advertise<sensor_msgs::JointState>("joint_states", 1);
+
+    servo_states_pub_ = nh_.advertise<sensor_msgs::JointState>("servos/states", 1);
+    servo_target_states_pub_ = nh_.advertise<sensor_msgs::JointState>("servos/target_states", 1);
+
+    gimbal_states_pub_ = nh_.advertise<sensor_msgs::JointState>("gimbals/states", 1);
+    gimbal_target_states_pub_ = nh_.advertise<sensor_msgs::JointState>("gimbals/target_states", 1);
+  }
+}
+
+void ServoBridge::publishGimbalStates(const ros::Time& stamp)
+{
+  const auto group_it = servos_handler_.find("gimbals");
+  if(group_it == servos_handler_.end()) return;
+
+  sensor_msgs::JointState msg;
+  msg.header.stamp = stamp;
+
+  for(const auto& servo : group_it->second)
+    {
+      msg.name.push_back(servo->getName());
+      msg.position.push_back(servo->getCurrAngleVal(ValueType::RADIAN));
+      msg.effort.push_back(servo->getCurrTorqueVal());
+    }
+
+  if(!msg.name.empty()) gimbal_states_pub_.publish(msg);
+}
+
+void ServoBridge::publishServoStates(const ros::Time& stamp)
+{
+  sensor_msgs::JointState msg;
+  msg.header.stamp = stamp;
+
+  for(const auto& servo_group : servos_handler_)
+    {
+      for(const auto& servo : servo_group.second)
+        {
+          msg.name.push_back(servo->getName());
+          msg.position.push_back(servo->getCurrAngleVal(ValueType::RADIAN));
+          msg.effort.push_back(servo->getCurrTorqueVal());
+        }
+    }
+
+  if(!msg.name.empty())
+    servo_states_pub_.publish(msg);
 }
 
 void ServoBridge::servoStatesCallback(const spinal::ServoStatesConstPtr& state_msg, const string& servo_group_name)
@@ -248,9 +395,13 @@ void ServoBridge::servoStatesCallback(const spinal::ServoStatesConstPtr& state_m
               ROS_ERROR("[servo bridge, servo state callback]: no matching joint handler for servo index %d", it.index);
               return;
             }
+          reportServoErrorState(it.index, it.error, servo_group_name);
           (*servo_handler)->setCurrAngleVal((double)it.angle, ValueType::BIT); // angle (position)
           (*servo_handler)->setCurrTorqueVal((double)it.load); // torque (effort)
         }
+
+      publishServoStates(state_msg->stamp);
+      if(servo_group_name == "gimbals") publishGimbalStates(state_msg->stamp);
 
       // finish process
       return;
@@ -286,6 +437,7 @@ void ServoBridge::servoStatesCallback(const spinal::ServoStatesConstPtr& state_m
               continue;
             }
 
+          reportServoErrorState(it.index, it.error, servo_group.first);
           (*servo_handler)->setCurrAngleVal((double)it.angle, ValueType::BIT); // angle (position)
           (*servo_handler)->setCurrTorqueVal((double)it.load); // torque (effort)
 
@@ -294,7 +446,6 @@ void ServoBridge::servoStatesCallback(const spinal::ServoStatesConstPtr& state_m
           break; // search next servo state from real machine
         }
     }
-
 
   sensor_msgs::JointState servo_states_msg;
   servo_states_msg.header.stamp = state_msg->stamp;
@@ -308,7 +459,78 @@ void ServoBridge::servoStatesCallback(const spinal::ServoStatesConstPtr& state_m
           servo_states_msg.effort.push_back(servo_handler->getCurrTorqueVal());
         }
     }
-  servo_states_pub_.publish(servo_states_msg);
+  joint_states_pub_.publish(servo_states_msg);
+  publishServoStates(state_msg->stamp);
+  publishGimbalStates(state_msg->stamp);
+}
+
+void ServoBridge::servoTargetStatesDebugCallback(const spinal::ServoControlCmdConstPtr& msg)
+{
+  publishServoAndGimbalTargetStates(msg);
+}
+
+void ServoBridge::publishServoAndGimbalTargetStates(const spinal::ServoControlCmdConstPtr& msg)
+{
+  sensor_msgs::JointState servo_target_msg;
+  sensor_msgs::JointState gimbal_target_msg;
+
+  const ros::Time stamp = ros::Time::now();
+  servo_target_msg.header.stamp = stamp;
+  gimbal_target_msg.header.stamp = stamp;
+
+  const size_t target_num = std::min(msg->index.size(), msg->angles.size());
+
+  for(size_t i = 0; i < target_num; ++i)
+    {
+      const uint8_t servo_index = msg->index.at(i);
+      const double raw_goal = static_cast<double>(msg->angles.at(i));
+
+      bool matched = false;
+
+      for(const auto& servo_group : servos_handler_)
+        {
+          auto servo_handler =
+              find_if(servo_group.second.begin(),
+                      servo_group.second.end(),
+                      [&](SingleServoHandlePtr s)
+                      {
+                        return servo_index == s->getId();
+                      });
+
+          if(servo_handler == servo_group.second.end())
+            continue;
+
+          const double target_rad =
+              (*servo_handler)->getAngleScale() *
+              (*servo_handler)->getAngleSgn() *
+              (raw_goal - (*servo_handler)->getZeroPointOffset());
+
+          servo_target_msg.name.push_back((*servo_handler)->getName());
+          servo_target_msg.position.push_back(target_rad);
+
+          if(servo_group.first == "gimbals")
+            {
+              gimbal_target_msg.name.push_back((*servo_handler)->getName());
+              gimbal_target_msg.position.push_back(target_rad);
+            }
+
+          matched = true;
+          break;
+        }
+
+      if(!matched)
+        {
+          ROS_WARN_THROTTLE(1.0,
+                            "[servo bridge] target debug for unknown servo index %d",
+                            servo_index);
+        }
+    }
+
+  if(!servo_target_msg.name.empty())
+    servo_target_states_pub_.publish(servo_target_msg);
+
+  if(!gimbal_target_msg.name.empty())
+    gimbal_target_states_pub_.publish(gimbal_target_msg);
 }
 
 void ServoBridge::servoCtrlCallback(const sensor_msgs::JointStateConstPtr& servo_ctrl_msg, const string& servo_group_name)
@@ -515,6 +737,10 @@ void ServoBridge::uavInfoCallback(const spinal::UavInfoConstPtr& uav_msg)
       joint_profile.angle_sgn = servo->getAngleSgn();
       joint_profile.angle_scale = servo->getAngleScale();
       joint_profile.zero_point_offset = servo->getZeroPointOffset();
+      joint_profile.lower_limit = servo->getLowerLimit();
+      joint_profile.upper_limit = servo->getUpperLimit();
+      joint_profile.raw_lower_limit = servo->getRawLowerLimit();
+      joint_profile.raw_upper_limit = servo->getRawUpperLimit();
       joint_profiles_msg.joints.push_back(joint_profile);
     }
   }

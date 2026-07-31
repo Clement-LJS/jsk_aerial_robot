@@ -61,6 +61,8 @@
 
 /* util */
 #include <string>
+#include <map>
+#include <set>
 #include <boost/algorithm/clamp.hpp>
 
 using namespace std;
@@ -74,7 +76,15 @@ namespace ValueType
 class SingleServoHandle
 {
 public:
-  SingleServoHandle(string name, int id, int angle_sgn, double zero_point_offset, double angle_scale, double upper_limit, double lower_limit, double torque_scale, bool receive_real_state, bool filter_flag = false, double sample_freq = 0, double cutoff_freq = 0): name_(name), id_(id), curr_angle_val_(0), target_angle_val_(0), init_target_angle_val_(false), curr_torque_val_(0), angle_sgn_(angle_sgn), zero_point_offset_(zero_point_offset), angle_scale_(angle_scale), upper_limit_(upper_limit), lower_limit_(lower_limit), torque_scale_(torque_scale), receive_real_state_(receive_real_state), filter_flag_(filter_flag)
+  SingleServoHandle(string name, int id, int angle_sgn, double zero_point_offset, double angle_scale,
+                    double upper_limit, double lower_limit, double torque_scale,
+                    int32_t raw_lower_limit, int32_t raw_upper_limit,
+                    bool receive_real_state, bool filter_flag = false, double sample_freq = 0, double cutoff_freq = 0)
+    : name_(name), id_(id), curr_angle_val_(0), target_angle_val_(0), init_target_angle_val_(false),
+      curr_torque_val_(0), angle_sgn_(angle_sgn), zero_point_offset_(zero_point_offset), angle_scale_(angle_scale),
+      lower_limit_(lower_limit), upper_limit_(upper_limit), torque_scale_(torque_scale),
+      raw_lower_limit_(raw_lower_limit), raw_upper_limit_(raw_upper_limit),
+      receive_real_state_(receive_real_state), filter_flag_(filter_flag)
   {
     /* for simulation */
     //joint_ctrl_pub_ = nh_.advertise<std_msgs::Float64>(std::string("/j") + std_  + std::string("_controller/command"), 1);
@@ -189,6 +199,10 @@ public:
   inline const int& getZeroPointOffset() const {return zero_point_offset_; }
   inline const double& getAngleScale() const {return angle_scale_; }
   inline const double& getTorqueScale() const {return torque_scale_; }
+  inline const double& getLowerLimit() const {return lower_limit_; }
+  inline const double& getUpperLimit() const {return upper_limit_; }
+  inline int32_t getRawLowerLimit() const {return raw_lower_limit_; }
+  inline int32_t getRawUpperLimit() const {return raw_upper_limit_; }
 
 private:
   int id_;
@@ -202,6 +216,8 @@ private:
   double angle_scale_;
   double lower_limit_, upper_limit_;
   double torque_scale_;
+  int32_t raw_lower_limit_;
+  int32_t raw_upper_limit_;
 
   bool receive_real_state_;
   bool filter_flag_;
@@ -220,10 +236,15 @@ protected:
   ros::NodeHandle nh_;
   ros::NodeHandle nhp_;
 
+  ros::Publisher joint_states_pub_;  
   ros::Publisher servo_states_pub_;
+  ros::Publisher servo_target_states_pub_;
+  ros::Publisher gimbal_states_pub_;
+  ros::Publisher gimbal_target_states_pub_;
   ros::Publisher mujoco_control_input_pub_;
   ros::Publisher joint_profile_pub_;
   ros::Subscriber uav_info_sub_;
+  ros::Subscriber servo_target_states_debug_sub_;
   map<string, ros::Subscriber> servo_states_subs_;
   map<string, ros::Subscriber> servo_ctrl_subs_;
   map<string, ros::Subscriber> servo_torque_ctrl_subs_;
@@ -236,6 +257,9 @@ protected:
   map<string, vector<ros::Publisher> > servo_target_pos_sim_pubs_; // TODO: should be actionlib, trajectory controller
 
   map<string, ServoGroupHandler> servos_handler_;
+  using ServoErrorKey = std::pair<std::string, int>;
+  map<ServoErrorKey, uint8_t> servo_error_states_;
+  std::set<std::string> raw_limit_default_warned_servos_;
   double moving_check_rate_;
   double moving_angle_thresh_;
   bool send_init_joint_pose_;
@@ -244,6 +268,12 @@ protected:
   int send_init_joint_pose_cnt_;
 
   void servoStatesCallback(const spinal::ServoStatesConstPtr& state_msg, const std::string& servo_group_name);
+  void servoTargetStatesDebugCallback(const spinal::ServoControlCmdConstPtr& msg);
+  void publishServoStates(const ros::Time& stamp);
+  void publishServoAndGimbalTargetStates(const spinal::ServoControlCmdConstPtr& msg);
+  void publishGimbalStates(const ros::Time& stamp);
+  void reportServoErrorState(int servo_index, uint8_t error, const std::string& servo_group_name);
+  std::string servoErrorToString(uint8_t error) const;
   void servoCtrlCallback(const sensor_msgs::JointStateConstPtr& joints_ctrl_msg, const std::string& servo_group_name);
   void servoTorqueCtrlCallback(const sensor_msgs::JointStateConstPtr& joints_ctrl_msg, const std::string& servo_group_name);
   bool servoEnableCallback(std_srvs::SetBool::Request &req, std_srvs::SetBool::Response &res, const std::string& servo_group_name);

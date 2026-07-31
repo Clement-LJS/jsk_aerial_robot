@@ -39,6 +39,7 @@ public:
     servo_ctrl_sub_("servo/target_states", &DirectServo::servoControlCallback,this),
     servo_torque_ctrl_sub_("servo/torque_enable", &DirectServo::servoTorqueControlCallback,this),
     joint_profiles_sub_("joint_profiles", &DirectServo::jointProfilesCallback,this),
+    servo_target_state_pub_("servo/target_states_debug", &servo_target_state_msg_),
     servo_state_pub_("servo/states", &servo_state_msg_),
     servo_torque_state_pub_("servo/torque_states", &servo_torque_state_msg_),
     servo_config_srv_("direct_servo_config", &DirectServo::servoConfigCallback, this),
@@ -68,22 +69,30 @@ private:
   ros::Subscriber<spinal::ServoControlCmd, DirectServo> servo_ctrl_sub_;
   ros::Subscriber<spinal::ServoTorqueCmd, DirectServo> servo_torque_ctrl_sub_;
   ros::Subscriber<spinal::JointProfiles, DirectServo> joint_profiles_sub_;
+  ros::Publisher servo_target_state_pub_;
   ros::Publisher servo_state_pub_;
   ros::Publisher servo_torque_state_pub_;
 
   ros::ServiceServer<spinal::SetDirectServoConfig::Request, spinal::SetDirectServoConfig::Response, DirectServo> servo_config_srv_;
   ros::ServiceServer<spinal::GetBoardInfo::Request, spinal::GetBoardInfo::Response, DirectServo> board_info_srv_;
 
+  spinal::ServoControlCmd servo_target_state_msg_;
   spinal::ServoStates servo_state_msg_;
   spinal::ServoTorqueStates servo_torque_state_msg_;
   spinal::GetBoardInfo::Response board_info_res_;
 
+  uint32_t servo_target_last_pub_time_;
   uint32_t servo_last_pub_time_;
   uint32_t servo_torque_last_pub_time_;
+  uint8_t servo_target_indices_[MAX_SERVO_NUM];
+  int16_t servo_target_angles_[MAX_SERVO_NUM];
 
   void servoControlCallback(const spinal::ServoControlCmd& control_msg);
   void servoTorqueControlCallback(const spinal::ServoTorqueCmd& control_msg);
   void jointProfilesCallback(const spinal::JointProfiles& joint_prof_msg);
+  int32_t clampGoalPosition(uint8_t index, int32_t goal_pos);
+  bool radianToClampedGoalPosition(uint8_t index, float angle, int32_t& goal_pos);
+  void publishTargetStates(uint32_t now_time);
   
   void servoConfigCallback(const spinal::SetDirectServoConfig::Request& req, spinal::SetDirectServoConfig::Response& res);
   void boardInfoCallback(const spinal::GetBoardInfo::Request& req, spinal::GetBoardInfo::Response& res);
@@ -101,12 +110,18 @@ private:
 
   struct JointProf{
     uint8_t servo_id;
+    uint8_t type;
     int8_t angle_sgn;
     float angle_scale;
     int16_t zero_point_offset;
+    float lower_limit;
+    float upper_limit;
+    int32_t raw_lower_limit;
+    int32_t raw_upper_limit;
   };
 
   JointProf joint_profiles_[MAX_SERVO_NUM];
+  bool joint_profile_received_[MAX_SERVO_NUM];
 
 #if KONDO
   KondoServo servo_handler_;

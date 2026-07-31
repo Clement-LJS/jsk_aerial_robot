@@ -1185,6 +1185,7 @@ void AttitudeController::pwmConversion()
     }
 
 #else
+
   switch(gimbal_dof_)
     {
     case 2:

@@ -15,10 +15,11 @@
 #ifndef SIMULATION
 #include "config.h"
 #include <ros.h>
-#include <sensor_msgs/JointState.h>
 #else
 #include <ros/ros.h>
 #endif
+
+#include <sensor_msgs/JointState.h>
 
 #include <math/AP_Math.h>
 #include <vector>

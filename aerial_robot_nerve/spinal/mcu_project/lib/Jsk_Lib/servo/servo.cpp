@@ -10,6 +10,11 @@
 
 #define  SERVO_PUB_INTERVAL 20 // 50Hz
 #define SERVO_TORQUE_PUB_INTERVAL  1000 // 1Hz
+#define SERVO_TARGET_PUB_INTERVAL 20 // 50Hz
+#define DIRECT_SERVO_DEFAULT_RAW_LOWER_LIMIT 0
+#define DIRECT_SERVO_DEFAULT_RAW_UPPER_LIMIT 4095
+#define DIRECT_SERVO_DEFAULT_LOWER_LIMIT_RAD -1.50f
+#define DIRECT_SERVO_DEFAULT_UPPER_LIMIT_RAD 1.50f
 
 void DirectServo::init(UART_HandleTypeDef* huart,  ros::NodeHandle* nh, osMutexId* mutex = NULL) //TODO: support encoder
 {
@@ -26,6 +31,7 @@ void DirectServo::init(UART_HandleTypeDef* huart,  ros::NodeHandle* nh, osMutexI
   nh_->subscribe(servo_ctrl_sub_);
   nh_->subscribe(servo_torque_ctrl_sub_);
   nh_->subscribe(joint_profiles_sub_);
+  nh_->advertise(servo_target_state_pub_);
   nh_->advertise(servo_state_pub_);
   nh_->advertise(servo_torque_state_pub_);
   nh_->advertiseService(servo_config_srv_);
@@ -40,7 +46,27 @@ void DirectServo::init(UART_HandleTypeDef* huart,  ros::NodeHandle* nh, osMutexI
   servo_state_msg_.servos = new spinal::ServoState[actual_servo_num];
   servo_torque_state_msg_.torque_enable_length = actual_servo_num;
   servo_torque_state_msg_.torque_enable = new uint8_t[actual_servo_num];
+  servo_target_state_msg_.index_length = 0;
+  servo_target_state_msg_.index = servo_target_indices_;
+  servo_target_state_msg_.angles_length = 0;
+  servo_target_state_msg_.angles = servo_target_angles_;
 
+  for (unsigned int i = 0; i < MAX_SERVO_NUM; i++) {
+    joint_profiles_[i].servo_id = i;
+    joint_profiles_[i].type = spinal::JointProfile::GIMBAL;
+    joint_profiles_[i].angle_sgn = 1;
+    joint_profiles_[i].angle_scale = 0.001534f;
+    joint_profiles_[i].zero_point_offset = 2047;
+    joint_profiles_[i].lower_limit = DIRECT_SERVO_DEFAULT_LOWER_LIMIT_RAD;
+    joint_profiles_[i].upper_limit = DIRECT_SERVO_DEFAULT_UPPER_LIMIT_RAD;
+    joint_profiles_[i].raw_lower_limit = DIRECT_SERVO_DEFAULT_RAW_LOWER_LIMIT;
+    joint_profiles_[i].raw_upper_limit = DIRECT_SERVO_DEFAULT_RAW_UPPER_LIMIT;
+    joint_profile_received_[i] = false;
+    servo_target_indices_[i] = i;
+    servo_target_angles_[i] = 2047;
+  }
+
+  servo_target_last_pub_time_ = 0;
   servo_last_pub_time_ = 0;
   servo_torque_last_pub_time_ = 0;
 
@@ -50,9 +76,83 @@ void DirectServo::init(UART_HandleTypeDef* huart,  ros::NodeHandle* nh, osMutexI
   board_info_res_.boards[0].servos = new spinal::ServoInfo[servo_handler_.getServoNum()];
 }
 
+int32_t DirectServo::clampGoalPosition(uint8_t index, int32_t goal_pos)
+{
+  if (index >= MAX_SERVO_NUM) return goal_pos;
+
+  const JointProf& joint_prof = joint_profiles_[index];
+  const int32_t raw_lower =
+      joint_prof.raw_lower_limit < joint_prof.raw_upper_limit ?
+      joint_prof.raw_lower_limit : joint_prof.raw_upper_limit;
+  const int32_t raw_upper =
+      joint_prof.raw_lower_limit < joint_prof.raw_upper_limit ?
+      joint_prof.raw_upper_limit : joint_prof.raw_lower_limit;
+
+  if(joint_prof.angle_scale > 0.0f && joint_prof.angle_sgn != 0) {
+    int32_t min_mech_goal =
+      static_cast<int32_t>(joint_prof.lower_limit * joint_prof.angle_sgn / joint_prof.angle_scale +
+                           joint_prof.zero_point_offset);
+    int32_t max_mech_goal =
+      static_cast<int32_t>(joint_prof.upper_limit * joint_prof.angle_sgn / joint_prof.angle_scale +
+                           joint_prof.zero_point_offset);
+    if(min_mech_goal > max_mech_goal) {
+      int32_t tmp = min_mech_goal;
+      min_mech_goal = max_mech_goal;
+      max_mech_goal = tmp;
+    }
+
+    if(goal_pos < min_mech_goal) goal_pos = min_mech_goal;
+    else if(goal_pos > max_mech_goal) goal_pos = max_mech_goal;
+  }
+
+  if(goal_pos < raw_lower) return raw_lower;
+  if(goal_pos > raw_upper) return raw_upper;
+  return goal_pos;
+}
+
+bool DirectServo::radianToClampedGoalPosition(uint8_t index, float angle, int32_t& goal_pos)
+{
+  if(index >= MAX_SERVO_NUM) return false;
+  if(!joint_profile_received_[index]) {
+    nh_->logerror("Servo profile has not been received.");
+    return false;
+  }
+
+  const JointProf& joint_prof = joint_profiles_[index];
+  if(joint_prof.angle_scale <= 0.0f || joint_prof.angle_sgn == 0) {
+    nh_->logerror("Invalid Servo Joint Profile!");
+    return false;
+  }
+
+  float lower_limit = joint_prof.lower_limit;
+  float upper_limit = joint_prof.upper_limit;
+  if(lower_limit > upper_limit) {
+    float tmp = lower_limit;
+    lower_limit = upper_limit;
+    upper_limit = tmp;
+  }
+
+  if(angle > upper_limit) angle = upper_limit;
+  else if(angle < lower_limit) angle = lower_limit;
+
+  goal_pos = static_cast<int32_t>(angle * joint_prof.angle_sgn /
+                                  joint_prof.angle_scale +
+                                  joint_prof.zero_point_offset);
+  goal_pos = clampGoalPosition(index, goal_pos);
+  return true;
+}
+
+void DirectServo::publishTargetStates(uint32_t now_time)
+{
+  if(now_time - servo_target_last_pub_time_ < SERVO_TARGET_PUB_INTERVAL) return;
+  servo_target_state_pub_.publish(&servo_target_state_msg_);
+  servo_target_last_pub_time_ = now_time;
+}
+
 void DirectServo::update()
 {
   servo_handler_.update();
+  publishTargetStates(HAL_GetTick());
   sendData(true);
 }
 
@@ -119,7 +219,6 @@ void DirectServo::torqueEnable(const std::map<uint8_t, float>& servo_map)
 {
   for (auto servo : servo_map)
     {
-      JointProf joint_prof = joint_profiles_[servo.first];
       uint8_t index = servo.first;
       if(index >= servo_handler_.getServoNum())
         {
@@ -140,24 +239,36 @@ void DirectServo::torqueEnable(const std::map<uint8_t, float>& servo_map)
 
 void DirectServo::setGoalAngle(const std::map<uint8_t, float>& servo_map, uint8_t value_type)
 {
+  servo_target_state_msg_.index_length = 0;
+  servo_target_state_msg_.angles_length = 0;
+
   for (auto servo : servo_map)
     {
-      JointProf joint_prof = joint_profiles_[servo.first];
-      int32_t goal_pos;
-      if(value_type == ValueType::BIT){
-        goal_pos = static_cast<int32_t>(servo.second);
-      }else if(value_type == ValueType::RADIAN){
-        goal_pos = static_cast<int32_t>(servo.second*joint_prof.angle_sgn/joint_prof.angle_scale + joint_prof.zero_point_offset);
-      }
-
       uint8_t index = servo.first;
       if(index >= servo_handler_.getServoNum())
         {
           nh_->logerror("Invalid Servo ID!");
           return;
         }
+
+      int32_t goal_pos;
+      if(value_type == ValueType::BIT){
+        goal_pos = clampGoalPosition(index, static_cast<int32_t>(servo.second));
+      }else if(value_type == ValueType::RADIAN){
+        if(!radianToClampedGoalPosition(index, servo.second, goal_pos)) continue;
+      }else{
+        nh_->logerror("Invalid Servo Value Type!");
+        return;
+      }
+
       ServoData& s = servo_handler_.getServo()[index];
       s.setGoalPosition(goal_pos);
+      if(servo_target_state_msg_.index_length < MAX_SERVO_NUM) {
+        servo_target_indices_[servo_target_state_msg_.index_length] = index;
+        servo_target_angles_[servo_target_state_msg_.angles_length] = static_cast<int16_t>(goal_pos);
+        servo_target_state_msg_.index_length++;
+        servo_target_state_msg_.angles_length++;
+      }
       if (! s.torque_enable_) {
         s.torque_enable_ = true;
         servo_handler_.setTorque(index);
@@ -169,16 +280,25 @@ void DirectServo::setGoalAngle(const std::map<uint8_t, float>& servo_map, uint8_
 void DirectServo::servoControlCallback(const spinal::ServoControlCmd& control_msg)
 {
   if (control_msg.index_length != control_msg.angles_length) return;
+  servo_target_state_msg_.index_length = 0;
+  servo_target_state_msg_.angles_length = 0;
+
   for (unsigned int i = 0; i < control_msg.index_length; i++) {
     uint8_t index = control_msg.index[i];
     if(index >= servo_handler_.getServoNum())
       {
         nh_->logerror("Invalid Servo ID!");
         return;
-      }
+    }
     ServoData& s = servo_handler_.getServo()[index];
-    int32_t goal_pos = static_cast<int32_t>(control_msg.angles[i]);
+    int32_t goal_pos = clampGoalPosition(index, static_cast<int32_t>(control_msg.angles[i]));
     s.setGoalPosition(goal_pos);
+    if(servo_target_state_msg_.index_length < MAX_SERVO_NUM) {
+      servo_target_indices_[servo_target_state_msg_.index_length] = index;
+      servo_target_angles_[servo_target_state_msg_.angles_length] = static_cast<int16_t>(goal_pos);
+      servo_target_state_msg_.index_length++;
+      servo_target_state_msg_.angles_length++;
+    }
     if (! s.torque_enable_) {
       s.torque_enable_ = true;
       servo_handler_.setTorque(index);
@@ -358,9 +478,17 @@ void DirectServo::boardInfoCallback(const spinal::GetBoardInfo::Request& req, sp
 void DirectServo::jointProfilesCallback(const spinal::JointProfiles& joint_prof_msg)
 {
   for(unsigned int i = 0; i  < joint_prof_msg.joints_length; i++){
-    joint_profiles_[i].servo_id = joint_prof_msg.joints[i].servo_id;
-    joint_profiles_[i].angle_sgn = joint_prof_msg.joints[i].angle_sgn;
-    joint_profiles_[i].angle_scale = joint_prof_msg.joints[i].angle_scale;
-    joint_profiles_[i].zero_point_offset = joint_prof_msg.joints[i].zero_point_offset;
+    uint8_t servo_id = joint_prof_msg.joints[i].servo_id;
+    if(servo_id >= MAX_SERVO_NUM) continue;
+    joint_profiles_[servo_id].servo_id = servo_id;
+    joint_profiles_[servo_id].type = joint_prof_msg.joints[i].type;
+    joint_profiles_[servo_id].angle_sgn = joint_prof_msg.joints[i].angle_sgn;
+    joint_profiles_[servo_id].angle_scale = joint_prof_msg.joints[i].angle_scale;
+    joint_profiles_[servo_id].zero_point_offset = joint_prof_msg.joints[i].zero_point_offset;
+    joint_profiles_[servo_id].lower_limit = joint_prof_msg.joints[i].lower_limit;
+    joint_profiles_[servo_id].upper_limit = joint_prof_msg.joints[i].upper_limit;
+    joint_profiles_[servo_id].raw_lower_limit = joint_prof_msg.joints[i].raw_lower_limit;
+    joint_profiles_[servo_id].raw_upper_limit = joint_prof_msg.joints[i].raw_upper_limit;
+    joint_profile_received_[servo_id] = true;
   }
 }
