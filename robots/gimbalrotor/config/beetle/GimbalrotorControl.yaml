@@ -6,9 +6,25 @@ controller:
   gimbal_calc_in_fc : true
   wrench_estimate_flag : true
 
-  xy:
+  # Positive fixed-axis collective acceleration used only during
+  # perching servo-neutral takeoff. This is not a Z-position command.
+  perching_neutral_collective_acc: 9.80665
+
+  # Smoothly apply the collective term after entering neutral mode [s].
+  perching_neutral_collective_ramp_time: 1.5
+
+  x:
     p_gain: 10.0
     i_gain: 0.2
+    d_gain: 7.0
+    limit_sum: 4.0
+    limit_p: 12.0
+    limit_i: 5.0
+    limit_d: 12.0
+
+  y:
+    p_gain: 10.0
+    i_gain: 0.0 #0.2
     d_gain: 7.0
     limit_sum: 4.0
     limit_p: 12.0
@@ -48,7 +64,7 @@ controller:
 
   yaw:
     p_gain: 15.0
-    i_gain: 1.0
+    i_gain: 0.0 #1.0
     d_gain: 8.0
     limit_err_p: 0.4
     limit_sum: 20.0

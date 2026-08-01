@@ -9,6 +9,8 @@
 #error "Please define __cplusplus, because this is a c++ based file "
 #endif
 
+#include <algorithm>
+
 #include "flight_control/attitude/attitude_control.h"
 
 #ifdef SIMULATION
@@ -35,6 +37,7 @@ void AttitudeController::init(ros::NodeHandle* nh, StateEstimate* estimator)
   torque_allocation_matrix_inv_sub_ = nh_->subscribe("torque_allocation_matrix_inv", 1, &AttitudeController::torqueAllocationMatrixInvCallback, this);
   sim_vol_sub_ = nh_->subscribe("set_sim_voltage", 1, &AttitudeController::setSimVolCallback, this);
   offset_rot_sub_ = nh_->subscribe("desire_coordinate", 1, &AttitudeController::offsetRotCallback, this);
+  servo_neutral_mode_sub_ = nh_->subscribe("perching/servo_neutral_mode", 1, &AttitudeController::servoNeutralModeCallback, this);
   baseInit();
   gimbal_control_pub_ = nh_->advertise<sensor_msgs::JointState>("gimbals_ctrl", 1);
 }
@@ -52,6 +55,7 @@ AttitudeController::AttitudeController():
   p_matrix_pseudo_inverse_inertia_sub_("p_matrix_pseudo_inverse_inertia", &AttitudeController::pMatrixInertiaCallback, this),
   torque_allocation_matrix_inv_sub_("torque_allocation_matrix_inv", &AttitudeController::torqueAllocationMatrixInvCallback, this),
   offset_rot_sub_("desire_coordinate", &AttitudeController::offsetRotCallback, this ),
+  servo_neutral_mode_sub_("perching/servo_neutral_mode", &AttitudeController::servoNeutralModeCallback, this),
   att_control_srv_("set_attitude_control", &AttitudeController::setAttitudeControlCallback, this),
   esc_telem_pub_("esc_telem", &esc_telem_msg_)
 {
@@ -120,6 +124,7 @@ void AttitudeController::init(TIM_HandleTypeDef* htim1, TIM_HandleTypeDef* htim2
   nh_->subscribe(p_matrix_pseudo_inverse_inertia_sub_);
   nh_->subscribe(torque_allocation_matrix_inv_sub_);
   nh_->subscribe(offset_rot_sub_);
+  nh_->subscribe(servo_neutral_mode_sub_);
 
   nh_->advertiseService(att_control_srv_);
 
@@ -137,6 +142,7 @@ void AttitudeController::baseInit()
   start_control_flag_ = false;
   force_landing_flag_ = false;
   att_control_flag_ = true;
+  servo_neutral_mode_ = false;
 
   // pwm
   pwm_conversion_mode_ = -1;
@@ -321,14 +327,38 @@ void AttitudeController::update(void)
       ap::Vector3f angles; // euler angles
       rot.to_euler(&angles.x, &angles.y, &angles.z);
 
-      /* failsafe 3: too large tile angle */
-      if(!force_landing_flag_  && (fabs(angles[X]) > MAX_TILT_ANGLE || fabs(angles[Y]) > MAX_TILT_ANGLE))
+      const float pitch_tilt_limit =
+        servo_neutral_mode_
+          ? MAX_PERCHING_PITCH_ANGLE
+          : MAX_TILT_ANGLE;
+
+      const bool roll_tilt_exceeded =
+        fabs(angles[X]) > MAX_TILT_ANGLE;
+
+      const bool pitch_tilt_exceeded =
+        fabs(angles[Y]) > pitch_tilt_limit;
+
+      /*
+       * Before the first valid FourAxisCommand, failsafe_ is false. The robot may be
+       * armed while already perched at a large pitch, but the normal failsafes begin
+       * once the first control command is received.
+       */
+      if(failsafe_ &&
+         !force_landing_flag_ &&
+         (roll_tilt_exceeded ||
+          pitch_tilt_exceeded))
         {
 #ifdef SIMULATION
-          ROS_ERROR("failsafe: the roll pitch angles are too large, roll: %f (%f), pitch: %f (%f)",
-                    angles[X], MAX_TILT_ANGLE, angles[Y], MAX_TILT_ANGLE);
+          ROS_ERROR(
+              "failsafe: measured tilt too large, "
+              "roll: %f (limit %f), pitch: %f (limit %f), neutral: %d",
+              angles[X],
+              MAX_TILT_ANGLE,
+              angles[Y],
+              pitch_tilt_limit,
+              static_cast<int>(servo_neutral_mode_));
 #else
-          nh_->logerror("failsafe: the roll pitch angles are too large");
+          nh_->logerror("failsafe: measured tilt too large");
 #endif
           setForceLandingFlag(true);
           error_angle_i_[X] = 0;
@@ -890,6 +920,33 @@ void AttitudeController::offsetRotCallback(const spinal::DesireCoord& msg)
   offset_rot_.from_euler(msg.roll, msg.pitch, msg.yaw);
 }
 
+void AttitudeController::servoNeutralModeCallback(const std_msgs::Bool& msg)
+{
+#ifndef SIMULATION
+  if(mutex_ != NULL)
+    {
+      osMutexWait(*mutex_, osWaitForever);
+    }
+#endif
+
+  servo_neutral_mode_ = msg.data;
+
+  if(servo_neutral_mode_)
+    {
+      for(int i = 0; i < MAX_MOTOR_NUMBER; ++i)
+        {
+          target_gimbal_angles_[i] = 0.0f;
+        }
+    }
+
+#ifndef SIMULATION
+  if(mutex_ != NULL)
+    {
+      osMutexRelease(*mutex_);
+    }
+#endif
+}
+
 bool AttitudeController::activated()
 {
   /* uav model check and motor property */
@@ -1114,17 +1171,25 @@ void AttitudeController::pwmConversion()
                 f_i.x = target_thrust_[i*3];
                 f_i.y = target_thrust_[i*3+1];
                 f_i.z = target_thrust_[i*3+2];
-            
-                float gimbal_candidate_roll = atan2f(-f_i.y, f_i.z);
-                float gimbal_candidate_pitch = atan2f(f_i.x, -f_i.y * sin(gimbal_candidate_roll) + f_i.z * cos(gimbal_candidate_roll));
-                target_thrust_[i] = ap::pythagorous3(f_i.x,f_i.y,f_i.z);
 
-                /* simple lpf */
-                if(std::isfinite(gimbal_candidate_roll) && std::isfinite(gimbal_candidate_pitch)){
-                  target_gimbal_angles_[2*i] =(target_gimbal_angles_[2*i]+ gimbal_candidate_roll)/2;
-                  target_gimbal_angles_[2*i+1] =(target_gimbal_angles_[2*i+1]+ gimbal_candidate_pitch)/2;
-            
-                }
+                if(servo_neutral_mode_)
+                  {
+                    target_gimbal_angles_[2 * i] = 0.0f;
+                    target_gimbal_angles_[2 * i + 1] = 0.0f;
+                    target_thrust_[i] = std::max(0.0f, f_i.z);
+                  }
+                else
+                  {
+                    float gimbal_candidate_roll = atan2f(-f_i.y, f_i.z);
+                    float gimbal_candidate_pitch = atan2f(f_i.x, -f_i.y * sin(gimbal_candidate_roll) + f_i.z * cos(gimbal_candidate_roll));
+                    target_thrust_[i] = ap::pythagorous3(f_i.x,f_i.y,f_i.z);
+
+                    /* simple lpf */
+                    if(std::isfinite(gimbal_candidate_roll) && std::isfinite(gimbal_candidate_pitch)){
+                      target_gimbal_angles_[2*i] =(target_gimbal_angles_[2*i]+ gimbal_candidate_roll)/2;
+                      target_gimbal_angles_[2*i+1] =(target_gimbal_angles_[2*i+1]+ gimbal_candidate_pitch)/2;
+                    }
+                  }
                 break;
               }
             case 1:
@@ -1132,11 +1197,20 @@ void AttitudeController::pwmConversion()
                 ap::Vector3f f_i;
                 f_i.x = target_thrust_[i*2];
                 f_i.z = target_thrust_[i*2+1];
-                float gimbal_candidate = atan2f(-f_i.x, f_i.z);
-                target_thrust_[i] = ap::pythagorous2(f_i.x,f_i.z);
 
-                /* simple lpf */
-                if(std::isfinite(gimbal_candidate)) target_gimbal_angles_[i] =(target_gimbal_angles_[i]+ gimbal_candidate)/2;
+                if(servo_neutral_mode_)
+                  {
+                    target_gimbal_angles_[i] = 0.0f;
+                    target_thrust_[i] = std::max(0.0f, f_i.z);
+                  }
+                else
+                  {
+                    float gimbal_candidate = atan2f(-f_i.x, f_i.z);
+                    target_thrust_[i] = ap::pythagorous2(f_i.x,f_i.z);
+
+                    /* simple lpf */
+                    if(std::isfinite(gimbal_candidate)) target_gimbal_angles_[i] =(target_gimbal_angles_[i]+ gimbal_candidate)/2;
+                  }
 
                 break;
               }
@@ -1164,8 +1238,8 @@ void AttitudeController::pwmConversion()
         sensor_msgs::JointState gimbal_control_msg;
         gimbal_control_msg.header.stamp = ros::Time::now();
         for(int i = 0; i < motor_number_ / (rotor_coef_); i++){
-          gimbal_control_msg.position.push_back(target_gimbal_angles_[2*i]);
-          gimbal_control_msg.position.push_back(target_gimbal_angles_[2*i+1]);
+          gimbal_control_msg.position.push_back(servo_neutral_mode_ ? 0.0f : target_gimbal_angles_[2*i]);
+          gimbal_control_msg.position.push_back(servo_neutral_mode_ ? 0.0f : target_gimbal_angles_[2*i+1]);
         }
         gimbal_control_pub_.publish(gimbal_control_msg);    
         break;
@@ -1175,7 +1249,7 @@ void AttitudeController::pwmConversion()
         sensor_msgs::JointState gimbal_control_msg;
         gimbal_control_msg.header.stamp = ros::Time::now();
         for(int i = 0; i < motor_number_ / (rotor_coef_); i++){
-          gimbal_control_msg.position.push_back(target_gimbal_angles_[i]);
+          gimbal_control_msg.position.push_back(servo_neutral_mode_ ? 0.0f : target_gimbal_angles_[i]);
         }
         gimbal_control_pub_.publish(gimbal_control_msg);
         break;
@@ -1192,7 +1266,7 @@ void AttitudeController::pwmConversion()
       {
         std::map<uint8_t, float> gimbal_map;
         for(int i = 0; i < motor_number_ / (rotor_coef_); i++){
-          if(start_control_flag_)
+          if(start_control_flag_ && !servo_neutral_mode_)
             {
               gimbal_map[2*i] =  target_gimbal_angles_[2*i];
               gimbal_map[2*i+1] = target_gimbal_angles_[2*i+1];
@@ -1213,7 +1287,7 @@ void AttitudeController::pwmConversion()
       {
         std::map<uint8_t, float> gimbal_map;
         for(int i = 0; i < motor_number_ / (rotor_coef_); i++){
-          if(start_control_flag_)
+          if(start_control_flag_ && !servo_neutral_mode_)
             gimbal_map[i] = target_gimbal_angles_[i];
           else
             gimbal_map[i] = 0;

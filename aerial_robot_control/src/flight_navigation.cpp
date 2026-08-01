@@ -411,15 +411,7 @@ void BaseNavigator::joyStickControl(const sensor_msgs::JoyConstPtr & joy_msg)
   /* landing */
   if(joy_cmd.buttons[JOY_BUTTON_CROSS_RIGHT] == 1 && joy_cmd.buttons[JOY_BUTTON_ACTION_SQUARE] == 1)
     {
-      if(force_att_control_flag_) return;
-
-      if(getNaviState() == LAND_STATE) return;
-      if(!teleop_flag_) return; /* can not do the process if other processs are running */
-
-      setNaviState(LAND_STATE);
-      //update
-      ROS_INFO("Joy Control: Land state");
-
+      startLanding();
       return;
     }
 
@@ -744,13 +736,22 @@ void BaseNavigator::update()
 
             ROS_INFO("expected land height: %f (current height: %f), velocity: %f ", land_height_, curr_pos.z(), vel);
 
-            if (fabs(delta) < land_pos_convergent_thresh_ &&
-                vel > -land_vel_convergent_thresh_)
-              {
-                ROS_INFO("\n \n ======================  \n Land !!! \n ====================== \n");
-                ROS_INFO("Start disarming motors");
-                setNaviState(STOP_STATE);
-              }
+           /* 
+            * Permit only a very small upward estimator tolerance.
+            * Do not declare landing while the robot is meaningfully rising.
+            */
+            const double maximum_landing_upward_velocity = 0.01;  // m/s
+
+            if(fabs(delta) < land_pos_convergent_thresh_ && vel > -land_vel_convergent_thresh_ && vel <= maximum_landing_upward_velocity)
+            {
+              ROS_INFO(
+                "\n \n ======================  "
+                "\n Land !!! "
+                "\n ====================== \n");
+
+              ROS_INFO("Start disarming motors");
+              setNaviState(STOP_STATE);
+            }
             else
               {
                 // not staedy, update the land height
@@ -1149,4 +1150,3 @@ void BaseNavigator::rosParamInit()
   getParam<double>(bat_nh, "bat_resistance_voltage_rate", bat_resistance_voltage_rate_, 0.0); //Battery internal resistance_voltage_rate
   getParam<double>(bat_nh, "hovering_current", hovering_current_, 0.0); // current at hovering state
 }
-

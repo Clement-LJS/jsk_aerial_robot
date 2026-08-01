@@ -1380,6 +1380,7 @@ preparePerchingAdmittanceInput()
 
 void GimbalrotorPerchingAdmittanceController::controlCore()
 {
+  const bool servo_neutral_mode = perching_servo_neutral_mode_;
   bool effective_enabled = false;
   bool reset_requested = false;
   bool perching_active = false;
@@ -1396,6 +1397,27 @@ void GimbalrotorPerchingAdmittanceController::controlCore()
     std::lock_guard<std::mutex> lock(perching_state_mutex_);
     perching_active = perching_enabled_for_constraint_;
 
+    if(servo_neutral_mode)
+    {
+      const bool had_active_admittance_state =
+          perching_admittance_enabled_ ||
+          contact_active_ ||
+          recovery_active_ ||
+          effective_admittance_enabled_;
+
+      /*
+       * Takeoff and landing must use the exact navigator pitch/arc target.
+       * A compliance offset would make target position and pitch inconsistent.
+       */
+      perching_admittance_enabled_ = false;
+      resetContactGateUnsafe();
+
+      if(had_active_admittance_state)
+      {
+        admittance_reset_requested_ = true;
+      }
+    }
+
     if(recovery_active_ && recoveryComplete())
     {
       recovery_active_ = false;
@@ -1407,7 +1429,8 @@ void GimbalrotorPerchingAdmittanceController::controlCore()
     }
   }
 
-  if(perching_active)
+  if(perching_active &&
+     !servo_neutral_mode)
   {
     preparePerchingAdmittanceInput();
   }
@@ -1416,6 +1439,7 @@ void GimbalrotorPerchingAdmittanceController::controlCore()
     std::lock_guard<std::mutex> lock(perching_state_mutex_);
 
     suppress_pitch_i_limit =
+        !servo_neutral_mode &&
         perching_enabled_for_constraint_ &&
         perching_admittance_enabled_ &&
         (contact_active_ || recovery_active_);
@@ -1435,6 +1459,7 @@ void GimbalrotorPerchingAdmittanceController::controlCore()
        *   - recovery: zero-input admittance + PID.
        */
       effective_enabled =
+          !servo_neutral_mode &&
           perching_admittance_enabled_ &&
           has_locked_pose_ &&
           equilibrium_wrench_ready_ &&

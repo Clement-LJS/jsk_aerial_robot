@@ -21,6 +21,10 @@ GimbalrotorPerchingNavigator::GimbalrotorPerchingNavigator():
   perching_enable_(false),
   perching_locked_(false),
   perching_lock_once_(true),
+  perching_takeoff_transition_active_(false),
+  perching_takeoff_fault_(false),
+  perching_takeoff_stability_active_(false),
+  perching_landing_transition_active_(false),
 
   require_branch_point_(true),
   command_pitch_as_delta_(false),
@@ -35,11 +39,24 @@ GimbalrotorPerchingNavigator::GimbalrotorPerchingNavigator():
 
   min_valid_radius_(0.05),
   max_pitch_delta_(0.78539816339),  // 45 deg
+  perching_takeoff_max_pitch_delta_(1.57079632679),
   arc_pitch_sign_(1.0),
   command_pitch_sign_(1.0),
   y_compliance_deadband_(0.03),
+  perching_takeoff_target_pitch_(0.0),
+  perching_takeoff_pitch_command_rate_(0.2617993878),
+  perching_takeoff_pitch_tolerance_(0.0872664626),  // 5 deg
+  perching_takeoff_pitch_rate_tolerance_(0.15),
+  perching_takeoff_stable_duration_(0.30),
+  perching_servo_neutral_settle_duration_(0.8),
+  perching_takeoff_timeout_(8.0),
+  active_perching_takeoff_timeout_(8.0),
+  perching_takeoff_commanded_pitch_(0.0),
+  perching_landing_descend_vel_(-0.05),
+  default_land_descend_vel_(0.0),
 
   pivot_source_("manual"),
+  perching_takeoff_target_pitch_frame_("world"),
 
   perching_enable_topic_("perching/enable"),
   branch_pose_topic_("perching/branch_pose"),
@@ -48,6 +65,7 @@ GimbalrotorPerchingNavigator::GimbalrotorPerchingNavigator():
   relock_topic_("perching/relock"),
   reset_topic_("perching/reset"),
   manual_pitch_delta_topic_("perching/manual_pitch_delta"),
+  servo_neutral_mode_topic_("perching/servo_neutral_mode"),
 
   has_branch_pose_(false),
   has_perching_point_(false),
@@ -56,8 +74,13 @@ GimbalrotorPerchingNavigator::GimbalrotorPerchingNavigator():
   active_target_pitch_(0.0),
 
   locked_radius_(0.0),
+  locked_radius_pitch_arc_angle_(0.0),
+  locked_pitch_to_radius_angle_offset_(0.0),
   locked_y_offset_(0.0),
-  locked_x_side_(1.0)
+  locked_x_side_(1.0),
+  previous_navi_state_(ARM_OFF_STATE),
+  perching_takeoff_last_command_time_(0),
+  perching_landing_start_time_(0)
 {
   branch_pos_world_.setValue(0.0, 0.0, 0.0);
   perching_point_world_.setValue(0.0, 0.0, 0.0);
@@ -68,6 +91,10 @@ GimbalrotorPerchingNavigator::GimbalrotorPerchingNavigator():
   locked_robot_rpy_.setValue(0.0, 0.0, 0.0);
   locked_pivot_world_.setValue(0.0, 0.0, 0.0);
   locked_radius_vec_world_.setValue(0.0, 0.0, 0.0);
+  validated_takeoff_target_pitch_ = 0.0;
+  validated_takeoff_target_position_.setValue(0.0, 0.0, 0.0);
+  takeoff_fault_hold_position_.setValue(0.0, 0.0, 0.0);
+  takeoff_fault_hold_rpy_.setValue(0.0, 0.0, 0.0);
 }
 
 void GimbalrotorPerchingNavigator::initialize(
@@ -91,15 +118,26 @@ void GimbalrotorPerchingNavigator::initialize(
       &GimbalrotorPerchingNavigator::manualPitchDeltaCallback,
       this);
 
+  ros::NodeHandle teleop_nh(nh_, "teleop_command");
+  takeoff_sub_.shutdown();
+  takeoff_sub_ = teleop_nh.subscribe("takeoff", 1, &GimbalrotorPerchingNavigator::perchingTakeoffCallback, this);
+
+  land_sub_.shutdown();
+  land_sub_ = teleop_nh.subscribe("land", 1, &GimbalrotorPerchingNavigator::perchingLandCallback, this);
+
   locked_pose_pub_ = nh_.advertise<geometry_msgs::PoseStamped>("perching/locked_pose", 1, true);
   locked_pivot_pub_ = nh_.advertise<geometry_msgs::PointStamped>(locked_pivot_topic_, 1, true);
   commanded_pose_pub_ = nh_.advertise<geometry_msgs::PoseStamped>("perching/commanded_pose", 1);
+  perching_enable_pub_ = nh_.advertise<std_msgs::Bool>(perching_enable_topic_, 1, true);
+  servo_neutral_mode_pub_ = nh_.advertise<std_msgs::Bool>(servo_neutral_mode_topic_, 1, true);
 
   ROS_WARN("[GimbalrotorPerchingNavigator] initialized");
   ROS_WARN("[GimbalrotorPerchingNavigator] enable topic: %s", perching_enable_topic_.c_str());
   ROS_WARN("[GimbalrotorPerchingNavigator] branch pose topic: %s", branch_pose_topic_.c_str());
   ROS_WARN("[GimbalrotorPerchingNavigator] perching point topic: %s", perching_point_topic_.c_str());
   ROS_WARN("[GimbalrotorPerchingNavigator] manual pitch delta topic: %s", manual_pitch_delta_topic_.c_str());
+  ROS_WARN("[GimbalrotorPerchingNavigator] servo neutral mode topic: %s", servo_neutral_mode_topic_.c_str());
+  previous_navi_state_ = getNaviState();
 }
 
 void GimbalrotorPerchingNavigator::rosParamInit()
@@ -134,9 +172,23 @@ void GimbalrotorPerchingNavigator::rosParamInit()
 
   getParam<double>(navi_nh, "perching_min_valid_radius", min_valid_radius_, 0.05);
   getParam<double>(navi_nh, "perching_max_pitch_delta", max_pitch_delta_, 0.78539816339);
+  getParam<double>(navi_nh, "perching_takeoff_max_pitch_delta", perching_takeoff_max_pitch_delta_, 1.57079632679);
   getParam<double>(navi_nh, "perching_arc_pitch_sign", arc_pitch_sign_, 1.0);
   getParam<double>(navi_nh, "perching_command_pitch_sign", command_pitch_sign_, 1.0);
   getParam<double>(navi_nh, "perching_y_compliance_deadband", y_compliance_deadband_, 0.03);
+  getParam<double>(navi_nh, "perching_takeoff_target_pitch", perching_takeoff_target_pitch_, 0.0);
+  getParam<double>(navi_nh, "perching_takeoff_pitch_command_rate", perching_takeoff_pitch_command_rate_, 0.2617993878);
+  getParam<double>(navi_nh, "perching_takeoff_pitch_tolerance", perching_takeoff_pitch_tolerance_, 0.0872664626);
+  getParam<double>(navi_nh, "perching_takeoff_pitch_rate_tolerance", perching_takeoff_pitch_rate_tolerance_, 0.15);
+  getParam<double>(navi_nh, "perching_takeoff_stable_duration", perching_takeoff_stable_duration_, 0.30);
+  getParam<double>(navi_nh, "perching_servo_neutral_settle_duration", perching_servo_neutral_settle_duration_, 0.8);
+  getParam<double>(navi_nh, "perching_takeoff_timeout", perching_takeoff_timeout_, 8.0);
+  getParam<double>(navi_nh, "perching_landing_descend_vel", perching_landing_descend_vel_, -0.05);
+  getParam<std::string>(
+      navi_nh,
+      "perching_takeoff_target_pitch_frame",
+      perching_takeoff_target_pitch_frame_,
+      std::string("world"));
 
   getParam<std::string>(navi_nh, "perching_pivot_source", pivot_source_, std::string("hand_center"));
 
@@ -163,20 +215,139 @@ void GimbalrotorPerchingNavigator::rosParamInit()
    */
   getParam<std::string>(navi_nh, "perching_manual_pitch_delta_topic", manual_pitch_delta_topic_, "perching/manual_pitch_delta");
   getParam<std::string>(navi_nh, "perching_locked_pivot_topic", locked_pivot_topic_, "perching/locked_pivot");
+  getParam<std::string>(navi_nh, "perching_servo_neutral_mode_topic", servo_neutral_mode_topic_, "perching/servo_neutral_mode");
+
+  if(!std::isfinite(perching_takeoff_pitch_command_rate_) || perching_takeoff_pitch_command_rate_ <= 0.0)
+    perching_takeoff_pitch_command_rate_ = 0.2617993878;
+  if(!std::isfinite(perching_takeoff_pitch_tolerance_) || perching_takeoff_pitch_tolerance_ <= 0.0)
+    perching_takeoff_pitch_tolerance_ = 0.0872664626;
+  if(!std::isfinite(perching_takeoff_pitch_rate_tolerance_) || perching_takeoff_pitch_rate_tolerance_ <= 0.0)
+    perching_takeoff_pitch_rate_tolerance_ = 0.15;
+  if(!std::isfinite(perching_takeoff_stable_duration_) || perching_takeoff_stable_duration_ < 0.0)
+    perching_takeoff_stable_duration_ = 0.30;
+  if(!std::isfinite(perching_servo_neutral_settle_duration_) || perching_servo_neutral_settle_duration_ < 0.0)
+    perching_servo_neutral_settle_duration_ = 0.8;
+  if(!std::isfinite(perching_takeoff_timeout_) || perching_takeoff_timeout_ <= 0.0)
+    perching_takeoff_timeout_ = 8.0;
+  if(perching_takeoff_target_pitch_frame_.empty())
+    perching_takeoff_target_pitch_frame_ = "world";
+  if(!std::isfinite(perching_takeoff_max_pitch_delta_) ||
+     perching_takeoff_max_pitch_delta_ <= 0.0 ||
+     perching_takeoff_max_pitch_delta_ > PI)
+  {
+    ROS_WARN(
+        "[GimbalrotorPerchingNavigator] "
+        "invalid perching_takeoff_max_pitch_delta %.6f; "
+        "using 1.57079632679 rad",
+        perching_takeoff_max_pitch_delta_);
+    perching_takeoff_max_pitch_delta_ = 1.57079632679;
+  }
+  if(!std::isfinite(perching_landing_descend_vel_) || perching_landing_descend_vel_ >= 0.0)
+    perching_landing_descend_vel_ = -0.05;
+  if(servo_neutral_mode_topic_.empty()) servo_neutral_mode_topic_ = "perching/servo_neutral_mode";
 }
 
 void GimbalrotorPerchingNavigator::update()
 {
-  if(perching_enable_ && active_perching_hold_enable_)
+  synchronizePerchingTransitionsWithNaviState();
+
+  if((perching_takeoff_transition_active_ ||
+      perching_takeoff_fault_) &&
+     getNaviState() == TAKEOFF_STATE)
+  {
+    /*
+     * Prevent BaseNavigator's generic takeoff convergence timer from changing
+     * to HOVER_STATE before the custom pitch and pitch-rate conditions pass.
+     */
+    hover_convergent_start_time_ = ros::Time::now().toSec();
+  }
+
+  if(perching_takeoff_transition_active_)
+  {
+    updatePerchingTakeoffTransition();
+  }
+
+  /* Handles both an old fault and one latched immediately above. */
+  if(perching_takeoff_fault_)
+  {
+    publishServoNeutralMode(true);
+
+    if(perching_landing_transition_active_ ||
+       getNaviState() == LAND_STATE)
+    {
+      if(perching_landing_transition_active_)
+      {
+        updatePerchingLandingTransition();
+      }
+
+      GimbalrotorNavigator::update();
+    }
+    else
+    {
+      holdPerchingTakeoffFaultTarget();
+      GimbalrotorNavigator::update();
+      holdPerchingTakeoffFaultTarget();
+    }
+
+    if(getNaviState() == HOVER_STATE)
+    {
+      setNaviState(TAKEOFF_STATE);
+    }
+
+    synchronizePerchingTransitionsWithNaviState();
+    publishServoNeutralMode(true);
+    return;
+  }
+
+  if(perching_landing_transition_active_)
+  {
+    updatePerchingLandingTransition();
+  }
+
+  if(perching_enable_ &&
+     active_perching_hold_enable_ &&
+     !perching_takeoff_transition_active_ &&
+     !perching_takeoff_fault_ &&
+     !perching_landing_transition_active_ &&
+     getNaviState() != LAND_STATE)
   {
     applyActivePerchingTarget();
   }
 
   GimbalrotorNavigator::update();
+
+  if(perching_takeoff_transition_active_ &&
+     getNaviState() == HOVER_STATE)
+  {
+    /*
+     * A custom takeoff or latched fault must remain in TAKEOFF_STATE.
+     * Successful completion clears the transition flag before setting HOVER.
+     */
+    setNaviState(TAKEOFF_STATE);
+  }
+
+  synchronizePerchingTransitionsWithNaviState();
 }
 
 void GimbalrotorPerchingNavigator::perchingEnableCallback(const std_msgs::BoolConstPtr& msg)
 {
+  if(!msg->data && perching_takeoff_transition_active_)
+  {
+    latchPerchingTakeoffFault("perching was externally disabled during takeoff");
+    return;
+  }
+
+  if(!msg->data && perching_takeoff_fault_)
+  {
+    ROS_ERROR_THROTTLE(
+        1.0,
+        "[GimbalrotorPerchingNavigator] "
+        "perching disable ignored while takeoff fault is latched; "
+        "use perching/reset after checking the robot");
+    publishServoNeutralMode(true);
+    return;
+  }
+
   perching_enable_ = msg->data;
 
   if(perching_enable_)
@@ -195,6 +366,86 @@ void GimbalrotorPerchingNavigator::perchingEnableCallback(const std_msgs::BoolCo
   {
     ROS_WARN("[GimbalrotorPerchingNavigator] perching DISABLED");
     has_active_pitch_target_ = false;
+  }
+}
+
+void GimbalrotorPerchingNavigator::perchingTakeoffCallback(const std_msgs::EmptyConstPtr& msg)
+{
+  (void)msg;
+  startTakeoff();
+}
+
+void GimbalrotorPerchingNavigator::startTakeoff()
+{
+  if(!perching_enable_)
+  {
+    GimbalrotorNavigator::startTakeoff();
+    return;
+  }
+
+  if(force_att_control_flag_)
+  {
+    ROS_ERROR(
+        "[GimbalrotorPerchingNavigator] "
+        "perching takeoff rejected in forced attitude-control mode");
+    return;
+  }
+
+  if(!teleop_flag_)
+  {
+    ROS_ERROR(
+        "[GimbalrotorPerchingNavigator] "
+        "perching takeoff rejected because teleoperation is disabled");
+    return;
+  }
+
+  if(getNaviState() != ARM_ON_STATE)
+  {
+    ROS_ERROR(
+        "[GimbalrotorPerchingNavigator] "
+        "perching takeoff requires ARM_ON_STATE; current state is %u",
+        static_cast<unsigned int>(getNaviState()));
+    return;
+  }
+
+  startPerchingTakeoffTransition();
+}
+
+void GimbalrotorPerchingNavigator::perchingLandCallback(const std_msgs::EmptyConstPtr& msg)
+{
+  (void)msg;
+  startLanding();
+}
+
+void GimbalrotorPerchingNavigator::startLanding()
+{
+  if(force_att_control_flag_) return;
+  if(getNaviState() == LAND_STATE) return;
+  if(!teleop_flag_) return;
+
+  if(!shouldUsePerchingLanding())
+  {
+    GimbalrotorNavigator::startLanding();
+    return;
+  }
+
+  const bool neutral_already_active =
+      perching_takeoff_transition_active_ ||
+      perching_takeoff_fault_ ||
+      getNaviState() == TAKEOFF_STATE;
+
+  if(!startPerchingLandingTransition())
+  {
+    return;
+  }
+
+  if(neutral_already_active)
+  {
+    /*
+     * Takeoff/fault mode already holds the gimbals at zero, so no additional
+     * landing settling delay is required.
+     */
+    GimbalrotorNavigator::startLanding();
   }
 }
 
@@ -220,11 +471,31 @@ void GimbalrotorPerchingNavigator::relockCallback(const std_msgs::EmptyConstPtr&
 {
   (void)msg;
 
+  if(transitionProtected())
+  {
+    ROS_ERROR(
+        "[GimbalrotorPerchingNavigator] "
+        "perching relock rejected during takeoff, landing, or "
+        "a latched takeoff fault");
+
+    publishServoNeutralMode(true);
+    return;
+  }
+
   perching_locked_ = false;
   locked_radius_ = 0.0;
-  locked_radius_vec_world_.setValue(0.0, 0.0, 0.0);
+  locked_radius_vec_world_.setValue(
+      0.0,
+      0.0,
+      0.0);
 
-  tryLockPerching("manual relock");
+  if(!tryLockPerching("manual relock"))
+  {
+    ROS_ERROR(
+        "[GimbalrotorPerchingNavigator] "
+        "manual perching relock failed");
+    return;
+  }
 
   active_target_pitch_ = locked_robot_rpy_.y();
   has_active_pitch_target_ = false;
@@ -233,13 +504,48 @@ void GimbalrotorPerchingNavigator::relockCallback(const std_msgs::EmptyConstPtr&
 void GimbalrotorPerchingNavigator::resetCallback(const std_msgs::EmptyConstPtr& msg)
 {
   (void)msg;
+
+  if(transitionProtected() &&
+     getNaviState() != ARM_OFF_STATE)
+  {
+    ROS_ERROR(
+        "[GimbalrotorPerchingNavigator] "
+        "perching reset rejected while the robot is armed and a "
+        "takeoff/landing transition or takeoff fault is active; "
+        "halt and wait for ARM_OFF_STATE before resetting");
+
+    publishServoNeutralMode(true);
+    return;
+  }
+
   resetPerchingLock();
+}
+
+bool GimbalrotorPerchingNavigator::transitionProtected() const
+{
+  return
+      perching_takeoff_transition_active_ ||
+      perching_takeoff_fault_ ||
+      perching_landing_transition_active_;
 }
 
 void GimbalrotorPerchingNavigator::resetPerchingLock()
 {
+  perching_takeoff_fault_ = false;
+  perching_takeoff_stability_active_ = false;
+  perching_takeoff_stability_start_time_ = ros::Time(0);
+  active_perching_takeoff_timeout_ = perching_takeoff_timeout_;
+  perching_takeoff_commanded_pitch_ = 0.0;
+  perching_takeoff_last_command_time_ = ros::Time(0);
+
+  stopPerchingTakeoffTransition(false);
+  stopPerchingLandingTransition();
+  publishServoNeutralMode(false);
+
   perching_locked_ = false;
   locked_radius_ = 0.0;
+  locked_radius_pitch_arc_angle_ = 0.0;
+  locked_pitch_to_radius_angle_offset_ = 0.0;
   locked_y_offset_ = 0.0;
   locked_x_side_ = 1.0;
 
@@ -254,8 +560,630 @@ void GimbalrotorPerchingNavigator::resetPerchingLock()
   ROS_WARN("[GimbalrotorPerchingNavigator] perching lock reset");
 }
 
+bool GimbalrotorPerchingNavigator::startPerchingTakeoffTransition()
+{
+  if(perching_takeoff_fault_)
+  {
+    ROS_ERROR(
+        "[GimbalrotorPerchingNavigator] "
+        "takeoff rejected because a previous fault is latched");
+    publishServoNeutralMode(true);
+    return false;
+  }
+
+  if(perching_takeoff_transition_active_) return true;
+  if(!perching_enable_)
+  {
+    ROS_ERROR(
+        "[GimbalrotorPerchingNavigator] "
+        "perching takeoff requested while perching is disabled");
+    return false;
+  }
+
+  if(getNaviState() != ARM_ON_STATE)
+  {
+    ROS_ERROR(
+        "[GimbalrotorPerchingNavigator] "
+        "perching takeoff can start only from ARM_ON_STATE");
+    return false;
+  }
+
+  publishServoNeutralMode(true);
+
+  if(!perching_locked_ && !tryLockPerching("perching takeoff"))
+  {
+    latchPerchingTakeoffFault("failed to establish the perching pivot");
+    return false;
+  }
+
+  double validated_pitch = 0.0;
+  tf::Vector3 validated_position;
+  if(!validatePerchingTakeoffTarget(validated_pitch, validated_position))
+  {
+    latchPerchingTakeoffFault("invalid or mechanically unreachable takeoff target");
+    return false;
+  }
+
+  validated_takeoff_target_pitch_ = validated_pitch;
+  validated_takeoff_target_position_ = validated_position;
+  perching_takeoff_commanded_pitch_ = locked_robot_rpy_.y();
+  perching_takeoff_last_command_time_ = ros::Time::now();
+
+  const double takeoff_pitch_distance =
+      std::fabs(
+          normalizeAngle(
+              validated_takeoff_target_pitch_ -
+              locked_robot_rpy_.y()));
+
+  const double expected_motion_time =
+      takeoff_pitch_distance /
+      perching_takeoff_pitch_command_rate_;
+
+  active_perching_takeoff_timeout_ =
+      std::max(
+          perching_takeoff_timeout_,
+          perching_servo_neutral_settle_duration_ +
+          expected_motion_time +
+          perching_takeoff_stable_duration_ +
+          2.0);
+  trajectory_mode_ = false;
+
+  perching_takeoff_transition_active_ = true;
+  perching_landing_transition_active_ = false;
+  perching_takeoff_stability_active_ = false;
+  perching_takeoff_start_time_ = ros::Time::now();
+  perching_takeoff_stability_start_time_ = ros::Time(0);
+  has_active_pitch_target_ = true;
+  active_target_pitch_ = locked_robot_rpy_.y();
+
+  setTargetPos(locked_robot_pos_world_);
+  setTargetZeroVel();
+  setTargetZeroAcc();
+  setTargetRPY(locked_robot_rpy_);
+  setTargetZeroOmega();
+  setTargetZeroAngAcc();
+  hover_convergent_start_time_ = ros::Time::now().toSec();
+
+  ROS_WARN(
+      "[GimbalrotorPerchingNavigator] "
+      "perching takeoff started: target frame '%s', target command %.2f deg, "
+      "resolved pitch %.2f deg, target position [%.3f, %.3f, %.3f]",
+      perching_takeoff_target_pitch_frame_.c_str(),
+      perching_takeoff_target_pitch_ * 180.0 / PI,
+      validated_takeoff_target_pitch_ * 180.0 / PI,
+      validated_takeoff_target_position_.x(),
+      validated_takeoff_target_position_.y(),
+      validated_takeoff_target_position_.z());
+  ROS_WARN(
+      "[GimbalrotorPerchingNavigator] "
+      "perching takeoff active timeout %.2f s",
+      active_perching_takeoff_timeout_);
+
+  return true;
+}
+
+bool GimbalrotorPerchingNavigator::validatePerchingTakeoffTarget(
+    double& validated_pitch,
+    tf::Vector3& validated_position) const
+{
+  if(!perching_locked_)
+  {
+    ROS_ERROR(
+        "[GimbalrotorPerchingNavigator] "
+        "cannot validate takeoff target without a perching lock");
+    return false;
+  }
+
+  const double resolved_target_pitch =
+      resolveTakeoffTargetPitch();
+  const double requested_delta =
+      normalizeAngle(resolved_target_pitch - locked_robot_rpy_.y());
+  if(!std::isfinite(requested_delta))
+  {
+    ROS_ERROR(
+        "[GimbalrotorPerchingNavigator] "
+        "takeoff pitch delta is not finite");
+    return false;
+  }
+
+  if(std::fabs(requested_delta) > perching_takeoff_max_pitch_delta_ + 1.0e-6)
+  {
+    ROS_ERROR(
+        "[GimbalrotorPerchingNavigator] "
+        "takeoff requires %.2f deg rotation, but "
+        "perching_takeoff_max_pitch_delta allows only %.2f deg",
+        std::fabs(requested_delta) * 180.0 / PI,
+        perching_takeoff_max_pitch_delta_ * 180.0 / PI);
+    return false;
+  }
+
+  validated_pitch = normalizeAngle(locked_robot_rpy_.y() + requested_delta);
+  validated_position = computeArcPositionFromPitchWithLimit(
+      validated_pitch,
+      perching_takeoff_max_pitch_delta_);
+
+  return std::isfinite(validated_pitch) &&
+         std::isfinite(validated_position.x()) &&
+         std::isfinite(validated_position.y()) &&
+         std::isfinite(validated_position.z());
+}
+
+void GimbalrotorPerchingNavigator::latchPerchingTakeoffFault(const std::string& reason)
+{
+  perching_takeoff_fault_ = true;
+  perching_takeoff_transition_active_ = false;
+  perching_takeoff_stability_active_ = false;
+  perching_takeoff_stability_start_time_ = ros::Time(0);
+
+  takeoff_fault_hold_position_ = getCurrentRobotPos();
+  takeoff_fault_hold_rpy_ = getCurrentRobotRPY();
+
+  has_active_pitch_target_ = true;
+  active_target_pitch_ = takeoff_fault_hold_rpy_.y();
+
+  publishServoNeutralMode(true);
+  holdPerchingTakeoffFaultTarget();
+
+  ROS_ERROR(
+      "[GimbalrotorPerchingNavigator] "
+      "PERCHING TAKEOFF FAULT: %s. "
+      "Servo-neutral mode remains active until perching/reset.",
+      reason.c_str());
+}
+
+void GimbalrotorPerchingNavigator::holdPerchingTakeoffFaultTarget()
+{
+  setTargetPos(takeoff_fault_hold_position_);
+  setTargetZeroVel();
+  setTargetZeroAcc();
+  setTargetRPY(takeoff_fault_hold_rpy_);
+  setTargetZeroOmega();
+  setTargetZeroAngAcc();
+  publishServoNeutralMode(true);
+}
+
+void GimbalrotorPerchingNavigator::rebasePerchingLockAtTakeoffTarget()
+{
+  locked_robot_pos_world_ = validated_takeoff_target_position_;
+
+  locked_robot_rpy_ = getCurrentRobotRPY();
+  locked_robot_rpy_.setY(validated_takeoff_target_pitch_);
+
+  locked_radius_vec_world_ = locked_robot_pos_world_ - locked_pivot_world_;
+
+  locked_radius_ = norm2D(
+      locked_radius_vec_world_.x(),
+      locked_radius_vec_world_.z());
+  locked_radius_pitch_arc_angle_ =
+      computeRadiusPitchArcAngle(
+          locked_radius_vec_world_);
+  locked_pitch_to_radius_angle_offset_ =
+      normalizeAngle(
+          locked_robot_rpy_.y() -
+          locked_radius_pitch_arc_angle_);
+
+  locked_y_offset_ =
+      locked_robot_pos_world_.y() -
+      locked_pivot_world_.y();
+
+  locked_x_side_ =
+      locked_radius_vec_world_.x() >= 0.0
+          ? 1.0
+          : -1.0;
+
+  has_active_pitch_target_ = true;
+  active_target_pitch_ = validated_takeoff_target_pitch_;
+
+  publishLockedDebugPose();
+  publishLockedPivot();
+}
+
+void GimbalrotorPerchingNavigator::stopPerchingTakeoffTransition(bool transition_completed)
+{
+  perching_takeoff_transition_active_ = false;
+  perching_takeoff_stability_active_ = false;
+  perching_takeoff_stability_start_time_ = ros::Time(0);
+
+  if(perching_takeoff_fault_)
+  {
+    publishServoNeutralMode(true);
+    return;
+  }
+
+  if(transition_completed)
+  {
+    rebasePerchingLockAtTakeoffTarget();
+
+    setTargetPos(locked_robot_pos_world_);
+    setTargetZeroVel();
+    setTargetZeroAcc();
+
+    setTargetRPY(locked_robot_rpy_);
+    setTargetZeroOmega();
+    setTargetZeroAngAcc();
+
+    setNaviState(HOVER_STATE);
+    publishServoNeutralMode(false);
+
+    ROS_WARN(
+      "[GimbalrotorPerchingNavigator] "
+      "perching takeoff target reached; "
+      "normal gimbal vectoring restored while perching remains enabled");
+    return;
+  }
+
+  if(perching_landing_transition_active_)
+  {
+    publishServoNeutralMode(true);
+  }
+  else
+  {
+    publishServoNeutralMode(false);
+  }
+}
+
+void GimbalrotorPerchingNavigator::updatePerchingTakeoffTransition()
+{
+  if(perching_takeoff_fault_)
+  {
+    holdPerchingTakeoffFaultTarget();
+    return;
+  }
+
+  publishServoNeutralMode(true);
+
+  if(!perching_locked_)
+  {
+    latchPerchingTakeoffFault("perching lock was lost during takeoff");
+    return;
+  }
+
+  const ros::Time now = ros::Time::now();
+  const double elapsed = (now - perching_takeoff_start_time_).toSec();
+  if(!std::isfinite(elapsed) ||
+     elapsed < 0.0 ||
+     elapsed > active_perching_takeoff_timeout_)
+  {
+    latchPerchingTakeoffFault(
+        "perching takeoff timeout or invalid timing");
+    return;
+  }
+
+  if(getNaviState() == ARM_ON_STATE)
+  {
+    setTargetPos(locked_robot_pos_world_);
+    setTargetZeroVel();
+    setTargetZeroAcc();
+    setTargetRPY(locked_robot_rpy_);
+    setTargetZeroOmega();
+    setTargetZeroAngAcc();
+
+    if(elapsed <
+       perching_servo_neutral_settle_duration_)
+    {
+      return;
+    }
+
+    hover_convergent_start_time_ = ros::Time::now().toSec();
+    
+    applyPerchingTakeoffTargetDirectly();
+
+    setNaviState(TAKEOFF_STATE);
+    return;
+  }
+
+  if(getNaviState() != TAKEOFF_STATE)
+  {
+    if(getNaviState() == LAND_STATE && perching_landing_transition_active_)
+    {
+      perching_takeoff_transition_active_ = false;
+      perching_takeoff_stability_active_ = false;
+
+      perching_takeoff_stability_start_time_ = ros::Time(0);
+
+      return;
+    }
+
+    latchPerchingTakeoffFault("navigation left ARM_ON_STATE/TAKEOFF_STATE during perching takeoff");
+    return;
+  }
+
+  applyPerchingTakeoffTargetDirectly();
+
+  const double current_pitch = getCurrentRobotRPY().y();
+  const double current_pitch_rate = estimator_->getAngularVel(Frame::COG, estimate_mode_).y();
+  const bool pitch_command_reached =
+      std::fabs(
+          normalizeAngle(
+              perching_takeoff_commanded_pitch_ -
+              validated_takeoff_target_pitch_)) <=
+      1.0e-4;
+  const double pitch_error = normalizeAngle(current_pitch - validated_takeoff_target_pitch_);
+  const bool pitch_reached = std::fabs(pitch_error) <= perching_takeoff_pitch_tolerance_;
+  const bool pitch_rate_low = std::fabs(current_pitch_rate) <= perching_takeoff_pitch_rate_tolerance_;
+
+  if(!(pitch_command_reached &&
+       pitch_reached &&
+       pitch_rate_low))
+  {
+    perching_takeoff_stability_active_ = false;
+    perching_takeoff_stability_start_time_ = ros::Time(0);
+    return;
+  }
+
+  if(!perching_takeoff_stability_active_)
+  {
+    perching_takeoff_stability_active_ = true;
+    perching_takeoff_stability_start_time_ = now;
+    return;
+  }
+
+  const double stable_duration = (now - perching_takeoff_stability_start_time_).toSec();
+  if(stable_duration >= perching_takeoff_stable_duration_)
+  {
+    stopPerchingTakeoffTransition(true);
+  }
+}
+
+void GimbalrotorPerchingNavigator::applyPerchingTakeoffTargetDirectly()
+{
+  if(!perching_locked_ ||
+     !perching_takeoff_transition_active_ ||
+     perching_takeoff_fault_)
+  {
+    return;
+  }
+
+  const ros::Time now = ros::Time::now();
+
+  double dt =
+      (now -
+       perching_takeoff_last_command_time_).toSec();
+
+  if(!std::isfinite(dt) ||
+     dt < 0.0)
+  {
+    dt = 0.0;
+  }
+
+  dt =
+      std::min(
+          dt,
+          0.1);
+
+  perching_takeoff_last_command_time_ =
+      now;
+
+  const double remaining_pitch =
+      normalizeAngle(
+          validated_takeoff_target_pitch_ -
+          perching_takeoff_commanded_pitch_);
+
+  const double max_pitch_step =
+      perching_takeoff_pitch_command_rate_ *
+      dt;
+
+  const double pitch_step =
+      clamp(
+          remaining_pitch,
+          -max_pitch_step,
+          max_pitch_step);
+
+  perching_takeoff_commanded_pitch_ =
+      normalizeAngle(
+          perching_takeoff_commanded_pitch_ +
+          pitch_step);
+
+  const tf::Vector3 commanded_position =
+      computeArcPositionFromPitchWithLimit(
+          perching_takeoff_commanded_pitch_,
+          perching_takeoff_max_pitch_delta_);
+
+  has_active_pitch_target_ = true;
+  active_target_pitch_ = perching_takeoff_commanded_pitch_;
+
+  setTargetPos(commanded_position);
+  setTargetZeroVel();
+  setTargetZeroAcc();
+  setTargetPitch(perching_takeoff_commanded_pitch_);
+  setTargetZeroOmega();
+  setTargetZeroAngAcc();
+
+  publishCommandedDebugPose(
+      commanded_position,
+      perching_takeoff_commanded_pitch_);
+}
+
+bool GimbalrotorPerchingNavigator::startPerchingLandingTransition()
+{
+  if(perching_landing_transition_active_)
+  {
+    publishServoNeutralMode(true);
+    return true;
+  }
+
+  perching_landing_transition_active_ = true;
+  perching_landing_start_time_ = ros::Time::now();
+
+  if(perching_takeoff_transition_active_)
+  {
+    stopPerchingTakeoffTransition(false);
+  }
+
+  default_land_descend_vel_ = land_descend_vel_;
+  land_descend_vel_ = perching_landing_descend_vel_;
+
+  publishServoNeutralMode(true);
+
+  ROS_WARN(
+      "[GimbalrotorPerchingNavigator] "
+      "perching landing neutral settling started; "
+      "descend velocity %.3f m/s",
+      land_descend_vel_);
+  return true;
+}
+
+void GimbalrotorPerchingNavigator::stopPerchingLandingTransition()
+{
+  if(perching_landing_transition_active_)
+  {
+    land_descend_vel_ = default_land_descend_vel_;
+  }
+
+  perching_landing_transition_active_ = false;
+  perching_landing_start_time_ = ros::Time(0);
+
+  if(perching_takeoff_fault_)
+  {
+    publishServoNeutralMode(true);
+  }
+  else if(!perching_takeoff_transition_active_)
+  {
+    publishServoNeutralMode(false);
+  }
+}
+
+void GimbalrotorPerchingNavigator::updatePerchingLandingTransition()
+{
+  publishServoNeutralMode(true);
+
+  const uint8_t state = getNaviState();
+
+  if(state == LAND_STATE ||
+     state == STOP_STATE ||
+     state == ARM_OFF_STATE)
+  {
+    return;
+  }
+
+  if(state == HOVER_STATE)
+  {
+    applyActivePerchingTarget();
+  }
+  else if(state == ARM_ON_STATE)
+  {
+    setTargetPos(locked_robot_pos_world_);
+    setTargetZeroVel();
+    setTargetZeroAcc();
+    setTargetRPY(locked_robot_rpy_);
+    setTargetZeroOmega();
+    setTargetZeroAngAcc();
+  }
+  else if(state == TAKEOFF_STATE)
+  {
+    GimbalrotorNavigator::startLanding();
+    return;
+  }
+  else
+  {
+    ROS_ERROR_THROTTLE(
+        1.0,
+        "[GimbalrotorPerchingNavigator] "
+        "unexpected navigation state %u during landing neutral settling",
+        static_cast<unsigned int>(state));
+    return;
+  }
+
+  const double elapsed =
+      (ros::Time::now() - perching_landing_start_time_).toSec();
+
+  if(!std::isfinite(elapsed) || elapsed < 0.0)
+  {
+    ROS_ERROR_THROTTLE(
+        1.0,
+        "[GimbalrotorPerchingNavigator] "
+        "invalid perching landing settling time");
+    return;
+  }
+
+  if(elapsed < perching_servo_neutral_settle_duration_)
+  {
+    return;
+  }
+
+  GimbalrotorNavigator::startLanding();
+}
+
+bool GimbalrotorPerchingNavigator::shouldUsePerchingTakeoff() const
+{
+  return perching_enable_;
+}
+
+bool GimbalrotorPerchingNavigator::shouldUsePerchingLanding() const
+{
+  return perching_enable_;
+}
+
+void GimbalrotorPerchingNavigator::publishPerchingEnable(bool enable)
+{
+  std_msgs::Bool msg;
+  msg.data = enable;
+  perching_enable_pub_.publish(msg);
+}
+
+void GimbalrotorPerchingNavigator::publishServoNeutralMode(bool enable)
+{
+  std_msgs::Bool msg;
+  msg.data = enable;
+  servo_neutral_mode_pub_.publish(msg);
+}
+
+void GimbalrotorPerchingNavigator::synchronizePerchingTransitionsWithNaviState()
+{
+  const uint8_t current_state =
+      getNaviState();
+
+  if(current_state == previous_navi_state_)
+  {
+    if(perching_landing_transition_active_ &&
+       current_state == STOP_STATE)
+    {
+      publishServoNeutralMode(true);
+    }
+
+    return;
+  }
+
+  if(current_state == LAND_STATE &&
+     shouldUsePerchingLanding())
+  {
+    startPerchingLandingTransition();
+  }
+
+  if(perching_landing_transition_active_)
+  {
+    if(current_state == ARM_OFF_STATE)
+    {
+      stopPerchingLandingTransition();
+    }
+    else if(previous_navi_state_ == LAND_STATE &&
+            current_state == HOVER_STATE)
+    {
+      stopPerchingLandingTransition();
+    }
+    else
+    {
+      publishServoNeutralMode(true);
+    }
+  }
+
+  previous_navi_state_ =
+      current_state;
+}
+
 void GimbalrotorPerchingNavigator::manualPitchDeltaCallback(const std_msgs::Float64ConstPtr& msg)
 {
+  if(transitionProtected())
+  {
+    ROS_WARN_THROTTLE(
+        1.0,
+        "[GimbalrotorPerchingNavigator] "
+        "manual pitch delta ignored during takeoff, landing, "
+        "or a latched takeoff fault");
+
+    return;
+  }
+
   if(!perching_enable_)
   {
     ROS_WARN_THROTTLE(
@@ -286,11 +1214,11 @@ void GimbalrotorPerchingNavigator::manualPitchDeltaCallback(const std_msgs::Floa
 
   publishCommandedDebugPose(target_pos, target_pitch);
 
-  ROS_WARN_THROTTLE(
-      0.5,
-      "[GimbalrotorPerchingNavigator] manual pitch delta %.3f deg -> target pitch %.3f deg",
-      delta_pitch * 180.0 / PI,
-      target_pitch * 180.0 / PI);
+  // ROS_WARN_THROTTLE(
+  //     0.5,
+  //     "[GimbalrotorPerchingNavigator] manual pitch delta %.3f deg -> target pitch %.3f deg",
+  //     delta_pitch * 180.0 / PI,
+  //     target_pitch * 180.0 / PI);
 }
 
 bool GimbalrotorPerchingNavigator::tryLockPerching(const std::string& reason)
@@ -354,6 +1282,10 @@ bool GimbalrotorPerchingNavigator::tryLockPerching(const std::string& reason)
    *   locked_pivot_world_ is /perching/point or /perching/branch_pose.
    */
   locked_radius_ = norm2D(locked_radius_vec_world_.x(), locked_radius_vec_world_.z());
+  locked_radius_pitch_arc_angle_ =
+      computeRadiusPitchArcAngle(locked_radius_vec_world_);
+  locked_pitch_to_radius_angle_offset_ =
+      normalizeAngle(locked_robot_rpy_.y() - locked_radius_pitch_arc_angle_);
 
   if(locked_radius_ < min_valid_radius_)
   {
@@ -398,6 +1330,10 @@ bool GimbalrotorPerchingNavigator::tryLockPerching(const std::string& reason)
            locked_robot_rpy_.z() * 180.0 / PI);
   ROS_WARN("[GimbalrotorPerchingNavigator] pitch-plane radius: %.3f m",
            locked_radius_);
+  ROS_WARN("[GimbalrotorPerchingNavigator] locked radius pitch-arc angle deg: %.2f",
+           locked_radius_pitch_arc_angle_ * 180.0 / PI);
+  ROS_WARN("[GimbalrotorPerchingNavigator] locked body-minus-arc pitch offset deg: %.2f",
+           locked_pitch_to_radius_angle_offset_ * 180.0 / PI);
   ROS_WARN("[GimbalrotorPerchingNavigator] locked pivot-relative Y offset: %.3f m",
            locked_y_offset_);
   ROS_WARN("[GimbalrotorPerchingNavigator] Y compliance deadband: %.3f m",
@@ -490,6 +1426,72 @@ tf::Vector3 GimbalrotorPerchingNavigator::computeHandPerchingCenterWorldFromBase
   const tf::Matrix3x3 baselink_rot_world = getCurrentBaselinkRot();
 
   return baselink_pos_world + baselink_rot_world * hand_perching_center_offset_baselink_;
+}
+
+double GimbalrotorPerchingNavigator::computeRadiusPitchArcAngle(
+    const tf::Vector3& radius_vec_world) const
+{
+  const double radius_xz =
+      norm2D(radius_vec_world.x(), radius_vec_world.z());
+
+  if(radius_xz < 1.0e-6)
+  {
+    return 0.0;
+  }
+
+  return std::atan2(-radius_vec_world.z(), radius_vec_world.x());
+}
+
+double GimbalrotorPerchingNavigator::resolveTakeoffTargetPitch() const
+{
+  if(perching_takeoff_target_pitch_frame_ == "world" ||
+     perching_takeoff_target_pitch_frame_ == "world_absolute")
+  {
+    return normalizeAngle(perching_takeoff_target_pitch_);
+  }
+
+  if(perching_takeoff_target_pitch_frame_ == "locked" ||
+     perching_takeoff_target_pitch_frame_ == "locked_relative")
+  {
+    return normalizeAngle(
+        locked_robot_rpy_.y() +
+        perching_takeoff_target_pitch_);
+  }
+
+  if(perching_takeoff_target_pitch_frame_ == "pivot_arc" ||
+     perching_takeoff_target_pitch_frame_ == "perch_arc" ||
+     perching_takeoff_target_pitch_frame_ == "perch_horizontal")
+  {
+    if(!std::isfinite(arc_pitch_sign_) ||
+       std::fabs(arc_pitch_sign_) < 1.0e-6)
+    {
+      ROS_ERROR_THROTTLE(
+          1.0,
+          "[GimbalrotorPerchingNavigator] "
+          "invalid perching_arc_pitch_sign %.6f",
+          arc_pitch_sign_);
+
+      return normalizeAngle(
+          perching_takeoff_target_pitch_);
+    }
+
+    const double arc_delta =
+        normalizeAngle(
+            perching_takeoff_target_pitch_ -
+            locked_radius_pitch_arc_angle_);
+
+    return normalizeAngle(
+        locked_robot_rpy_.y() +
+        arc_delta / arc_pitch_sign_);
+  }
+
+  ROS_WARN_THROTTLE(
+      1.0,
+      "[GimbalrotorPerchingNavigator] unknown perching_takeoff_target_pitch_frame '%s'; "
+      "falling back to world-absolute semantics",
+      perching_takeoff_target_pitch_frame_.c_str());
+
+  return normalizeAngle(perching_takeoff_target_pitch_);
 }
 
 bool GimbalrotorPerchingNavigator::isManualPivotMode() const
@@ -797,6 +1799,15 @@ tf::Vector3 GimbalrotorPerchingNavigator::getCurrentRobotRPY() const
 
 tf::Vector3 GimbalrotorPerchingNavigator::computeArcPositionFromPitch(double target_pitch) const
 {
+  return computeArcPositionFromPitchWithLimit(
+      target_pitch,
+      max_pitch_delta_);
+}
+
+tf::Vector3 GimbalrotorPerchingNavigator::computeArcPositionFromPitchWithLimit(
+    double target_pitch,
+    double pitch_delta_limit) const
+{
   /*
    * Hand-center pitch arc.
    *
@@ -818,7 +1829,7 @@ tf::Vector3 GimbalrotorPerchingNavigator::computeArcPositionFromPitch(double tar
    *   C is NOT the branch mocap origin.
    */
   double delta_pitch = normalizeAngle(target_pitch - locked_robot_rpy_.y());
-  delta_pitch = clamp(delta_pitch, -max_pitch_delta_, max_pitch_delta_);
+  delta_pitch = clamp(delta_pitch, -pitch_delta_limit, pitch_delta_limit);
 
   const double signed_delta = arc_pitch_sign_ * delta_pitch;
 

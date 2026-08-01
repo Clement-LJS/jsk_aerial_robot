@@ -42,6 +42,7 @@
 #include "state_estimate/state_estimate.h"
 
 #include <std_msgs/UInt8.h>
+#include <std_msgs/Bool.h>
 #include <std_msgs/Float32.h>
 #include <std_msgs/Float32MultiArray.h>
 #include <std_srvs/SetBool.h>
@@ -62,6 +63,12 @@
 /* fail safe */
 #define FLIGHT_COMMAND_TIMEOUT 500 //500ms
 #define MAX_TILT_ANGLE 1.0f // rad
+/*
+ * Servo-neutral perching takeoff may intentionally begin near +/-90 deg pitch.
+ * 1.658062789 rad = 95 deg, providing a small margin above the configured
+ * 90-degree navigation limit.
+ */
+#define MAX_PERCHING_PITCH_ANGLE 1.658062789f
 #define MAX_PWM 1.0f // duty
 
 #define CONTROL_TERM_PUB_INTERVAL 100
@@ -136,6 +143,7 @@ private:
   ros::Subscriber torque_allocation_matrix_inv_sub_;
   ros::Subscriber sim_vol_sub_;
   ros::Subscriber offset_rot_sub_;
+  ros::Subscriber servo_neutral_mode_sub_;
   ros::Publisher anti_gyro_pub_;
   ros::Publisher gimbal_control_pub_;
   ros::ServiceServer att_control_srv_;
@@ -152,6 +160,7 @@ private:
   ros::Subscriber<spinal::PMatrixPseudoInverseWithInertia, AttitudeController> p_matrix_pseudo_inverse_inertia_sub_;
   ros::Subscriber<spinal::TorqueAllocationMatrixInv, AttitudeController> torque_allocation_matrix_inv_sub_;
   ros::Subscriber<spinal::DesireCoord, AttitudeController> offset_rot_sub_;
+  ros::Subscriber<std_msgs::Bool, AttitudeController> servo_neutral_mode_sub_;
   ros::ServiceServer<std_srvs::SetBool::Request, std_srvs::SetBool::Response, AttitudeController> att_control_srv_;
 
   ros::Publisher esc_telem_pub_;
@@ -179,6 +188,7 @@ private:
   bool integrate_flag_;
   bool force_landing_flag_;
   bool att_control_flag_;
+  bool servo_neutral_mode_;
 
 
   float target_angle_[3];
@@ -233,6 +243,7 @@ private:
   void pMatrixInertiaCallback(const spinal::PMatrixPseudoInverseWithInertia& msg);
   void torqueAllocationMatrixInvCallback(const spinal::TorqueAllocationMatrixInv& msg);
   void offsetRotCallback(const spinal::DesireCoord& msg);
+  void servoNeutralModeCallback(const std_msgs::Bool& msg);
 
   void thrustGainMapping();
   void maxYawGainIndex();

@@ -80,6 +80,48 @@ navigation:
   perching_active_hold_enable: true
   perching_y_compliance_deadband: 0.03
 
+  # Takeoff target frame:
+  # world/world_absolute:
+  #   perching_takeoff_target_pitch is absolute body pitch in world [rad].
+  # locked/locked_relative:
+  #   perching_takeoff_target_pitch is added to locked body pitch [rad].
+  # pivot_arc/perch_arc/perch_horizontal:
+  #   perching_takeoff_target_pitch is the desired pivot-to-robot arc angle [rad].
+  #   0.0 means the locked pivot-to-robot radius becomes horizontal in world, which
+  #   is usually the correct release condition when the body itself is not horizontal.
+  perching_takeoff_target_pitch_frame: world
+
+  # Desired takeoff target within the frame above [rad].
+  perching_takeoff_target_pitch: 0.0
+
+  # Rate limit for the commanded body-pitch transition [rad/s].
+  # 0.2617993878 = 15 deg/s.
+  perching_takeoff_pitch_command_rate: 0.1745329252  # 10 deg/s
+
+  # Maximum pendulum rotation allowed only during perching takeoff [rad].
+  # 1.57079632679 = 90 deg, allowing a vertical hanging pose to reach horizontal.
+  # This does not change the normal 30 deg cutting/navigation limit.
+  perching_takeoff_max_pitch_delta: 1.57079632679
+
+  # Existing pitch completion tolerance [rad].
+  # 0.0872664626 = 5 deg.
+  perching_takeoff_pitch_tolerance: 0.0872664626
+
+  # The robot must not merely pass quickly through the target pitch [rad/s].
+  perching_takeoff_pitch_rate_tolerance: 0.15
+
+  # Pitch and pitch-rate conditions must remain valid for this duration [s].
+  perching_takeoff_stable_duration: 0.30
+
+  # Allow the neutral command to reach Spinal and the servos before arc motion [s].
+  perching_servo_neutral_settle_duration: 0.8
+
+  # Timeout must latch a safe fault; it must not restore normal vectoring [s].
+  perching_takeoff_timeout: 8.0
+
+  # Slow perching landing velocity [m/s].
+  perching_landing_descend_vel: -0.05
+
   perching_accept_uav_nav_pitch_command: false
   perching_manual_pitch_delta_topic: perching/manual_pitch_delta
   
@@ -95,3 +137,8 @@ navigation:
   # Perching admittance controller uses this so both navigator and controller
   # use exactly the same pivot.
   perching_locked_pivot_topic: perching/locked_pivot
+
+  # Controller uses this topic to force temporary servo-neutral / underactuated mode
+  # during perching takeoff and perching landing.
+  perching_servo_neutral_mode_topic: perching/servo_neutral_mode
+  perching_pivot_wrench_frame_id: perching_pivot

@@ -1,3 +1,5 @@
+#include <algorithm>
+
 #include <gimbalrotor/control/gimbalrotor_controller.h>
 
 using namespace std;
@@ -7,6 +9,13 @@ namespace aerial_robot_control
   GimbalrotorController::GimbalrotorController():
     PoseLinearController()
   {
+    perching_servo_neutral_mode_ = false;
+    previous_perching_servo_neutral_mode_ = false;
+    previous_perching_takeoff_collective_active_ = false;
+    perching_servo_neutral_mode_topic_ = "perching/servo_neutral_mode";
+    perching_neutral_collective_acc_ = 9.80665;
+    perching_neutral_collective_ramp_time_ = 0.8;
+    perching_neutral_enter_time_ = ros::Time(0);
   }
 
   void GimbalrotorController::initialize(ros::NodeHandle nh, ros::NodeHandle nhp,
@@ -34,12 +43,16 @@ namespace aerial_robot_control
     rpy_gain_pub_ = nh_.advertise<spinal::RollPitchYawTerms>("rpy/gain", 1);
     torque_allocation_matrix_inv_pub_ = nh_.advertise<spinal::TorqueAllocationMatrixInv>("torque_allocation_matrix_inv", 1);
     gimbal_dof_pub_ = nh_.advertise<std_msgs::UInt8>("gimbal_dof", 1);
+    perching_servo_neutral_mode_sub_ =
+      nh_.subscribe(perching_servo_neutral_mode_topic_, 1, &GimbalrotorController::perchingServoNeutralModeCallback, this);
   }
 
   void GimbalrotorController::reset()
   {
     PoseLinearController::reset();
 
+    previous_perching_takeoff_collective_active_ = false;
+    perching_neutral_enter_time_ = ros::Time(0);
     setAttitudeGains();
   }
 
@@ -50,6 +63,23 @@ namespace aerial_robot_control
     getParam<bool>(control_nh, "gimbal_calc_in_fc", gimbal_calc_in_fc_, true);
     getParam<bool>(control_nh, "hovering_approximate", hovering_approximate_, false);
     getParam<bool>(control_nh, "underactuate", underactuate_, false);
+    getParam<double>(control_nh, "perching_neutral_collective_acc", perching_neutral_collective_acc_, 9.80665);
+    getParam<double>(control_nh, "perching_neutral_collective_ramp_time", perching_neutral_collective_ramp_time_, 0.8);
+
+    ros::NodeHandle navi_nh(nh_, "navigation");
+    getParam<std::string>(navi_nh, "perching_servo_neutral_mode_topic", perching_servo_neutral_mode_topic_, std::string("perching/servo_neutral_mode"));
+
+    if(!std::isfinite(perching_neutral_collective_acc_) ||
+       perching_neutral_collective_acc_ <= 0.0)
+      {
+        perching_neutral_collective_acc_ = 9.80665;
+      }
+
+    if(!std::isfinite(perching_neutral_collective_ramp_time_) ||
+       perching_neutral_collective_ramp_time_ < 0.0)
+      {
+        perching_neutral_collective_ramp_time_ = 0.8;
+      }
   }
 
   bool GimbalrotorController::update()
@@ -64,9 +94,59 @@ namespace aerial_robot_control
     return PoseLinearController::update();
   }
 
-  void GimbalrotorController::controlCore()
+void GimbalrotorController::controlCore()
+{
+  PoseLinearController::controlCore();
+
+  /*
+   * Servo-neutral mode is used during both perching takeoff and perching landing.
+   * The dedicated positive collective ramp must be active only during the actual perching TAKEOFF_STATE.
+   */
+  const bool perching_takeoff_collective_active =
+    perching_servo_neutral_mode_ &&
+    navigator_->getNaviState() ==
+      aerial_robot_navigation::TAKEOFF_STATE;
+
+  const bool entering_perching_takeoff_collective = perching_takeoff_collective_active && !previous_perching_takeoff_collective_active_;
+
+  if(entering_perching_takeoff_collective)
   {
-    PoseLinearController::controlCore();
+    perching_neutral_enter_time_ = ros::Time::now();
+
+    ROS_WARN(
+      "[GimbalrotorController] "
+      "perching takeoff collective ramp started");
+  }
+
+  if(!perching_takeoff_collective_active)
+  {
+    /*
+     * Clear the takeoff ramp timer in ARM_ON, HOVER, LAND,
+     * STOP and ARM_OFF states.
+     */
+    perching_neutral_enter_time_ = ros::Time(0);
+  }
+
+  previous_perching_takeoff_collective_active_ = perching_takeoff_collective_active;
+
+  const bool leaving_servo_neutral_mode = previous_perching_servo_neutral_mode_ && !perching_servo_neutral_mode_;
+
+    if(perching_servo_neutral_mode_ || leaving_servo_neutral_mode)
+      {
+        /*
+         * X and Y are unavailable in fixed-axis mode.
+         * Prevent unavailable-axis integral windup and a vectoring kick when
+         * normal gimbal control resumes.
+         */
+        pid_controllers_.at(X).setErrI(0.0);
+        pid_controllers_.at(Y).setErrI(0.0);
+      }
+
+    previous_perching_servo_neutral_mode_ =
+      perching_servo_neutral_mode_;
+
+    const bool effective_underactuate = underactuate_;
+    const bool use_yaw_aligned_translation = underactuate_;
     tf::Matrix3x3 uav_rot = estimator_->getOrientation(Frame::COG, estimate_mode_);
     tf::Vector3 target_acc_w(pid_controllers_.at(X).result(),
                              pid_controllers_.at(Y).result(),
@@ -75,8 +155,10 @@ namespace aerial_robot_control
     tf::Vector3 target_acc_cog = uav_rot.inverse() * target_acc_w;
     Eigen::VectorXd target_wrench_acc_cog = Eigen::VectorXd::Zero(6);
 
-    if(underactuate_) target_wrench_acc_cog.head(3) = Eigen::Vector3d(target_acc_dash.x(), target_acc_dash.y(), target_acc_dash.z());
-    else target_wrench_acc_cog.head(3) = Eigen::Vector3d(target_acc_cog.x(), target_acc_cog.y(), target_acc_cog.z());
+    if(use_yaw_aligned_translation)
+      target_wrench_acc_cog.head(3) = Eigen::Vector3d(target_acc_dash.x(), target_acc_dash.y(), target_acc_dash.z());
+    else
+      target_wrench_acc_cog.head(3) = Eigen::Vector3d(target_acc_cog.x(), target_acc_cog.y(), target_acc_cog.z());
 
     double target_ang_acc_x = pid_controllers_.at(ROLL).result();
     double target_ang_acc_y = pid_controllers_.at(PITCH).result();
@@ -161,8 +243,261 @@ namespace aerial_robot_control
     }
     integrated_map = full_q_mat * integrated_rot;
 
+    if(perching_servo_neutral_mode_)
+      {
+        const int fixed_axis_column = rotor_coef_ - 1;
+        const int virtual_force_num = motor_num_ * rotor_coef_;
+
+        Eigen::MatrixXd fixed_control_map = Eigen::MatrixXd::Zero(4, motor_num_);
+        for(int i = 0; i < motor_num_; ++i)
+          {
+            const int source_column = rotor_coef_ * i + fixed_axis_column;
+            fixed_control_map.col(i) = integrated_map.bottomRows(4).col(source_column);
+          }
+
+        const Eigen::MatrixXd fixed_control_map_inv =
+          aerial_robot_model::pseudoinverse(fixed_control_map);
+
+        if(fixed_control_map_inv.rows() != motor_num_ ||
+           fixed_control_map_inv.cols() != 4 ||
+           !fixed_control_map_inv.allFinite())
+          {
+            ROS_FATAL_THROTTLE(
+                1.0,
+                "[GimbalrotorController] "
+                "invalid fixed-axis allocation in servo-neutral mode");
+
+            target_vectoring_f_trans_ = Eigen::VectorXd::Zero(virtual_force_num);
+            target_vectoring_f_rot_ = Eigen::VectorXd::Zero(virtual_force_num);
+            integrated_map_inv_trans_ = Eigen::MatrixXd::Zero(virtual_force_num, 1);
+            integrated_map_inv_rot_ = Eigen::MatrixXd::Zero(virtual_force_num, 3);
+
+            std::fill(target_base_thrust_.begin(), target_base_thrust_.end(), 0.0f);
+            std::fill(target_full_thrust_.begin(), target_full_thrust_.end(), 0.0f);
+
+            for(int i = 0; i < motor_num_; ++i)
+              {
+                if(gimbal_dof_ == 1) target_gimbal_angles_.at(i) = 0.0;
+                else if(gimbal_dof_ == 2)
+                  {
+                    target_gimbal_angles_.at(2 * i) = 0.0;
+                    target_gimbal_angles_.at(2 * i + 1) = 0.0;
+                  }
+              }
+
+            target_roll_ = navigator_->getTargetRPY().x();
+            target_pitch_ = navigator_->getTargetRPY().y();
+            candidate_yaw_term_ = 0.0;
+            return;
+          }
+
+        Eigen::MatrixXd expanded_fixed_inv = Eigen::MatrixXd::Zero(virtual_force_num, 4);
+        for(int i = 0; i < motor_num_; ++i)
+          {
+            const int fixed_row = rotor_coef_ * i + fixed_axis_column;
+            expanded_fixed_inv.row(fixed_row) = fixed_control_map_inv.row(i);
+          }
+
+       /*
+        * Default neutral-mode collective:
+        *
+        * During landing or neutral settling, retain the normal controller's body-Z output. Do not apply the takeoff collective ramp.
+        */
+        double neutral_collective_acc = std::max(0.0, target_wrench_acc_cog(2));
+
+        if(perching_takeoff_collective_active)
+        {
+          /*
+          * Only perching TAKEOFF_STATE uses the dedicated positive collective ramp.
+          */
+          double collective_ramp = 1.0;
+
+          if(perching_neutral_collective_ramp_time_ > 1.0e-6 && !perching_neutral_enter_time_.isZero())
+          {
+            const double elapsed = (ros::Time::now() - perching_neutral_enter_time_).toSec();
+
+            if(std::isfinite(elapsed))
+            {
+              collective_ramp =
+                std::max(
+                  0.0,
+                  std::min(
+                    1.0,
+                    elapsed /
+                    perching_neutral_collective_ramp_time_));
+            }
+          }
+
+          neutral_collective_acc = collective_ramp * perching_neutral_collective_acc_;
+        }
+
+        Eigen::Vector4d neutral_base_command = Eigen::Vector4d::Zero();
+        neutral_base_command(0) = neutral_collective_acc;
+
+        const Eigen::VectorXd neutral_base_force = fixed_control_map_inv * neutral_base_command;
+
+        if(neutral_base_force.size() != motor_num_ || !neutral_base_force.allFinite())
+          {
+            ROS_FATAL_THROTTLE(
+                1.0,
+                "[GimbalrotorController] "
+                "invalid perching neutral base force");
+
+            std::fill(
+                target_base_thrust_.begin(),
+                target_base_thrust_.end(),
+                0.0f);
+
+            std::fill(
+                target_full_thrust_.begin(),
+                target_full_thrust_.end(),
+                0.0f);
+
+            return;
+          }
+
+        target_vectoring_f_trans_ =
+          Eigen::VectorXd::Zero(virtual_force_num);
+        target_vectoring_f_rot_ =
+          Eigen::VectorXd::Zero(virtual_force_num);
+        integrated_map_inv_trans_ = expanded_fixed_inv.leftCols(1);
+        integrated_map_inv_rot_ = expanded_fixed_inv.rightCols(3);
+
+       /*
+        * Preload the normal Z integrator only during perching takeoff.
+        * Its only purpose is to prevent collective thrust from dropping when servo-neutral mode ends and fully actuated hover begins.
+        * Do not force this preload during landing.
+        */
+        if(perching_takeoff_collective_active)
+        {
+          PID& z_pid = pid_controllers_.at(Z);
+
+          const double z_i_gain = z_pid.getIGain();
+
+          if(std::fabs(z_i_gain) > 1.0e-9)
+          {
+            double required_i_term = neutral_collective_acc - z_pid.getPTerm() - z_pid.getDTerm();
+
+            required_i_term =
+              std::max(
+                -z_pid.getLimitI(),
+                std::min(
+                  z_pid.getLimitI(),
+                  required_i_term));
+
+            const double required_err_i = required_i_term / z_i_gain;
+
+            z_pid.setErrI(required_err_i);
+          }
+        }
+
+        std::fill(
+            target_base_thrust_.begin(),
+            target_base_thrust_.end(),
+            0.0f);
+
+        std::fill(
+            target_full_thrust_.begin(),
+            target_full_thrust_.end(),
+            0.0f);
+
+        for(int i = 0; i < motor_num_; ++i)
+          {
+            const int fixed_row = rotor_coef_ * i + fixed_axis_column;
+            double base_force = neutral_base_force(i);
+
+            if(base_force < 0.0 &&
+               base_force > -1.0e-6)
+              {
+                base_force = 0.0;
+              }
+
+            if(base_force < 0.0)
+              {
+                ROS_ERROR_THROTTLE(
+                    1.0,
+                    "[GimbalrotorController] "
+                    "negative perching neutral base "
+                    "force for motor %d: %.6f",
+                    i,
+                    base_force);
+
+                std::fill(
+                    target_base_thrust_.begin(),
+                    target_base_thrust_.end(),
+                    0.0f);
+
+                std::fill(
+                    target_full_thrust_.begin(),
+                    target_full_thrust_.end(),
+                    0.0f);
+
+                return;
+              }
+
+            double total_force = base_force;
+
+            if(!gimbal_calc_in_fc_)
+              {
+                Eigen::Vector3d neutral_attitude_command;
+                neutral_attitude_command <<
+                  target_ang_acc_x,
+                  target_ang_acc_y,
+                  target_ang_acc_z;
+
+                const Eigen::VectorXd neutral_attitude_force =
+                  fixed_control_map_inv.rightCols(3) *
+                  neutral_attitude_command;
+
+                double attitude_scale = 1.0;
+                for(int j = 0; j < motor_num_; ++j)
+                  {
+                    const double base = neutral_base_force(j);
+                    const double delta = neutral_attitude_force(j);
+
+                    if(delta < 0.0)
+                      {
+                        attitude_scale =
+                          std::min(
+                              attitude_scale,
+                              base / (-delta));
+                      }
+                  }
+
+                attitude_scale =
+                  std::max(
+                      0.0,
+                      std::min(
+                          1.0,
+                          attitude_scale));
+
+                target_vectoring_f_rot_(fixed_row) =
+                  attitude_scale *
+                  neutral_attitude_force(i);
+                total_force += target_vectoring_f_rot_(fixed_row);
+              }
+
+            target_vectoring_f_trans_(fixed_row) = base_force;
+            target_base_thrust_.at(fixed_row) = static_cast<float>(base_force);
+            target_full_thrust_.at(i) = static_cast<float>(std::max(0.0, total_force));
+
+            if(gimbal_dof_ == 1) target_gimbal_angles_.at(i) = 0.0;
+            else if(gimbal_dof_ == 2)
+              {
+                target_gimbal_angles_.at(2 * i) = 0.0;
+                target_gimbal_angles_.at(2 * i + 1) = 0.0;
+              }
+          }
+
+        candidate_yaw_term_ = 0.0;
+
+        target_roll_ = navigator_->getTargetRPY().x();
+        target_pitch_ = navigator_->getTargetRPY().y();
+        return;
+      }
+
     /* extract controlled axis  */
-    if(underactuate_)
+    if(effective_underactuate)
       {
         target_wrench_acc_cog = target_wrench_acc_cog.tail(4);  // z, roll, pitch, yaw
         integrated_map = integrated_map.bottomRows(4);          // z, roll, pitch, yaw
@@ -170,9 +505,9 @@ namespace aerial_robot_control
 
     /* vectoring force mapping */
     Eigen::MatrixXd integrated_map_inv = aerial_robot_model::pseudoinverse(integrated_map);
-    integrated_map_inv_trans_ = integrated_map_inv.leftCols(underactuate_ ? 1 : 3);
+    integrated_map_inv_trans_ = integrated_map_inv.leftCols(effective_underactuate ? 1 : 3);
     integrated_map_inv_rot_ = integrated_map_inv.rightCols(3);
-    if(underactuate_)
+    if(effective_underactuate)
       target_vectoring_f_trans_ = integrated_map_inv_trans_ * target_wrench_acc_cog(0);
     else
       target_vectoring_f_trans_ = integrated_map_inv_trans_ * target_wrench_acc_cog.topRows(3);
@@ -180,7 +515,7 @@ namespace aerial_robot_control
     last_col = 0;
 
     /* under actuated axis  */
-    if(underactuate_)
+    if(effective_underactuate)
       {
         if(hovering_approximate_)
           {
@@ -216,7 +551,7 @@ namespace aerial_robot_control
           target_base_thrust_.at(rotor_coef_ * i+1) = f_i[1];
           target_base_thrust_.at(rotor_coef_ * i+2) = f_i[2];
         }
-      if(integrated_map_inv(i, (underactuate_ ? YAW - 2 : YAW)) > max_yaw_scale) max_yaw_scale = integrated_map_inv(i, (underactuate_ ? YAW - 2 : YAW));  // underactuated: yaw col is shifted
+      if(integrated_map_inv(i, (effective_underactuate ? YAW - 2 : YAW)) > max_yaw_scale) max_yaw_scale = integrated_map_inv(i, (effective_underactuate ? YAW - 2 : YAW));  // underactuated: yaw col is shifted
 
       last_col += rotor_coef_;
     }
@@ -227,7 +562,16 @@ namespace aerial_robot_control
     for(int i = 0; i < motor_num_; i++){
       Eigen::VectorXd f_i_integrated = target_vectoring_f_rot_.segment(last_col, rotor_coef_) + target_vectoring_f_trans_.segment(last_col, rotor_coef_);
       target_full_thrust_.at(i) = f_i_integrated.norm();
-      if(gimbal_dof_ == 1)
+      if(perching_servo_neutral_mode_)
+        {
+          if(gimbal_dof_ == 1) target_gimbal_angles_.at(i) = 0.0;
+          else if(gimbal_dof_ == 2)
+            {
+              target_gimbal_angles_.at(2 * i) = 0.0;
+              target_gimbal_angles_.at(2 * i + 1) = 0.0;
+            }
+        }
+      else if(gimbal_dof_ == 1)
         {
           target_gimbal_angles_.at(i) = atan2(-f_i_integrated[0], f_i_integrated[1]);
         }
@@ -248,13 +592,14 @@ namespace aerial_robot_control
   {
     PoseLinearController::sendCmd();
 
-    sendFourAxisCommand();
-
     if(gimbal_calc_in_fc_){
       sendTorqueAllocationMatrixInv();
+      sendFourAxisCommand();
     }
     else
       {
+        sendFourAxisCommand();
+
         sensor_msgs::JointState gimbal_control_msg;
         gimbal_control_msg.header.stamp = ros::Time::now();
         for(int i = 0; i < motor_num_; i++){
@@ -353,6 +698,16 @@ namespace aerial_robot_control
     rpy_gain_msg.motors.at(0).pitch_d = pid_controllers_.at(PITCH).getDGain() * 1000;
     rpy_gain_msg.motors.at(0).yaw_d = pid_controllers_.at(YAW).getDGain() * 1000;
     rpy_gain_pub_.publish(rpy_gain_msg);
+  }
+
+  void GimbalrotorController::perchingServoNeutralModeCallback(const std_msgs::Bool::ConstPtr& msg)
+  {
+    /*
+    * This flag controls only whether the gimbals are fixed at zero.
+    *
+    * The takeoff collective ramp is started separately when the navigator actually enters TAKEOFF_STATE.
+    */
+    perching_servo_neutral_mode_ = msg->data;
   }
 } //namespace aerial_robot_controller
 
