@@ -1,0 +1,92 @@
+<?xml version="1.0"?>
+<launch>
+  <arg name="headless" default="false"/>
+  <arg name="controller_mode" default="pid"/>
+  <arg name="profile" default="bag_1"/>
+  <arg name="hybrid_enabled" default="false"/>
+
+  <arg name="step_deg" default="0.8"/>
+  <arg name="hold_time" default="15.0"/>
+  <arg name="number_of_steps" default="15"/>
+  <arg name="tare_wait" default="3.0"/>
+  <arg name="start_delay" default="3.0"/>
+
+  <arg name="record_bag" default="true"/>
+  <arg name="bag_output" default="/tmp/mujoco_cutting"/>
+
+  <rosparam
+      file="$(find gimbalrotor)/config/beetle/MujocoPerchingCutting.yaml"
+      command="load"
+      ns="/gimbalrotor"/>
+
+  <param
+      name="/gimbalrotor/simulation/cutting/selected_profile"
+      value="$(arg profile)"/>
+
+  <param
+      name="/gimbalrotor/controller/admittance/perching/hybrid/enabled"
+      value="$(arg hybrid_enabled)"/>
+
+  <include file="$(find gimbalrotor)/launch/bringup.launch">
+    <arg name="simulation" value="true"/>
+    <arg name="real_machine" value="false"/>
+    <arg name="mujoco" value="true"/>
+    <arg name="airframe" value="beetle"/>
+    <arg name="headless" value="$(arg headless)"/>
+    <arg name="sim_control_config" value="beetle/MujocoPerchingCuttingControl_sim.yaml"/>
+  </include>
+
+  <node pkg="gimbalrotor"
+        type="mujoco_cutting_experiment.py"
+        name="mujoco_cutting_experiment"
+        ns="gimbalrotor"
+        output="screen">
+    <param name="controller_mode" value="$(arg controller_mode)"/>
+    <param name="profile" value="$(arg profile)"/>
+    <param name="hybrid_enabled" value="$(arg hybrid_enabled)"/>
+    <param name="step_deg" value="$(arg step_deg)"/>
+    <param name="hold_time" value="$(arg hold_time)"/>
+    <param name="number_of_steps" value="$(arg number_of_steps)"/>
+    <param name="tare_wait" value="$(arg tare_wait)"/>
+    <param name="start_delay" value="$(arg start_delay)"/>
+  </node>
+
+  <node if="$(arg record_bag)"
+        pkg="rosbag"
+        type="record"
+        name="mujoco_cutting_bag_record"
+        output="screen"
+        args="-O $(arg bag_output)_$(arg profile)_$(arg controller_mode)_hybrid_$(arg hybrid_enabled).bag
+          /clock
+          /gimbalrotor/ground_truth
+          /gimbalrotor/mocap/pose
+          /gimbalrotor/uav/cog/odom
+          /gimbalrotor/debug/pose/pid
+          /gimbalrotor/estimated_external_wrench
+          /gimbalrotor/perching/enable
+          /gimbalrotor/perching/admittance_enable
+          /gimbalrotor/perching/cutting_active
+          /gimbalrotor/perching/locked_pose
+          /gimbalrotor/perching/locked_pivot
+          /gimbalrotor/perching/commanded_pose
+          /gimbalrotor/perching/manual_pitch_delta
+          /gimbalrotor/perching/hybrid/state
+          /gimbalrotor/perching/hybrid/contact
+          /gimbalrotor/perching/hybrid/authority
+          /gimbalrotor/perching/hybrid/pivot_torque_residual
+          /gimbalrotor/perching/hybrid/pitch_offset
+          /gimbalrotor/simulation/cutting/wrench_cog_ground_truth
+          /gimbalrotor/simulation/cutting/wrench_pivot_ground_truth
+          /gimbalrotor/simulation/cutting/force_magnitude
+          /gimbalrotor/simulation/cutting/pivot_torque_y_ground_truth
+          /gimbalrotor/simulation/cutting/penetration
+          /gimbalrotor/simulation/cutting/penetration_velocity
+          /gimbalrotor/simulation/cutting/arc_angle
+          /gimbalrotor/simulation/cutting/layer_index
+          /gimbalrotor/simulation/cutting/contact
+          /gimbalrotor/simulation/cutting/completed
+          /gimbalrotor/simulation/cutting/valid
+          /gimbalrotor/simulation/cutting/locked_pivot_error
+          /gimbalrotor/joint_states
+          /gimbalrotor/mujoco/ctrl_input"/>
+</launch>

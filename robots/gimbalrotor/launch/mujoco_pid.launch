@@ -1,13 +1,27 @@
 <?xml version="1.0"?>
 <launch>
-  <arg name="headless" default="false" />
+  <arg name="headless" default="false"/>
+  <arg name="profile" default="bag_1"/>
+  <arg name="hybrid_enabled" default="false"/>
+  <arg name="step_deg" default="0.8"/>
+  <arg name="hold_time" default="15.0"/>
+  <arg name="number_of_steps" default="15"/>
+  <arg name="tare_wait" default="3.0"/>
+  <arg name="start_delay" default="3.0"/>
+  <arg name="record_bag" default="true"/>
+  <arg name="bag_output" default="/tmp/mujoco_cutting"/>
 
-  <include file="$(find gimbalrotor)/launch/bringup.launch">
-    <arg name="simulation" value="true" />
-    <arg name="real_machine" value="false" />
-    <arg name="mujoco" value="true" />
-    <arg name="airframe" value="beetle" />
-    <arg name="headless" value="$(arg headless)" />
-    <arg name="sim_control_config" value="beetle/GimbalrotorControl_sim.yaml" />
+  <include file="$(find gimbalrotor)/launch/mujoco_cutting.launch">
+    <arg name="headless" value="$(arg headless)"/>
+    <arg name="controller_mode" value="pid"/>
+    <arg name="profile" value="$(arg profile)"/>
+    <arg name="hybrid_enabled" value="$(arg hybrid_enabled)"/>
+    <arg name="step_deg" value="$(arg step_deg)"/>
+    <arg name="hold_time" value="$(arg hold_time)"/>
+    <arg name="number_of_steps" value="$(arg number_of_steps)"/>
+    <arg name="tare_wait" value="$(arg tare_wait)"/>
+    <arg name="start_delay" value="$(arg start_delay)"/>
+    <arg name="record_bag" value="$(arg record_bag)"/>
+    <arg name="bag_output" value="$(arg bag_output)"/>
   </include>
 </launch>

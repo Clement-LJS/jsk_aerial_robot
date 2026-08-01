@@ -3,6 +3,8 @@ project(gimbalrotor)
 
 add_compile_options(-std=c++17)
 
+find_package(PythonInterp REQUIRED)
+
 find_package(catkin REQUIRED COMPONENTS
   aerial_robot_control
   aerial_robot_estimation
@@ -52,6 +54,22 @@ install(DIRECTORY
 mujoco_model_convert(
   ${PROJECT_SOURCE_DIR}
   ${PROJECT_SOURCE_DIR}/config/mujoco_model.yaml)
+
+add_custom_target(postprocess_beetle_cutting_mujoco_model ALL
+  COMMAND ${PYTHON_EXECUTABLE}
+    ${PROJECT_SOURCE_DIR}/scripts/mujoco/postprocess_beetle_cutting_model.py
+    --model ${PROJECT_SOURCE_DIR}/mujoco/beetle/robot.xml
+    --config ${PROJECT_SOURCE_DIR}/config/beetle/MujocoPerchingCutting.yaml
+  DEPENDS generate_mujoco_model
+  WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
+  COMMENT "Post-processing Beetle MuJoCo cutting model")
+
+catkin_install_python(PROGRAMS
+  scripts/mujoco/postprocess_beetle_cutting_model.py
+  scripts/tasks/mujoco_cutting_experiment.py
+  scripts/analysis/calibrate_mujoco_cutting_profiles.py
+  scripts/analysis/analyze_mujoco_cutting_comparison.py
+  DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})
 
 if(CATKIN_ENABLE_TESTING)
   find_package(rostest REQUIRED)

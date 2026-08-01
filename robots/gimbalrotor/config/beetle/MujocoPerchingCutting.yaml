@@ -1,0 +1,91 @@
+model:
+  model_xml: mujoco/beetle/robot.xml
+
+  root_body_name: base_link
+  saw_body_name: saw
+  cutting_contact_site_name: cutting_contact_site
+
+  pivot_offset_base: [-0.33568, 0.0, 0.017]
+  pivot_world: [0.0, 0.0, 0.70]
+  initial_base_rpy: [0.0, 0.0, 0.0]
+
+  pivot_axis_base: [0.0, 1.0, 0.0]
+  anchor_half_span: 0.030
+
+  constraint_1_name: perching_hinge_connect_1
+  constraint_2_name: perching_hinge_connect_2
+  constraints_active_at_start: true
+
+  constraint_solref: [0.005, 1.0]
+  constraint_solimp: [0.95, 0.99, 0.001]
+
+  cutting_contact_point_saw: [0.4715, 0.024, 0.039]
+
+  branch_visual:
+    enabled: true
+    name: simulated_cutting_branch
+    radius: 0.015
+    half_length: 0.25
+    rgba: [0.45, 0.25, 0.08, 1.0]
+
+simulation:
+  cutting:
+    enabled: true
+    selected_profile: bag_1
+
+    base_body_name: base_link
+    saw_body_name: saw
+    contact_site_name: cutting_contact_site
+
+    constraint_1_name: perching_hinge_connect_1
+    constraint_2_name: perching_hinge_connect_2
+
+    perching_enable_topic: perching/enable
+    cutting_active_topic: perching/cutting_active
+    locked_pivot_topic: perching/locked_pivot
+    reset_topic: simulation/cutting/reset
+
+    configured_pivot_world: [0.0, 0.0, 0.70]
+    pivot_axis_world: [0.0, 1.0, 0.0]
+    cutting_direction_sign: 1.0
+    locked_pivot_match_tolerance: 0.002
+
+    free_travel: 0.004
+    force_ramp_time: 0.10
+    force_filter_time_constant: 0.02
+    maximum_control_dt: 0.10
+
+    noise_enabled: false
+    noise_stddev: 0.0
+    noise_seed: 1
+
+    profiles:
+      bag_1:
+        preload_force: 0.10
+        maximum_force: 1.00
+        ripple_amplitude: 0.03
+        ripple_wavelength: 0.004
+        layers:
+          - {thickness: 0.012, stiffness: 20.0, damping: 1.0}
+          - {thickness: 0.012, stiffness: 25.0, damping: 1.2}
+          - {thickness: 0.012, stiffness: 30.0, damping: 1.5}
+
+      bag_2:
+        preload_force: 0.20
+        maximum_force: 2.50
+        ripple_amplitude: 0.08
+        ripple_wavelength: 0.004
+        layers:
+          - {thickness: 0.012, stiffness: 45.0, damping: 1.5}
+          - {thickness: 0.012, stiffness: 60.0, damping: 2.0}
+          - {thickness: 0.012, stiffness: 80.0, damping: 2.5}
+
+      bag_3:
+        preload_force: 0.40
+        maximum_force: 6.00
+        ripple_amplitude: 0.15
+        ripple_wavelength: 0.004
+        layers:
+          - {thickness: 0.012, stiffness: 90.0, damping: 2.0}
+          - {thickness: 0.012, stiffness: 130.0, damping: 3.0}
+          - {thickness: 0.012, stiffness: 200.0, damping: 4.0}
