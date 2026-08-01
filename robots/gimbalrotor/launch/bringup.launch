@@ -24,6 +24,7 @@
   <arg name="robot_ns" value="gimbalrotor$(arg robot_id)" />
   <arg name="airframe" default="quad" />
   <arg name="mujoco" default="False" />
+  <arg name="mujoco_model" default="$(find gimbalrotor)/mujoco/$(arg airframe)/robot.xml" />
   <arg name="launch_mujoco_backend" default="True" />
   <arg name="launch_mujoco_controller" default="True" />
 
@@ -111,7 +112,7 @@
   <include file="$(find aerial_robot_simulation)/launch/mujoco.launch" if="$(eval arg('simulation') and not arg('real_machine') and arg('mujoco'))" >
     <arg name="robot_ns" value="$(arg robot_ns)" />
     <arg name="headless" value="$(arg headless)" />
-    <arg name="mujoco_model" value="$(find gimbalrotor)/mujoco/$(arg airframe)/robot.xml" />
+    <arg name="mujoco_model" value="$(arg mujoco_model)" />
     <arg name="launch_backend" value="$(arg launch_mujoco_backend)" />
     <arg name="launch_controller" value="$(arg launch_mujoco_controller)" />
   </include>

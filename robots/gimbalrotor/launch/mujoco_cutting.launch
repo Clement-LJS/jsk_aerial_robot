@@ -23,10 +23,6 @@
       name="/gimbalrotor/simulation/cutting/selected_profile"
       value="$(arg profile)"/>
 
-  <param
-      name="/gimbalrotor/controller/admittance/perching/hybrid/enabled"
-      value="$(arg hybrid_enabled)"/>
-
   <include file="$(find gimbalrotor)/launch/bringup.launch">
     <arg name="simulation" value="true"/>
     <arg name="real_machine" value="false"/>
@@ -34,13 +30,23 @@
     <arg name="airframe" value="beetle"/>
     <arg name="headless" value="$(arg headless)"/>
     <arg name="sim_control_config" value="beetle/MujocoPerchingCuttingControl_sim.yaml"/>
+    <arg name="mujoco_model" value="$(find gimbalrotor)/mujoco/beetle/robot_cutting.xml"/>
   </include>
+
+  <param
+      name="/gimbalrotor/controller/admittance/perching/hybrid/enabled"
+      value="$(arg hybrid_enabled)"/>
+  <param name="/gimbalrotor/simulation/mocap_pos_noise" value="0.0"/>
+  <param name="/gimbalrotor/simulation/mocap_rot_noise" value="0.0"/>
+  <param name="/gimbalrotor/simulation/ground_truth_pos_noise" value="0.0"/>
+  <param name="/gimbalrotor/simulation/ground_truth_rot_noise" value="0.0"/>
 
   <node pkg="gimbalrotor"
         type="mujoco_cutting_experiment.py"
         name="mujoco_cutting_experiment"
         ns="gimbalrotor"
-        output="screen">
+        output="screen"
+        required="true">
     <param name="controller_mode" value="$(arg controller_mode)"/>
     <param name="profile" value="$(arg profile)"/>
     <param name="hybrid_enabled" value="$(arg hybrid_enabled)"/>
@@ -85,6 +91,7 @@
           /gimbalrotor/simulation/cutting/layer_index
           /gimbalrotor/simulation/cutting/contact
           /gimbalrotor/simulation/cutting/completed
+          /gimbalrotor/simulation/cutting/model_ready
           /gimbalrotor/simulation/cutting/valid
           /gimbalrotor/simulation/cutting/locked_pivot_error
           /gimbalrotor/joint_states

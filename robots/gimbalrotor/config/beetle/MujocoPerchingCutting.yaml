@@ -1,5 +1,5 @@
 model:
-  model_xml: mujoco/beetle/robot.xml
+  model_xml: mujoco/beetle/robot_cutting.xml
 
   root_body_name: base_link
   saw_body_name: saw

@@ -3,7 +3,7 @@ project(gimbalrotor)
 
 add_compile_options(-std=c++17)
 
-find_package(PythonInterp REQUIRED)
+find_package(PythonInterp 3 REQUIRED)
 
 find_package(catkin REQUIRED COMPONENTS
   aerial_robot_control
@@ -47,6 +47,7 @@ install(DIRECTORY
   config
   plugins
   launch
+  mujoco
   DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}
   USE_SOURCE_PERMISSIONS
   )
@@ -57,12 +58,21 @@ mujoco_model_convert(
 
 add_custom_target(postprocess_beetle_cutting_mujoco_model ALL
   COMMAND ${PYTHON_EXECUTABLE}
+    -c
+    "import shutil; shutil.copyfile(r'${PROJECT_SOURCE_DIR}/mujoco/beetle/robot.xml', r'${PROJECT_SOURCE_DIR}/mujoco/beetle/robot_cutting.xml')"
+  COMMAND ${PYTHON_EXECUTABLE}
     ${PROJECT_SOURCE_DIR}/scripts/mujoco/postprocess_beetle_cutting_model.py
-    --model ${PROJECT_SOURCE_DIR}/mujoco/beetle/robot.xml
+    --model ${PROJECT_SOURCE_DIR}/mujoco/beetle/robot_cutting.xml
     --config ${PROJECT_SOURCE_DIR}/config/beetle/MujocoPerchingCutting.yaml
-  DEPENDS generate_mujoco_model
+  BYPRODUCTS ${PROJECT_SOURCE_DIR}/mujoco/beetle/robot_cutting.xml
+  DEPENDS
+    ${PROJECT_SOURCE_DIR}/scripts/mujoco/postprocess_beetle_cutting_model.py
+    ${PROJECT_SOURCE_DIR}/config/beetle/MujocoPerchingCutting.yaml
   WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
-  COMMENT "Post-processing Beetle MuJoCo cutting model")
+  COMMENT "Post-processing Beetle MuJoCo cutting model"
+  VERBATIM)
+
+add_dependencies(postprocess_beetle_cutting_mujoco_model generate_mujoco_model)
 
 catkin_install_python(PROGRAMS
   scripts/mujoco/postprocess_beetle_cutting_model.py

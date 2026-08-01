@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 
 import argparse
-import json
 import os
+import sys
 
 
 def parse_args():
@@ -19,16 +19,16 @@ def main():
         if not os.path.exists(path):
             raise SystemExit(f"bag does not exist: {path}")
 
-    os.makedirs(args.output_dir, exist_ok=True)
-    summary = {
-        "pid_bag": args.pid,
-        "admittance_bag": args.admittance,
-        "status": "placeholder_summary",
-        "note": "Local gimbalrotor-side scaffold added from markdown spec; full bag analysis depends on the simulation topics being produced.",
-    }
-    with open(os.path.join(args.output_dir, "summary.json"), "w", encoding="utf-8") as stream:
-        json.dump(summary, stream, indent=2, sort_keys=True)
+    raise SystemExit(
+        "analyze_mujoco_cutting_comparison.py is intentionally disabled: "
+        "the previous implementation wrote a placeholder summary without reading either bag. "
+        "Replace it with a real bag-comparison pipeline before using it."
+    )
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as exc:
+        print(str(exc), file=sys.stderr)
+        sys.exit(1)
