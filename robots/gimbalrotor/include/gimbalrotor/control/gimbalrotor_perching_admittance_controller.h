@@ -5,14 +5,16 @@
 
 #include <geometry_msgs/PointStamped.h>
 #include <geometry_msgs/PoseStamped.h>
+#include <geometry_msgs/WrenchStamped.h>
 #include <std_msgs/Bool.h>
 #include <std_msgs/Float64.h>
 
 #include <tf/transform_datatypes.h>
+#include <tf/transform_broadcaster.h>
 
 #include <string>
-
 #include <mutex>
+#include <cstdint>
 
 namespace aerial_robot_control
 {
@@ -131,6 +133,10 @@ private:
       tf::Vector3& rpy) const;
 
   virtual Eigen::Matrix3d getComplianceToWorldRotation() const override;
+  void publishPivotWrenchFrame(
+      const tf::Vector3& pivot_world,
+      const Eigen::Matrix3d& R_world_constraint,
+      const ros::Time& stamp);
 
 private:
   ros::Subscriber normal_admittance_enable_sub_;
@@ -147,6 +153,7 @@ private:
   ros::Publisher pivot_torque_raw_pub_;
   ros::Publisher pivot_torque_filtered_pub_;
   ros::Publisher pitch_offset_pub_;
+  ros::Publisher pivot_external_wrench_est_pub_;
 
   std::string perching_enable_topic_for_constraint_;
   std::string perching_admittance_enable_topic_;
@@ -154,6 +161,7 @@ private:
   std::string perching_branch_pose_topic_;
   std::string perching_locked_pose_topic_;
   std::string perching_locked_pivot_topic_;
+  std::string perching_pivot_wrench_frame_id_;
 
   bool normal_admittance_enabled_;
   bool perching_admittance_enabled_;
@@ -249,7 +257,7 @@ private:
 
   /*
    * Normal pitch integral-term output limit.
-   *This stores controller/pitch/limit_i from the YAML file.
+   * This stores controller/pitch/limit_i from the YAML file.
    * It is restored when perching mode is disabled.
    */
   double normal_pitch_i_limit_;
@@ -258,7 +266,9 @@ private:
    * Indicates that pitch limit_i is currently forced to zero.
    */
   bool pitch_i_limit_suppressed_;
+  tf::TransformBroadcaster pivot_wrench_tf_broadcaster_;
 
+  std::uint64_t last_published_pivot_wrench_sequence_ = 0;
 };
 
 } // namespace aerial_robot_control

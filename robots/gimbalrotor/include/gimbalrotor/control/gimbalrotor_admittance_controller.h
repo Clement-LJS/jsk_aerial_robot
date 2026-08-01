@@ -16,9 +16,8 @@
 #include <tf_conversions/tf_eigen.h>
 
 #include <string>
-
 #include <mutex>
-
+#include <cstdint>
 namespace aerial_robot_control
 {
 
@@ -41,6 +40,7 @@ public:
 protected:
   virtual void rosParamInit() override;
   virtual void controlCore() override;
+  void publishAdmittanceStateIfChanged(bool force = false);
 
   /*
    * This is the important refactor.
@@ -59,26 +59,45 @@ protected:
     return "GimbalrotorAdmittanceController";
   }
 
-  void externalWrenchCallback(
-      const geometry_msgs::WrenchStamped::ConstPtr& msg);
+  void externalWrenchCallback(const geometry_msgs::WrenchStamped::ConstPtr& msg);
+  void admittanceEnableCallback(const std_msgs::Bool::ConstPtr& msg);
 
-  void admittanceEnableCallback(
-      const std_msgs::Bool::ConstPtr& msg);
+  /*
+  * One internally consistent estimator sample.
+  *
+  * All fields are copied while holding external_wrench_mutex_.
+  * The sequence number changes exactly once for every received
+  * estimated_external_wrench message.
+  */
+  struct ExternalWrenchSnapshot
+  {
+    Eigen::Matrix<double, 6, 1> raw_wrench = Eigen::Matrix<double, 6, 1>::Zero();
 
+    ros::Time measurement_stamp;
+    ros::Time receive_stamp;
+
+    std::uint64_t sequence = 0;
+
+    bool available = false;
+  };
+
+  ExternalWrenchSnapshot getExternalWrenchSnapshot() const;
+
+  Eigen::Matrix<double, 6, 1> transformExternalWrenchToWorld(const Eigen::Matrix<double, 6, 1>& raw_wrench) const;
   virtual Eigen::Matrix<double, 6, 1> getExternalWrenchWorld() const;
-
   virtual Eigen::Matrix3d getComplianceToWorldRotation() const;
 
-  tf::Vector3 eigenToTfVector3(
-      const Eigen::Vector3d& v) const;
-
-  Eigen::Vector3d tfVector3ToEigen(
-      const tf::Vector3& v) const;
+  tf::Vector3 eigenToTfVector3(const Eigen::Vector3d& v) const;
+  Eigen::Vector3d tfVector3ToEigen(const tf::Vector3& v) const;
 
   mutable std::mutex external_wrench_mutex_;
 
   ros::Time last_external_wrench_receive_time_;
+  ros::Time external_wrench_measurement_stamp_;
+  ros::Time external_wrench_receive_stamp_;
 
+  std::uint64_t external_wrench_sequence_ = 0;
+  
   bool has_external_wrench_;
 
   double external_wrench_timeout_;
@@ -86,9 +105,11 @@ protected:
 protected:
   ros::Subscriber external_wrench_sub_;
   ros::Subscriber admittance_enable_sub_;
+  ros::Publisher admittance_state_pub_;
 
   std::string external_wrench_topic_;
   std::string admittance_enable_topic_;
+  std::string admittance_state_topic_;
 
   /*
    * external_wrench_frame:
@@ -111,6 +132,7 @@ protected:
   std::string compliance_frame_;
 
   bool admittance_enabled_;
+  bool last_reported_admittance_enabled_;
 
   Eigen::Matrix<double, 6, 1> raw_external_wrench_;
 

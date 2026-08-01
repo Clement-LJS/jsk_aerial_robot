@@ -9,9 +9,11 @@ GimbalrotorAdmittanceController::GimbalrotorAdmittanceController()
   : GimbalrotorController(),
     external_wrench_topic_("estimated_external_wrench"),
     admittance_enable_topic_("admittance_enable"),
+    admittance_state_topic_("admittance/active"),
     external_wrench_frame_("world"),
     compliance_frame_("world"),
-    admittance_enabled_(false), 
+    admittance_enabled_(false),
+    last_reported_admittance_enabled_(false),
     has_external_wrench_(false),
     external_wrench_timeout_(0.15)
 {
@@ -54,6 +56,26 @@ void GimbalrotorAdmittanceController::initialize(
 
   admittance_core_.setConfig(admittance_config_);
 
+  /*
+   * Initialize the wrench snapshot before subscribing.
+   *
+   * A callback must never be able to write a valid sample and then have initialize() overwrite it with an empty state.
+   */
+  {
+    std::lock_guard<std::mutex> lock(external_wrench_mutex_);
+
+    raw_external_wrench_.setZero();
+
+    last_external_wrench_receive_time_ = ros::Time(0);
+    external_wrench_measurement_stamp_ = ros::Time(0);
+    external_wrench_receive_stamp_ = ros::Time(0);
+
+    external_wrench_sequence_ = 0;
+    has_external_wrench_ = false;
+  }
+
+  prev_admittance_time_ = ros::Time::now();
+
   external_wrench_sub_ =
       nh_.subscribe(
           external_wrench_topic_,
@@ -68,20 +90,25 @@ void GimbalrotorAdmittanceController::initialize(
           &GimbalrotorAdmittanceController::admittanceEnableCallback,
           this);
 
-  prev_admittance_time_ = ros::Time::now();
+  admittance_state_pub_ =
+      nh_.advertise<std_msgs::Bool>(
+          admittance_state_topic_,
+          1,
+          true);
 
   ROS_WARN_STREAM("[" << controllerName() << "] initialized.");
   ROS_WARN_STREAM("[" << controllerName() << "] external_wrench_topic: "
                   << external_wrench_topic_);
   ROS_WARN_STREAM("[" << controllerName() << "] admittance_enable_topic: "
                   << admittance_enable_topic_);
+  ROS_WARN_STREAM("[" << controllerName() << "] admittance_state_topic: "
+                  << admittance_state_topic_);
   ROS_WARN_STREAM("[" << controllerName() << "] external_wrench_frame: "
                   << external_wrench_frame_);
   ROS_WARN_STREAM("[" << controllerName() << "] compliance_frame: "
                   << compliance_frame_);
 
-  last_external_wrench_receive_time_ = ros::Time(0);
-  has_external_wrench_ = false;
+  publishAdmittanceStateIfChanged(true);
 }
 
 void GimbalrotorAdmittanceController::reset()
@@ -96,6 +123,10 @@ void GimbalrotorAdmittanceController::reset()
     raw_external_wrench_.setZero();
 
     last_external_wrench_receive_time_ = ros::Time(0);
+    external_wrench_measurement_stamp_ = ros::Time(0);
+    external_wrench_receive_stamp_ = ros::Time(0);
+
+    external_wrench_sequence_ = 0;
 
     has_external_wrench_ = false;
   }
@@ -105,6 +136,7 @@ void GimbalrotorAdmittanceController::reset()
   admittance_output_ = AdmittanceCoreOutput();
 
   prev_admittance_time_ = ros::Time::now();
+  publishAdmittanceStateIfChanged(true);
 
   ROS_WARN_STREAM("[" << controllerName() << "] reset.");
 }
@@ -138,6 +170,12 @@ void GimbalrotorAdmittanceController::rosParamInit()
       "admittance_enable_topic",
       admittance_enable_topic_,
       std::string("admittance_enable"));
+
+  getParam<std::string>(
+      imp_nh,
+      "admittance_state_topic",
+      admittance_state_topic_,
+      std::string("admittance/active"));
 
   getParam<std::string>(
       imp_nh,
@@ -524,29 +562,7 @@ void GimbalrotorAdmittanceController::controlCore()
       navigator_->setTargetRPY(original_target_rpy);
     }
 
-  if(admittance_output_.valid)
-    {
-      ROS_WARN_THROTTLE(
-          0.5,
-          "[%s] "
-          "F_comp: %.3f %.3f %.3f | "
-          "T_comp: %.3f %.3f %.3f | "
-          "dx_world: %.4f %.4f %.4f | "
-          "drpy_world: %.4f %.4f %.4f",
-          controllerName(),
-          admittance_output_.force_compliance(0),
-          admittance_output_.force_compliance(1),
-          admittance_output_.force_compliance(2),
-          admittance_output_.torque_compliance(0),
-          admittance_output_.torque_compliance(1),
-          admittance_output_.torque_compliance(2),
-          admittance_output_.pos_offset_world(0),
-          admittance_output_.pos_offset_world(1),
-          admittance_output_.pos_offset_world(2),
-          admittance_output_.rpy_offset_world(0),
-          admittance_output_.rpy_offset_world(1),
-          admittance_output_.rpy_offset_world(2));
-    }
+  publishAdmittanceStateIfChanged();
 }
 
 void GimbalrotorAdmittanceController::applyAdmittanceOutputToNavigator(
@@ -585,90 +601,99 @@ void GimbalrotorAdmittanceController::externalWrenchCallback(const geometry_msgs
   raw_external_wrench_(4) = msg->wrench.torque.y;
   raw_external_wrench_(5) = msg->wrench.torque.z;
 
-  last_external_wrench_receive_time_ = ros::Time::now();
+  external_wrench_measurement_stamp_ = msg->header.stamp.isZero() ? ros::Time::now() : msg->header.stamp;
+  external_wrench_receive_stamp_ = ros::Time::now();
+  last_external_wrench_receive_time_ = external_wrench_receive_stamp_;
 
+  ++external_wrench_sequence_;
   has_external_wrench_ = true;
 }
 
-void GimbalrotorAdmittanceController::admittanceEnableCallback(
-    const std_msgs::Bool::ConstPtr& msg)
+void GimbalrotorAdmittanceController::admittanceEnableCallback(const std_msgs::Bool::ConstPtr& msg)
 {
   const bool previous_enabled = admittance_enabled_;
+
+  if(previous_enabled == msg->data)
+  {
+    /*
+     * Ignore repeated copies of the same command.
+     * The current state has already been published through the latched admittance_state_pub_.
+     */
+    return;
+  }
+
   admittance_enabled_ = msg->data;
 
+  /*
+   * Reset only on a real enabled -> disabled transition.
+   */
   if(previous_enabled && !admittance_enabled_)
-    {
-      admittance_core_.reset();
-      admittance_output_ = AdmittanceCoreOutput();
-    }
+  {
+    admittance_core_.reset();
+    admittance_output_ = AdmittanceCoreOutput();
 
-  ROS_WARN(
-      "[%s] admittance_enabled: %d",
-      controllerName(),
-      static_cast<int>(admittance_enabled_));
+    prev_admittance_time_ = ros::Time::now();
+  }
+
+  publishAdmittanceStateIfChanged();
 }
 
-Eigen::Matrix<double, 6, 1> GimbalrotorAdmittanceController::getExternalWrenchWorld() const
+void GimbalrotorAdmittanceController::publishAdmittanceStateIfChanged(bool force)
 {
-  Eigen::Matrix<double, 6, 1> raw_wrench;
+  if(!force && admittance_enabled_ == last_reported_admittance_enabled_) return;
 
-  ros::Time receive_time;
+  std_msgs::Bool state_msg;
+  state_msg.data = admittance_enabled_;
+  admittance_state_pub_.publish(state_msg);
 
-  bool has_wrench = false;
+  last_reported_admittance_enabled_ = admittance_enabled_;
 
-  {
-    std::lock_guard<std::mutex> lock(external_wrench_mutex_);
+  ROS_WARN(
+      "[%s] admittance %s",
+      controllerName(),
+      admittance_enabled_ ? "enabled" : "disabled");
+}
 
-    raw_wrench = raw_external_wrench_;
+GimbalrotorAdmittanceController::ExternalWrenchSnapshot
+GimbalrotorAdmittanceController::getExternalWrenchSnapshot() const
+{
+  ExternalWrenchSnapshot snapshot;
 
-    receive_time = last_external_wrench_receive_time_;
+  std::lock_guard<std::mutex> lock(external_wrench_mutex_);
 
-    has_wrench = has_external_wrench_;
-  }
+  snapshot.raw_wrench = raw_external_wrench_;
+  snapshot.measurement_stamp = external_wrench_measurement_stamp_;
+  snapshot.receive_stamp = external_wrench_receive_stamp_;
+  snapshot.sequence = external_wrench_sequence_;
+  snapshot.available = has_external_wrench_;
 
-  if(!has_wrench)
-  {
-    ROS_WARN_THROTTLE(1.0, "[%s] No external wrench has been received.", controllerName());
+  return snapshot;
+}
 
-    return Eigen::Matrix<double, 6, 1>::Zero();
-  }
-
-  const double wrench_age = (ros::Time::now() - receive_time).toSec();
-
-  if(wrench_age > external_wrench_timeout_)
-  {
-    ROS_WARN_THROTTLE(1.0, "[%s] External wrench is stale: %.3f s.", controllerName(), wrench_age);
-
-    return Eigen::Matrix<double, 6, 1>::Zero();
-  }
-
+Eigen::Matrix<double, 6, 1>
+GimbalrotorAdmittanceController::transformExternalWrenchToWorld(const Eigen::Matrix<double, 6, 1>& raw_wrench) const
+{
   /*
-   * The corrected momentum observer publishes:
-   *
-   *   header.frame_id = world
-   *
-   * so this is the active path for your experiment.
+   * The momentum observer used for the experiment publishes force and torque components in world axes.
    */
-  if(external_wrench_frame_ == "world" ||
-     external_wrench_frame_ == "map" ||
-     external_wrench_frame_ == "odom")
+  if(external_wrench_frame_ == "world" || external_wrench_frame_ == "map" || external_wrench_frame_ == "odom")
   {
     return raw_wrench;
   }
 
   /*
-   * Preserve support for another wrench source that publishes all six components in body coordinates.
+   * Preserve support for another source that publishes force and torque components in the robot body/CoG axes.
    */
-  if(external_wrench_frame_ == "cog" ||
-     external_wrench_frame_ == "body" ||
-     external_wrench_frame_ == "base_link")
+  if(external_wrench_frame_ == "cog" || external_wrench_frame_ == "body" || external_wrench_frame_ == "base_link")
   {
     const tf::Matrix3x3 R_world_cog_tf = estimator_->getOrientation(Frame::COG, estimate_mode_);
 
     Eigen::Matrix3d R_world_cog;
+
     tf::matrixTFToEigen(R_world_cog_tf, R_world_cog);
 
     Eigen::Matrix<double, 6, 1> wrench_world;
+
     wrench_world.head<3>() = R_world_cog * raw_wrench.head<3>();
     wrench_world.tail<3>() = R_world_cog * raw_wrench.tail<3>();
 
@@ -683,6 +708,39 @@ Eigen::Matrix<double, 6, 1> GimbalrotorAdmittanceController::getExternalWrenchWo
       external_wrench_frame_.c_str());
 
   return raw_wrench;
+}
+
+Eigen::Matrix<double, 6, 1>
+GimbalrotorAdmittanceController::getExternalWrenchWorld() const
+{
+  const ExternalWrenchSnapshot snapshot = getExternalWrenchSnapshot();
+
+  if(!snapshot.available)
+  {
+    ROS_WARN_THROTTLE(1.0, "[%s] No external wrench has been received.", controllerName());
+
+    return Eigen::Matrix<double, 6, 1>::Zero();
+  }
+
+  const double wrench_age = (ros::Time::now() - snapshot.receive_stamp).toSec();
+
+  if(!std::isfinite(wrench_age) || wrench_age < 0.0 || wrench_age > external_wrench_timeout_)
+  {
+    ROS_WARN_THROTTLE(1.0, "[%s] External wrench is stale: %.3f s.", controllerName(), wrench_age);
+
+    return Eigen::Matrix<double, 6, 1>::Zero();
+  }
+
+  const Eigen::Matrix<double, 6, 1> wrench_world = transformExternalWrenchToWorld(snapshot.raw_wrench);
+
+  if(!wrench_world.allFinite())
+  {
+    ROS_ERROR_THROTTLE(1.0, "[%s] Rejected non-finite external wrench.", controllerName());
+
+    return Eigen::Matrix<double, 6, 1>::Zero();
+  }
+
+  return wrench_world;
 }
 
 Eigen::Matrix3d
