@@ -47,7 +47,7 @@ servo_controller:
    torque_scale: 0.01
 
    controller1:
-     id: 1
+     id: 4
      name: pitch_joint
      simulation:
        pid: {p: 50.0, i: 0.01, d: 0.0}

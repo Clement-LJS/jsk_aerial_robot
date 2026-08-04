@@ -93,3 +93,60 @@ navigation:
   # Cutting pitch motion should come from baselink/body RPY command, 
   # not from pitch-joint offset, otherwise hand orientation changes.
   cutting_feed_offset: 0.0
+
+  ############################# PERCHING NAV #############################
+  perching_enable: false
+  perching_lock_once: true
+  perching_command_pitch_as_delta: true
+  perching_constrain_position_command: true
+  perching_constrain_velocity_command: true
+  perching_use_pitch_command_for_arc: true
+  perching_hold_locked_pose_without_pitch_command: true
+  perching_min_valid_radius: 0.05
+  perching_max_pitch_delta: 0.5235987756
+  perching_arc_pitch_sign: 1.0
+  perching_command_pitch_sign: 1.0
+  perching_enable_topic: "perching/enable"
+  perching_branch_pose_topic: "perching/branch_pose"
+  perching_point_topic: "perching/point"
+  perching_relock_topic: "perching/relock"
+  perching_reset_topic: "perching/reset"
+  perching_active_hold_enable: true
+  perching_y_compliance_deadband: 0.03
+  perching_takeoff_target_pitch_frame: world
+  perching_takeoff_target_pitch: 0.0
+  perching_takeoff_pitch_command_rate: 0.1745329252
+  perching_takeoff_max_pitch_delta: 1.57079632679
+  perching_takeoff_pitch_tolerance: 0.0872664626
+  perching_takeoff_pitch_rate_tolerance: 0.15
+  perching_takeoff_stable_duration: 0.30
+  perching_servo_neutral_settle_duration: 0.8
+  perching_takeoff_timeout: 8.0
+  perching_landing_descend_vel: -0.05
+  perching_accept_uav_nav_pitch_command: false
+  perching_manual_pitch_delta_topic: perching/manual_pitch_delta
+  perching_pivot_source: manual
+  perching_require_branch_point: false
+  hand_perching_center_offset_baselink_x: -0.33568
+  hand_perching_center_offset_baselink_y: 0.0
+  hand_perching_center_offset_baselink_z: 0.017
+  perching_locked_pivot_topic: perching/locked_pivot
+  perching_servo_neutral_mode_topic: perching/servo_neutral_mode
+
+  ################ EXTERNAL PERCHING PITCH JOINT ################
+  perching_pitch_joint_enable: true
+  perching_pitch_joint_name: pitch_joint
+  perching_center_link_name: perching_center
+  perching_pitch_joint_command_topic: joints_ctrl
+  perching_pitch_joint_target_topic: perching/pitch_joint/target
+  perching_pitch_joint_ready_topic: perching/pitch_joint/ready
+  perching_pitch_joint_locked_angle_topic: perching/pitch_joint/locked_angle
+  perching_constraint_valid_topic: perching/constraint_valid
+  perching_pitch_joint_min: -1.57
+  perching_pitch_joint_max: 1.57
+  perching_pitch_joint_max_velocity: 0.1
+  perching_pitch_joint_command_pub_interval: 0.02
+  perching_pitch_joint_position_tolerance: 0.03
+  perching_pitch_joint_velocity_tolerance: 0.02
+  perching_pitch_joint_stable_duration: 0.30
+  perching_pitch_joint_drift_tolerance: 0.05

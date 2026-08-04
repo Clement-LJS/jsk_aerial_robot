@@ -2,6 +2,12 @@
   <class name="aerial_robot_control/gimbalrotor_controller" type="aerial_robot_control::GimbalrotorController" base_class_type="aerial_robot_control::ControlBase">
     <description>plugin for gimbalrotor control </description>
   </class>
+  <class name="aerial_robot_control/gimbalrotor_admittance_controller" type="aerial_robot_control::GimbalrotorAdmittanceController" base_class_type="aerial_robot_control::ControlBase">
+    <description>plugin for gimbalrotor admittance control </description>
+  </class>
+  <class name="aerial_robot_control/gimbalrotor_perching_admittance_controller" type="aerial_robot_control::GimbalrotorPerchingAdmittanceController" base_class_type="aerial_robot_control::ControlBase">
+    <description>plugin for gimbalrotor perching-constrained admittance control </description>
+  </class>
   <class name="aerial_robot_control/gimbalrotor_multilink_controller" type="aerial_robot_control::GimbalrotorMultilinkController" base_class_type="aerial_robot_control::ControlBase">
     <description>plugin for gimbalrotor control </description>
   </class>

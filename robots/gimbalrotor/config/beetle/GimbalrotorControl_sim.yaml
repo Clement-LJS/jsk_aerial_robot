@@ -1,4 +1,4 @@
-aerial_robot_control_name: aerial_robot_control/gimbalrotor_impedance_controller
+aerial_robot_control_name: aerial_robot_control/gimbalrotor_perching_admittance_controller
 
 controller:
   torque_allocation_matrix_inv_pub_interval: 0.05
@@ -9,6 +9,8 @@ controller:
   compensate_multilink_inertia: true
   inertia_dot_lpf_rate: 0.15
   nonlinear_ang_acc_limit: 5.0
+  perching_neutral_collective_acc: 9.80665
+  perching_neutral_collective_ramp_time: 0.8
 
   xy:
     p_gain: 2.0
@@ -112,4 +114,111 @@ controller:
 
     force_lpf_alpha: 0.2
 
+  admittance:
+    use_admittance: true
+    external_wrench_timeout: 0.15
+
+    admittance_enable_topic: admittance_enable
+    external_wrench_topic: estimated_external_wrench
+    admittance_state_topic: admittance/active
+
+    external_wrench_frame: world
+    compliance_frame: world
+
+    force_lpf_alpha: 0.15
+    torque_lpf_alpha: 0.10
+
+    enable_x: 0
+    enable_y: 0
+    enable_z: 0
+
+    enable_roll: 0
+    enable_pitch: 1
+    enable_yaw: 0
+
+    force_ref_x: 0.0
+    force_ref_y: 0.0
+    force_ref_z: 0.0
+
+    torque_ref_roll: 0.0
+    torque_ref_pitch: 0.0
+    torque_ref_yaw: 0.0
+
+    mass_x: 5.0
+    mass_y: 5.0
+    mass_z: 5.0
+
+    damping_x: 50.0
+    damping_y: 50.0
+    damping_z: 50.0
+
+    stiffness_x: 100.0
+    stiffness_y: 100.0
+    stiffness_z: 100.0
+
+    inertia_roll: 0.08
+    inertia_pitch: 0.20
+    inertia_yaw: 0.08
+
+    rot_damping_roll: 0.5
+    rot_damping_pitch: 2.0
+    rot_damping_yaw: 0.5
+
+    rot_stiffness_roll: 1.0
+    rot_stiffness_pitch: 5.0
+    rot_stiffness_yaw: 1.0
+
+    force_limit_x: 0.0
+    force_limit_y: 0.0
+    force_limit_z: 0.0
+
+    torque_limit_roll: 0.0
+    torque_limit_pitch: 0.18
+    torque_limit_yaw: 0.0
+
+    pos_offset_limit_x: 0.0
+    pos_offset_limit_y: 0.0
+    pos_offset_limit_z: 0.0
+
+    vel_offset_limit_x: 0.0
+    vel_offset_limit_y: 0.0
+    vel_offset_limit_z: 0.0
+
+    angle_offset_limit_roll: 0.0
+    angle_offset_limit_pitch: 0.0383972
+    angle_offset_limit_yaw: 0.0
+
+    angular_vel_offset_limit_roll: 0.0
+    angular_vel_offset_limit_pitch: 0.15
+    angular_vel_offset_limit_yaw: 0.0
+
+    perching:
+      perching_enable_topic: perching/enable
+      perching_admittance_enable_topic: perching/admittance_enable
+
+      perching_point_topic: perching/point
+      perching_branch_pose_topic: perching/branch_pose
+      perching_locked_pose_topic: perching/locked_pose
+      perching_locked_pivot_topic: perching/locked_pivot
+      perching_constraint_valid_topic: perching/constraint_valid
+
+      use_branch_pose_if_no_point: false
+      require_perching_lock: true
+
+      perching_min_valid_radius: 0.05
+      perching_max_pitch_delta: 0.5235987756
+      perching_arc_pitch_sign: 1.0
+
+      maximum_lock_stamp_difference: 0.05
+      equilibrium_wrench_required_samples: 80
+
+      contact_torque_filter_alpha: 0.10
+      contact_on_threshold: 0.04
+      contact_off_threshold: 0.02
+      contact_on_duration: 0.10
+      contact_off_duration: 0.20
+
+      recovery_angle_epsilon: 0.00174533
+      recovery_rate_epsilon: 0.01
+      perching_pitch_torque_sign: 1.0
 

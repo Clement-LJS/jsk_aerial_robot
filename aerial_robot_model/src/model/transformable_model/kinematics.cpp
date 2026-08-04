@@ -4,13 +4,26 @@ using namespace aerial_robot_model::transformable;
 
 void RobotModel::resolveLinkLength()
 {
+  const KDL::SegmentMap& segments = getTree().getSegments();
+
+  /*
+   * Some transformable robots, such as Hydrus, provide link2 and link3. Gimbalrotor/Beetle does not have these links.
+   */
+  if(segments.find("link2") == segments.end() || segments.find("link3") == segments.end())
+  {
+    link_length_ = 0.0;
+    return;
+  }
+
   KDL::JntArray joint_positions(getTree().getNrOfJoints());
-  //hard coding
-  KDL::Frame f_link2 = forwardKinematics<KDL::Frame>("link2", joint_positions);
-  KDL::Frame f_link3 = forwardKinematics<KDL::Frame>("link3", joint_positions);
+
+  KDL::SetToZero(joint_positions);
+
+  const KDL::Frame f_link2 = forwardKinematics<KDL::Frame>("link2", joint_positions);
+  const KDL::Frame f_link3 = forwardKinematics<KDL::Frame>("link3", joint_positions);
+
   link_length_ = (f_link3.p - f_link2.p).Norm();
 }
-
 
 void RobotModel::calcBasicKinematicsJacobian()
 {

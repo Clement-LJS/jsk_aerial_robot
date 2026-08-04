@@ -368,7 +368,7 @@ namespace aerial_robot_navigation
       land_height_ = 0;
     }
 
-    void startTakeoff()
+    virtual void startTakeoff()
     {
       if(getNaviState() == TAKEOFF_STATE) return;
 
@@ -483,16 +483,22 @@ namespace aerial_robot_navigation
       motorArming();
     }
 
-    void landCallback(const std_msgs::EmptyConstPtr & msg)
+    virtual void startLanding()
     {
       if(force_att_control_flag_) return;
-
+      if(getNaviState() == LAND_STATE) return;
       if(!teleop_flag_) return;
 
       setNaviState(LAND_STATE);
       ROS_INFO("Land state");
     }
 
+    void landCallback(const std_msgs::EmptyConstPtr & msg)
+    {
+      (void)msg;
+      startLanding();
+    }
+    
     void haltCallback(const std_msgs::EmptyConstPtr & msg)
     {
       if(!teleop_flag_) return;
