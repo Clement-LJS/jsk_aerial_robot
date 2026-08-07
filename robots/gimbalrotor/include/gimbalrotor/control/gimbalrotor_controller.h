@@ -99,6 +99,7 @@ protected:
   virtual void sendGimbalCommand();
   virtual void sendTorqueAllocationMatrixInv();
   virtual void setAttitudeGains();
+  virtual void modifyTargetWrenchAccCog(Eigen::VectorXd& target_wrench_acc_cog);
   void perchingServoNeutralModeCallback(const std_msgs::Bool::ConstPtr& msg);
 };
 

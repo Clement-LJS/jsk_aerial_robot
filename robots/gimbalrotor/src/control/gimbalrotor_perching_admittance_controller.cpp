@@ -2,11 +2,14 @@
 
 #include <pluginlib/class_list_macros.h>
 
+#include <algorithm>
 #include <cmath>
 
 namespace
 {
 const double PI = 3.14159265358979323846;
+const double DEFAULT_MAX_LINEAR_ACCELERATION_FF = 2.0;
+const double DEFAULT_MAX_ANGULAR_ACCELERATION_FF = 10.0;
 }
 
 namespace aerial_robot_control
@@ -16,6 +19,7 @@ GimbalrotorPerchingAdmittanceController::GimbalrotorPerchingAdmittanceController
   : GimbalrotorAdmittanceController(),
     perching_enable_topic_for_constraint_("perching/enable"),
     perching_admittance_enable_topic_("perching/admittance_enable"),
+    pid_wrench_compensate_topic_("perching/pid_wrench_compensate"),
     perching_point_topic_("perching/point"),
     perching_branch_pose_topic_("perching/branch_pose"),
     perching_locked_pose_topic_("perching/locked_pose"),
@@ -49,6 +53,8 @@ GimbalrotorPerchingAdmittanceController::GimbalrotorPerchingAdmittanceController
     equilibrium_wrench_required_samples_(80),
     equilibrium_wrench_sample_count_(0),
     equilibrium_wrench_ready_(false),
+    pid_wrench_compensation_enabled_(false),
+    pid_wrench_integrator_reset_requested_(false),
     admittance_reset_requested_(false),
     contact_active_(false),
     recovery_active_(false),
@@ -78,7 +84,15 @@ GimbalrotorPerchingAdmittanceController::GimbalrotorPerchingAdmittanceController
   constraint_axis_world_ = Eigen::Vector3d::UnitY();
 
   equilibrium_wrench_pivot_world_.setZero();
-  equilibrium_wrench_sum_.setZero();
+  equilibrium_wrench_pivot_sum_.setZero();
+  equilibrium_wrench_cog_world_.setZero();
+  equilibrium_wrench_cog_sum_.setZero();
+  pid_compensate_force_axis_ = {{true, true, true}};
+  pid_compensate_torque_axis_ = {{true, true, true}};
+  max_pid_linear_acceleration_ff_.setConstant(
+      DEFAULT_MAX_LINEAR_ACCELERATION_FF);
+  max_pid_angular_acceleration_ff_.setConstant(
+      DEFAULT_MAX_ANGULAR_ACCELERATION_FF);
   prepared_perching_admittance_wrench_world_.setZero();
   prepared_R_world_constraint_.setIdentity();
 }
@@ -134,6 +148,13 @@ void GimbalrotorPerchingAdmittanceController::initialize(
           perching_admittance_enable_topic_,
           1,
           &GimbalrotorPerchingAdmittanceController::perchingAdmittanceEnableCallback,
+          this);
+
+  pid_wrench_compensate_sub_ =
+      nh_.subscribe(
+          pid_wrench_compensate_topic_,
+          1,
+          &GimbalrotorPerchingAdmittanceController::pidWrenchCompensateCallback,
           this);
 
   perching_enable_sub_for_constraint_ =
@@ -286,6 +307,7 @@ void GimbalrotorPerchingAdmittanceController::reset()
   resetEquilibriumWrenchUnsafe();
   resetContactGateUnsafe();
 
+  pid_wrench_integrator_reset_requested_ = false;
   admittance_reset_requested_ = false;
 
   ROS_WARN(
@@ -440,6 +462,17 @@ void GimbalrotorPerchingAdmittanceController::perchingRosParamInit()
 
   getParam<std::string>(
       imp_perch_nh,
+      "pid_wrench_compensate_topic",
+      pid_wrench_compensate_topic_,
+      std::string("perching/pid_wrench_compensate"));
+
+  if(pid_wrench_compensate_topic_.empty())
+  {
+    pid_wrench_compensate_topic_ = "perching/pid_wrench_compensate";
+  }
+
+  getParam<std::string>(
+      imp_perch_nh,
       "perching_locked_pivot_topic",
       perching_locked_pivot_topic_,
       std::string("perching/locked_pivot"));
@@ -485,6 +518,121 @@ void GimbalrotorPerchingAdmittanceController::perchingRosParamInit()
         equilibrium_wrench_required_samples_);
 
     equilibrium_wrench_required_samples_ = 80;
+  }
+
+  ros::NodeHandle pid_wrench_compensation_nh(
+      imp_perch_nh,
+      "pid_wrench_compensation");
+
+  getParam<bool>(
+      pid_wrench_compensation_nh,
+      "enable_force_x",
+      pid_compensate_force_axis_[0],
+      true);
+
+  getParam<bool>(
+      pid_wrench_compensation_nh,
+      "enable_force_y",
+      pid_compensate_force_axis_[1],
+      true);
+
+  getParam<bool>(
+      pid_wrench_compensation_nh,
+      "enable_force_z",
+      pid_compensate_force_axis_[2],
+      true);
+
+  getParam<bool>(
+      pid_wrench_compensation_nh,
+      "enable_torque_roll",
+      pid_compensate_torque_axis_[0],
+      true);
+
+  getParam<bool>(
+      pid_wrench_compensation_nh,
+      "enable_torque_pitch",
+      pid_compensate_torque_axis_[1],
+      true);
+
+  getParam<bool>(
+      pid_wrench_compensation_nh,
+      "enable_torque_yaw",
+      pid_compensate_torque_axis_[2],
+      true);
+
+  getParam<double>(
+      pid_wrench_compensation_nh,
+      "max_linear_acceleration_ff_x",
+      max_pid_linear_acceleration_ff_(0),
+      DEFAULT_MAX_LINEAR_ACCELERATION_FF);
+
+  getParam<double>(
+      pid_wrench_compensation_nh,
+      "max_linear_acceleration_ff_y",
+      max_pid_linear_acceleration_ff_(1),
+      DEFAULT_MAX_LINEAR_ACCELERATION_FF);
+
+  getParam<double>(
+      pid_wrench_compensation_nh,
+      "max_linear_acceleration_ff_z",
+      max_pid_linear_acceleration_ff_(2),
+      DEFAULT_MAX_LINEAR_ACCELERATION_FF);
+
+  getParam<double>(
+      pid_wrench_compensation_nh,
+      "max_angular_acceleration_ff_roll",
+      max_pid_angular_acceleration_ff_(0),
+      DEFAULT_MAX_ANGULAR_ACCELERATION_FF);
+
+  getParam<double>(
+      pid_wrench_compensation_nh,
+      "max_angular_acceleration_ff_pitch",
+      max_pid_angular_acceleration_ff_(1),
+      DEFAULT_MAX_ANGULAR_ACCELERATION_FF);
+
+  getParam<double>(
+      pid_wrench_compensation_nh,
+      "max_angular_acceleration_ff_yaw",
+      max_pid_angular_acceleration_ff_(2),
+      DEFAULT_MAX_ANGULAR_ACCELERATION_FF);
+
+  for(int axis = 0; axis < 3; ++axis)
+  {
+    if(!std::isfinite(max_pid_linear_acceleration_ff_(axis)))
+    {
+      ROS_WARN(
+          "[GimbalrotorPerchingAdmittanceController] "
+          "Invalid linear feedforward clamp on axis %d. "
+          "Using %.3f.",
+          axis,
+          DEFAULT_MAX_LINEAR_ACCELERATION_FF);
+
+      max_pid_linear_acceleration_ff_(axis) =
+          DEFAULT_MAX_LINEAR_ACCELERATION_FF;
+    }
+    else
+    {
+      max_pid_linear_acceleration_ff_(axis) =
+          std::abs(max_pid_linear_acceleration_ff_(axis));
+    }
+
+    if(!std::isfinite(max_pid_angular_acceleration_ff_(axis)))
+    {
+      ROS_WARN(
+          "[GimbalrotorPerchingAdmittanceController] "
+          "Invalid angular feedforward clamp on axis %d. "
+          "Using %.3f.",
+          axis,
+          DEFAULT_MAX_ANGULAR_ACCELERATION_FF);
+
+      max_pid_angular_acceleration_ff_(axis) =
+          DEFAULT_MAX_ANGULAR_ACCELERATION_FF;
+    }
+    else
+    {
+      max_pid_angular_acceleration_ff_(axis) =
+          std::abs(max_pid_angular_acceleration_ff_(axis));
+    }
   }
 
   getParam<double>(
@@ -655,14 +803,23 @@ void GimbalrotorPerchingAdmittanceController::perchingRosParamInit()
            arc_pitch_sign_);
 }
 
-void GimbalrotorPerchingAdmittanceController::resetEquilibriumWrenchUnsafe() const
+void GimbalrotorPerchingAdmittanceController::resetEquilibriumWrenchUnsafe()
 {
   /* The caller must already hold perching_state_mutex_. */
   equilibrium_wrench_pivot_world_.setZero();
-  equilibrium_wrench_sum_.setZero();
+  equilibrium_wrench_pivot_sum_.setZero();
+  equilibrium_wrench_cog_world_.setZero();
+  equilibrium_wrench_cog_sum_.setZero();
 
   equilibrium_wrench_sample_count_ = 0;
   equilibrium_wrench_ready_ = false;
+
+  if(pid_wrench_compensation_enabled_)
+  {
+    pid_wrench_integrator_reset_requested_ = true;
+  }
+
+  pid_wrench_compensation_enabled_ = false;
 }
 
 void GimbalrotorPerchingAdmittanceController::resetContactGateUnsafe()
@@ -889,6 +1046,56 @@ perchingPitchOutputFinite(
          std::isfinite(output.angle_offset_compliance(1)) &&
          std::isfinite(output.angular_vel_offset_compliance(1)) &&
          std::isfinite(output.angular_acc_offset_compliance(1));
+}
+
+void GimbalrotorPerchingAdmittanceController::
+resetPidWrenchCompensationIntegrators()
+{
+  if(pid_compensate_force_axis_[0])
+  {
+    pid_controllers_.at(X).setErrI(0.0);
+  }
+
+  if(pid_compensate_force_axis_[1])
+  {
+    pid_controllers_.at(Y).setErrI(0.0);
+  }
+
+  if(pid_compensate_force_axis_[2])
+  {
+    pid_controllers_.at(Z).setErrI(0.0);
+  }
+
+  if(pid_compensate_torque_axis_[0])
+  {
+    pid_controllers_.at(ROLL).setErrI(0.0);
+  }
+
+  if(pid_compensate_torque_axis_[1])
+  {
+    pid_controllers_.at(PITCH).setErrI(0.0);
+  }
+
+  if(pid_compensate_torque_axis_[2])
+  {
+    pid_controllers_.at(YAW).setErrI(0.0);
+  }
+}
+
+Eigen::Vector3d GimbalrotorPerchingAdmittanceController::
+clampVectorElementwise(
+    const Eigen::Vector3d& value,
+    const Eigen::Vector3d& absolute_limit) const
+{
+  Eigen::Vector3d clamped = value;
+
+  for(int axis = 0; axis < 3; ++axis)
+  {
+    const double limit = absolute_limit(axis);
+    clamped(axis) = std::max(-limit, std::min(limit, clamped(axis)));
+  }
+
+  return clamped;
 }
 
 double GimbalrotorPerchingAdmittanceController::safeAdmittanceDt() const
@@ -1165,10 +1372,12 @@ preparePerchingAdmittanceInput()
     {
       if(!equilibrium_wrench_ready_)
       {
-        equilibrium_wrench_sum_ += wrench_pivot_world;
+        equilibrium_wrench_pivot_sum_ += wrench_pivot_world;
+        equilibrium_wrench_cog_sum_ += wrench_cog_world;
         ++equilibrium_wrench_sample_count_;
 
-        if(!equilibrium_wrench_sum_.allFinite())
+        if(!equilibrium_wrench_pivot_sum_.allFinite() ||
+           !equilibrium_wrench_cog_sum_.allFinite())
         {
           resetEquilibriumWrenchUnsafe();
           resetContactGateUnsafe();
@@ -1178,10 +1387,15 @@ preparePerchingAdmittanceInput()
            equilibrium_wrench_required_samples_)
         {
           equilibrium_wrench_pivot_world_ =
-              equilibrium_wrench_sum_ /
+              equilibrium_wrench_pivot_sum_ /
               static_cast<double>(equilibrium_wrench_sample_count_);
 
-          if(equilibrium_wrench_pivot_world_.allFinite())
+          equilibrium_wrench_cog_world_ =
+              equilibrium_wrench_cog_sum_ /
+              static_cast<double>(equilibrium_wrench_sample_count_);
+
+          if(equilibrium_wrench_pivot_world_.allFinite() &&
+             equilibrium_wrench_cog_world_.allFinite())
           {
             equilibrium_wrench_ready_ = true;
             tare_completed_now = true;
@@ -1383,6 +1597,7 @@ void GimbalrotorPerchingAdmittanceController::controlCore()
   const bool servo_neutral_mode = perching_servo_neutral_mode_;
   bool effective_enabled = false;
   bool reset_requested = false;
+  bool reset_pid_wrench_integrators = false;
   bool perching_active = false;
 
   /*
@@ -1406,11 +1621,22 @@ void GimbalrotorPerchingAdmittanceController::controlCore()
           effective_admittance_enabled_;
 
       /*
-       * Takeoff and landing must use the exact navigator pitch/arc target.
-       * A compliance offset would make target position and pitch inconsistent.
-       */
+      * Takeoff and landing must use the exact navigator pitch/arc target.
+      * A compliance offset would make target position and pitch inconsistent.
+      */
       perching_admittance_enabled_ = false;
       resetContactGateUnsafe();
+
+      /*
+      * Servo-neutral mode must not preserve an enabled PID
+      * equilibrium-wrench feedforward state. Otherwise, the old
+      * tare can automatically resume when neutral mode ends.
+      */
+      if(pid_wrench_compensation_enabled_)
+      {
+        pid_wrench_compensation_enabled_ = false;
+        pid_wrench_integrator_reset_requested_ = true;
+      }
 
       if(had_active_admittance_state)
       {
@@ -1488,6 +1714,15 @@ void GimbalrotorPerchingAdmittanceController::controlCore()
       reset_requested = true;
       admittance_reset_requested_ = false;
     }
+
+    reset_pid_wrench_integrators =
+        pid_wrench_integrator_reset_requested_;
+    pid_wrench_integrator_reset_requested_ = false;
+  }
+
+  if(reset_pid_wrench_integrators)
+  {
+    resetPidWrenchCompensationIntegrators();
   }
 
   PID& pitch_pid = pid_controllers_.at(PITCH);
@@ -1611,6 +1846,187 @@ void GimbalrotorPerchingAdmittanceController::controlCore()
   }
 
   publishContactAdmittanceDiagnostics();
+}
+
+void GimbalrotorPerchingAdmittanceController::
+modifyTargetWrenchAccCog(Eigen::VectorXd& target_wrench_acc_cog)
+{
+  if(target_wrench_acc_cog.size() != 6)
+  {
+    ROS_ERROR_THROTTLE(
+        1.0,
+        "[GimbalrotorPerchingAdmittanceController] "
+        "Cannot apply PID wrench feedforward: "
+        "target_wrench_acc_cog has size %d.",
+        static_cast<int>(target_wrench_acc_cog.size()));
+
+    return;
+  }
+
+  bool perching_active = false;
+  bool lock_valid = false;
+  bool tare_ready = false;
+  bool feedforward_enabled = false;
+  Eigen::Matrix<double, 6, 1> equilibrium_wrench_cog_world =
+      Eigen::Matrix<double, 6, 1>::Zero();
+
+  {
+    std::lock_guard<std::mutex> lock(perching_state_mutex_);
+    perching_active = perching_enabled_for_constraint_;
+    lock_valid = has_locked_pose_;
+    tare_ready = equilibrium_wrench_ready_;
+    feedforward_enabled = pid_wrench_compensation_enabled_;
+    equilibrium_wrench_cog_world = equilibrium_wrench_cog_world_;
+  }
+
+  if(!perching_active ||
+     !lock_valid ||
+     !tare_ready ||
+     !feedforward_enabled ||
+     underactuate_ ||
+     perching_servo_neutral_mode_)
+  {
+    return;
+  }
+
+  if(!equilibrium_wrench_cog_world.allFinite())
+  {
+    ROS_ERROR_THROTTLE(
+        1.0,
+        "[GimbalrotorPerchingAdmittanceController] "
+        "Cannot apply PID wrench feedforward: "
+        "stored CoG equilibrium wrench is invalid.");
+
+    return;
+  }
+
+  Eigen::Matrix3d R_world_cog;
+  tf::matrixTFToEigen(
+      estimator_->getOrientation(Frame::COG, estimate_mode_),
+      R_world_cog);
+
+  const double mass = gimbalrotor_robot_model_->getMass();
+  const Eigen::Matrix3d inertia =
+      gimbalrotor_robot_model_->getInertia<Eigen::Matrix3d>();
+
+  if(!R_world_cog.allFinite() ||
+     !std::isfinite(mass) ||
+     mass <= 0.0 ||
+     !inertia.allFinite())
+  {
+    ROS_ERROR_THROTTLE(
+        1.0,
+        "[GimbalrotorPerchingAdmittanceController] "
+        "Cannot apply PID wrench feedforward: "
+        "invalid mass, inertia, or orientation.");
+
+    return;
+  }
+
+  Eigen::Vector3d force_cog =
+      R_world_cog.transpose() *
+      equilibrium_wrench_cog_world.head<3>();
+
+  Eigen::Vector3d torque_cog =
+      R_world_cog.transpose() *
+      equilibrium_wrench_cog_world.tail<3>();
+
+  if(!force_cog.allFinite() || !torque_cog.allFinite())
+  {
+    ROS_ERROR_THROTTLE(
+        1.0,
+        "[GimbalrotorPerchingAdmittanceController] "
+        "Cannot apply PID wrench feedforward: "
+        "frame conversion produced non-finite values.");
+
+    return;
+  }
+
+  for(int axis = 0; axis < 3; ++axis)
+  {
+    if(!pid_compensate_force_axis_[axis])
+    {
+      force_cog(axis) = 0.0;
+    }
+
+    if(!pid_compensate_torque_axis_[axis])
+    {
+      torque_cog(axis) = 0.0;
+    }
+  }
+
+  const Eigen::Vector3d linear_acceleration_ff =
+      -force_cog / mass;
+
+  Eigen::LDLT<Eigen::Matrix3d> inertia_solver(inertia);
+
+  if(inertia_solver.info() != Eigen::Success ||
+     !inertia_solver.isPositive())
+  {
+    ROS_ERROR_THROTTLE(
+        1.0,
+        "[GimbalrotorPerchingAdmittanceController] "
+        "Cannot apply PID wrench feedforward: "
+        "inertia solve is not valid.");
+
+    return;
+  }
+
+  const Eigen::Vector3d angular_acceleration_ff =
+      inertia_solver.solve(-torque_cog);
+
+  if(inertia_solver.info() != Eigen::Success ||
+     !linear_acceleration_ff.allFinite() ||
+     !angular_acceleration_ff.allFinite())
+  {
+    ROS_ERROR_THROTTLE(
+        1.0,
+        "[GimbalrotorPerchingAdmittanceController] "
+        "Cannot apply PID wrench feedforward: "
+        "non-finite acceleration result.");
+
+    return;
+  }
+
+  const Eigen::Vector3d clamped_linear_acceleration_ff =
+      clampVectorElementwise(
+          linear_acceleration_ff,
+          max_pid_linear_acceleration_ff_);
+
+  const Eigen::Vector3d clamped_angular_acceleration_ff =
+      clampVectorElementwise(
+          angular_acceleration_ff,
+          max_pid_angular_acceleration_ff_);
+
+  if((clamped_linear_acceleration_ff - linear_acceleration_ff).cwiseAbs().maxCoeff() > 1.0e-9 ||
+     (clamped_angular_acceleration_ff - angular_acceleration_ff).cwiseAbs().maxCoeff() > 1.0e-9)
+  {
+    ROS_WARN_THROTTLE(
+        1.0,
+        "[GimbalrotorPerchingAdmittanceController] "
+        "PID wrench feedforward saturated by configured acceleration clamps.");
+  }
+
+  Eigen::VectorXd modified_target_wrench_acc_cog =
+      target_wrench_acc_cog;
+
+  modified_target_wrench_acc_cog.head<3>() +=
+      clamped_linear_acceleration_ff;
+  modified_target_wrench_acc_cog.tail<3>() +=
+      clamped_angular_acceleration_ff;
+
+  if(!modified_target_wrench_acc_cog.allFinite())
+  {
+    ROS_ERROR_THROTTLE(
+        1.0,
+        "[GimbalrotorPerchingAdmittanceController] "
+        "Cannot apply PID wrench feedforward: "
+        "final target wrench acceleration is non-finite.");
+
+    return;
+  }
+
+  target_wrench_acc_cog = modified_target_wrench_acc_cog;
 }
 
 void GimbalrotorPerchingAdmittanceController::perchingEnableCallback(const std_msgs::Bool::ConstPtr& msg)
@@ -2125,6 +2541,143 @@ void GimbalrotorPerchingAdmittanceController::updateLockedConstraintFromLockedPo
       "[GimbalrotorPerchingAdmittanceController] "
       "Constraint determinant: %.6f",
       determinant);
+}
+
+void GimbalrotorPerchingAdmittanceController::
+pidWrenchCompensateCallback(const std_msgs::Bool::ConstPtr& msg)
+{
+  const bool underactuated = underactuate_;
+  const bool servo_neutral_mode = perching_servo_neutral_mode_;
+
+  bool enable_accepted = false;
+  bool became_enabled = false;
+  bool became_disabled = false;
+  bool perching_active = false;
+  bool lock_valid = false;
+  bool tare_ready = false;
+  int collected_samples = 0;
+
+  {
+    std::lock_guard<std::mutex> lock(perching_state_mutex_);
+    const bool was_enabled = pid_wrench_compensation_enabled_;
+
+    perching_active = perching_enabled_for_constraint_;
+    lock_valid = has_locked_pose_;
+    tare_ready = equilibrium_wrench_ready_;
+    collected_samples = equilibrium_wrench_sample_count_;
+
+    if(!msg->data)
+    {
+      became_disabled = pid_wrench_compensation_enabled_;
+      pid_wrench_compensation_enabled_ = false;
+      if(was_enabled)
+      {
+        pid_wrench_integrator_reset_requested_ = true;
+      }
+      enable_accepted = true;
+    }
+    else if(!perching_active)
+    {
+      pid_wrench_compensation_enabled_ = false;
+    }
+    else if(!lock_valid)
+    {
+      pid_wrench_compensation_enabled_ = false;
+    }
+    else if(!tare_ready)
+    {
+      pid_wrench_compensation_enabled_ = false;
+    }
+    else if(underactuated)
+    {
+      pid_wrench_compensation_enabled_ = false;
+    }
+    else if(servo_neutral_mode)
+    {
+      pid_wrench_compensation_enabled_ = false;
+    }
+    else
+    {
+      became_enabled = !pid_wrench_compensation_enabled_;
+      pid_wrench_compensation_enabled_ = true;
+
+      if(became_enabled)
+      {
+        pid_wrench_integrator_reset_requested_ = true;
+      }
+
+      enable_accepted = true;
+    }
+
+    became_disabled =
+        was_enabled &&
+        !pid_wrench_compensation_enabled_;
+
+    if(!enable_accepted && became_disabled)
+    {
+      pid_wrench_integrator_reset_requested_ = true;
+    }
+  }
+
+  if(!msg->data)
+  {
+    ROS_WARN(
+        "[GimbalrotorPerchingAdmittanceController] "
+        "PID equilibrium-wrench feedforward disabled.");
+
+    return;
+  }
+
+  if(enable_accepted)
+  {
+    if(became_enabled)
+    {
+      ROS_WARN(
+          "[GimbalrotorPerchingAdmittanceController] "
+          "PID equilibrium-wrench feedforward enabled.");
+    }
+
+    return;
+  }
+
+  if(!perching_active)
+  {
+    ROS_ERROR(
+        "[GimbalrotorPerchingAdmittanceController] "
+        "Cannot enable PID equilibrium-wrench feedforward: "
+        "perching mode is inactive.");
+  }
+  else if(!lock_valid)
+  {
+    ROS_ERROR(
+        "[GimbalrotorPerchingAdmittanceController] "
+        "Cannot enable PID equilibrium-wrench feedforward: "
+        "no valid locked pose/pivot is available.");
+  }
+  else if(!tare_ready)
+  {
+    ROS_ERROR(
+        "[GimbalrotorPerchingAdmittanceController] "
+        "Cannot enable PID equilibrium-wrench feedforward: "
+        "equilibrium wrench is not ready. "
+        "Collected %d / %d samples.",
+        collected_samples,
+        equilibrium_wrench_required_samples_);
+  }
+  else if(underactuated)
+  {
+    ROS_ERROR(
+        "[GimbalrotorPerchingAdmittanceController] "
+        "Cannot enable PID equilibrium-wrench feedforward: "
+        "controller/underactuate is true.");
+  }
+  else if(servo_neutral_mode)
+  {
+    ROS_ERROR(
+        "[GimbalrotorPerchingAdmittanceController] "
+        "Cannot enable PID equilibrium-wrench feedforward: "
+        "servo-neutral mode is active.");
+  }
 }
 
 Eigen::Matrix3d GimbalrotorPerchingAdmittanceController::getComplianceToWorldRotation() const

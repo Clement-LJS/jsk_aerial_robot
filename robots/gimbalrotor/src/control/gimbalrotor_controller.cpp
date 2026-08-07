@@ -94,6 +94,11 @@ namespace aerial_robot_control
     return PoseLinearController::update();
   }
 
+void GimbalrotorController::modifyTargetWrenchAccCog(Eigen::VectorXd& target_wrench_acc_cog)
+{
+  (void)target_wrench_acc_cog;
+}
+
 void GimbalrotorController::controlCore()
 {
   PoseLinearController::controlCore();
@@ -172,6 +177,8 @@ void GimbalrotorController::controlCore()
       target_wrench_acc_cog.tail(3) = Eigen::Vector3d(target_ang_acc_x, target_ang_acc_y, target_ang_acc_z);
     else
       target_wrench_acc_cog.tail(3) = Eigen::Vector3d(target_ang_acc_x, target_ang_acc_y, target_ang_acc_z) + gyro;
+
+    modifyTargetWrenchAccCog(target_wrench_acc_cog);
 
     setTargetWrenchAccCog(target_wrench_acc_cog);
     
