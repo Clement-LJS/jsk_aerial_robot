@@ -254,17 +254,26 @@
 	<!--     iyy="0.0010134" iyz="0.000000006" -->
 	<!--     izz="0.0010082"/> -->
 
-	<origin xyz="0.20096 0.00005 0.00005"/> <!-- 60 or 63 -->
-	<mass value="0.210"/>
+
+
+	<!-- <origin xyz="0.20096 0.00005 0.00005"/> 60 or 63 -->
+	<!-- <mass value="0.210"/>
 	<inertia
 	    ixx="0.0000946" ixy="-0.00000006" ixz="-0.0000018"
 	    iyy="0.0017155" iyz="0.000000007"
-	    izz="0.0016576"/>
+	    izz="0.0016576"/> -->
+
+  <origin xyz="0.23313 -0.01235 0.00668"/> <!-- lock -->
+	<mass value="0.34420"/>
+	<inertia
+	    ixx="0.00044844125" ixy="0.00005346941" ixz="-0.00008531477"
+	    iyy="0.00283149126" iyz="-0.00009018516"
+	    izz="0.00288680631"/>
       </inertial>
       <visual>
 	<origin xyz="0 0 0" rpy="0 0 0"/>
 	<geometry>
-    	  <mesh filename="package://gimbalrotor/urdf/beetle/mesh/passive_perching_hand_630.STL" scale="1 1 1"/>
+    	  <mesh filename="package://gimbalrotor/urdf/beetle/mesh/perching_hand_lock.STL" scale="0.001 0.001 0.001"/>
 	</geometry>
       </visual>
       <collision>
