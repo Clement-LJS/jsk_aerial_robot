@@ -129,9 +129,9 @@ navigation:
   perching_require_branch_point: false
 
   # hand center from baselink 
-  hand_perching_center_offset_baselink_x: -0.33568
+  hand_perching_center_offset_baselink_x: -0.34867 #-0.33568
   hand_perching_center_offset_baselink_y: 0.0
-  hand_perching_center_offset_baselink_z: 0.017
+  hand_perching_center_offset_baselink_z: 0.0375 #0.017
 
   # Latched pivot topic published by perching navigator after lock.
   # Perching admittance controller uses this so both navigator and controller
