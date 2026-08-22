@@ -44,11 +44,11 @@ controller:
 
   roll:
     p_gain: 20.0
-    i_gain: 2.0 # or 0.3
+    i_gain: 1.5 #2.0 # or 0.3
     d_gain: 15.0
     limit_sum: 20.0
     limit_p: 20.0
-    limit_i: 0.6
+    limit_i: 5.0 # 0.6
     limit_d: 20.0
 
   pitch:
