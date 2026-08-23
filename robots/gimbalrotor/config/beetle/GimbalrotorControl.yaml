@@ -1,4 +1,4 @@
-aerial_robot_control_name: aerial_robot_control/gimbalrotor_perching_admittance_controller
+aerial_robot_control_name: aerial_robot_control/gimbalrotor_controller
 
 controller:
   torque_allocation_matrix_inv_pub_interval: 0.05
@@ -32,9 +32,9 @@ controller:
     limit_d: 12.0
 
   z:
-    p_gain: 10.0
+    p_gain: 12.0
     i_gain: 2.0
-    d_gain: 5.0
+    d_gain: 4.0
     limit_err_p: 1.0
     limit_sum: 25.0 # N for clamping thrust force
     limit_p: 25.0
@@ -64,8 +64,8 @@ controller:
 
   yaw:
     p_gain: 15.0
-    i_gain: 1.0 #0.0
-    d_gain: 8.0
+    i_gain: 1.0
+    d_gain: 6.0
     limit_err_p: 0.4
     limit_sum: 20.0
     limit_p: 20.0
