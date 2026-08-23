@@ -1,8 +1,10 @@
 <?xml version="1.0"?>
 <robot
     xmlns:xacro="http://www.ros.org/wiki/xacro" name="gimbalrotor_link" >
-  <xacro:arg name="use_saw" default="true"/>
+  <xacro:arg name="use_saw" default="false"/>
   <xacro:arg name="use_hand" default="true"/>
+  <xacro:arg name="wrench_sensor" default="true"/>
+
   
   <xacro:macro name="gimbalrotor_center_link" params="child1 child2 child3 child4">
     ## dummy
@@ -284,7 +286,36 @@
       </collision>
     </link>
   </xacro:if>
-  
+
+
+
+
+  <xacro:if value="$(arg wrench_sensor)">
+    <!-- saw link  -->
+    <link name="wrench_sensor">
+      <inertial>
+      <origin xyz="0.17641 0.00006 0.05725"/>
+      <mass value="0.445"/> 
+      <inertia
+          ixx="0.00048898750" ixy="0.00006169827" ixz="0.00012259070"
+          iyy="0.00091748375" iyz="0.00000671401"
+          izz="0.00065255699"/> 
+      </inertial>
+      <visual>
+	<origin xyz="0 0 0" rpy="0 0 0"/>
+	<geometry>
+        <mesh filename="package://gimbalrotor/urdf/beetle/mesh/wrench_sensor.STL" scale="0.001 0.001 0.001"/> 
+	</geometry>
+      </visual>
+      <collision>
+	<origin xyz="0.236 0.024 0.039" rpy="0 0 0"/>
+	<geometry>
+	  <box size="0.471 0.134 0.153"/>
+	</geometry>
+      </collision>
+    </link>
+  </xacro:if>
+
   <!-- ## beetle hand joint
   <joint name="handbase_baselink_joint" type="fixed">
     <child link="handbase"/>
@@ -307,6 +338,15 @@
       <child link="passive_hand_link"/>
       <parent link="base_link"/>
       <origin xyz="-0.05918 0.00025 0.01700" rpy="0 0 3.142"/>
+      <axis xyz="0 0 0"/>
+    </joint>
+  </xacro:if>
+
+  <xacro:if value="$(arg wrench_sensor)">
+    <joint name="wrench_sensor_joint" type="fixed">
+      <child link="wrench_sensor"/>
+      <parent link="base_link"/>
+      <origin xyz="0.05918 0.00025 0.01700" rpy="0 0 0"/>
       <axis xyz="0 0 0"/>
     </joint>
   </xacro:if>
