@@ -15,12 +15,12 @@ NEW_P_GAIN = 1400
 
 # Preserve your existing values.
 NEW_I_GAIN = 0
-NEW_D_GAIN = 4600
+NEW_D_GAIN = 0
 
-BOARD_INFO_SERVICE = "/get_board_info"
-CONFIG_SERVICE = "/direct_servo_config"
-TORQUE_TOPIC = "/servo/torque_enable"
-TORQUE_STATE_TOPIC = "/servo/torque_states"
+BOARD_INFO_SERVICE = "gimbalrotor/get_board_info"
+CONFIG_SERVICE = "gimbalrotor/direct_servo_config"
+TORQUE_TOPIC = "gimbalrotor/servo/torque_enable"
+TORQUE_STATE_TOPIC = "gimbalrotor/servo/torque_states"
 
 
 def resolve_hardware_id(hardware_id):

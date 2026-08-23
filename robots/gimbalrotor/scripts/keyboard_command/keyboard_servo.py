@@ -47,10 +47,10 @@ def main():
     rospy.init_node("keyboard_servo_command")
 
     target_topic = rospy.get_param(
-        "~target_topic", "/servo/target_states")
+        "~target_topic", "gimbalrotor/servo/target_states")
     current_topic = rospy.get_param(
-        "~current_topic", "/servo/states")
-    servo_index = rospy.get_param("~servo_index", 1)
+        "~current_topic", "gimbalrotor/servo/states")
+    servo_index = rospy.get_param("~servo_index", 4)
     angle_step = rospy.get_param("~angle_step", 50)
     key_repeat_timeout = rospy.get_param("~key_repeat_timeout", 0.10)
 

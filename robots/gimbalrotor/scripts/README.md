@@ -21,6 +21,9 @@ Manually changes the pitch delta relative to the locked perching orientation.
 
 Moves one servo by relative encoder steps while using the latest measured servo angle as the command base.
 
+Run with:  
+rosrun gimbalrotor keyboard_servo.py _servo_index:=4
+
 ### `saw_control.py`
 
 Publish saw pwm with keyboard
