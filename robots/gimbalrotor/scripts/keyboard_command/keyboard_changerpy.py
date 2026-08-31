@@ -92,9 +92,9 @@ if __name__ == "__main__":
         "/gimbalrotor/final_target_baselink_rpy"
     )
 
-    step = rospy.get_param("~step", 0.00872665) #0.5deg
+    step = rospy.get_param("~step", 00.00349066) #0.2deg
 
-    limit_deg = rospy.get_param("~limit_deg", 8.0)
+    limit_deg = rospy.get_param("~limit_deg", 20.0)
     limit_rad = math.radians(limit_deg)
 
     rpy_pub = rospy.Publisher(topic_name, Vector3Stamped, queue_size=1)

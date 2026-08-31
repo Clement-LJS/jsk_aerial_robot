@@ -14,9 +14,9 @@ from tf.transformations import euler_from_quaternion
 # Experiment settings
 # ============================================================
 
-STEP_DEG = 0.6 #0.8
-HOLD_TIME = 8.0 #15.0
-NUMBER_OF_STEPS = 5 #15
+STEP_DEG = 0.8
+HOLD_TIME = 15.0
+NUMBER_OF_STEPS = 15
 
 PUBLISH_REPEAT = 5
 PUBLISH_INTERVAL = 0.02
