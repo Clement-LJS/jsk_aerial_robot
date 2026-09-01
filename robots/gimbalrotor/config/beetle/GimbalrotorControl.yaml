@@ -183,23 +183,6 @@ controller:
       # 80 samples = approximately 2 seconds.
       equilibrium_wrench_required_samples: 80
 
-      pid_wrench_compensate_topic: perching/pid_wrench_compensate
-
-      pid_wrench_compensation:
-        enable_force_x: true
-        enable_force_y: true
-        enable_force_z: true
-        enable_torque_roll: true
-        enable_torque_pitch: true
-        enable_torque_yaw: true
-
-        max_linear_acceleration_ff_x: 2.0
-        max_linear_acceleration_ff_y: 2.0
-        max_linear_acceleration_ff_z: 2.0
-        max_angular_acceleration_ff_roll: 10.0
-        max_angular_acceleration_ff_pitch: 10.0
-        max_angular_acceleration_ff_yaw: 10.0
-
       # Contact-gated perching admittance.
       contact_torque_filter_alpha: 0.10
 
