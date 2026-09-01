@@ -14,7 +14,6 @@
 
 #include <string>
 #include <mutex>
-#include <array>
 #include <cstdint>
 
 namespace aerial_robot_control
@@ -39,7 +38,6 @@ public:
 
 protected:
   virtual void controlCore() override;
-  virtual void modifyTargetWrenchAccCog(Eigen::VectorXd& target_wrench_acc_cog) override;
 
   virtual const char* controllerName() const override
   {
@@ -61,9 +59,6 @@ private:
       const std_msgs::Bool::ConstPtr& msg);
 
   void perchingAdmittanceEnableCallback(
-      const std_msgs::Bool::ConstPtr& msg);
-
-  void pidWrenchCompensateCallback(
       const std_msgs::Bool::ConstPtr& msg);
 
   void perchingEnableCallback(
@@ -112,12 +107,6 @@ private:
   bool perchingPitchOutputFinite(
       const AdmittanceCoreOutput& output) const;
 
-  void resetPidWrenchCompensationIntegrators();
-
-  Eigen::Vector3d clampVectorElementwise(
-      const Eigen::Vector3d& value,
-      const Eigen::Vector3d& absolute_limit) const;
-
   double safeAdmittanceDt() const;
 
   void publishContactAdmittanceDiagnostics() const;
@@ -152,7 +141,6 @@ private:
 private:
   ros::Subscriber normal_admittance_enable_sub_;
   ros::Subscriber perching_admittance_enable_sub_;
-  ros::Subscriber pid_wrench_compensate_sub_;
 
   ros::Subscriber perching_enable_sub_for_constraint_;
   ros::Subscriber perching_point_sub_;
@@ -169,7 +157,6 @@ private:
 
   std::string perching_enable_topic_for_constraint_;
   std::string perching_admittance_enable_topic_;
-  std::string pid_wrench_compensate_topic_;
   std::string perching_point_topic_;
   std::string perching_branch_pose_topic_;
   std::string perching_locked_pose_topic_;
@@ -241,20 +228,9 @@ private:
   */
   mutable Eigen::Matrix<double, 6, 1> equilibrium_wrench_pivot_world_;
   mutable Eigen::Matrix<double, 6, 1> equilibrium_wrench_pivot_sum_;
-  mutable Eigen::Matrix<double, 6, 1> equilibrium_wrench_cog_world_;
-  mutable Eigen::Matrix<double, 6, 1> equilibrium_wrench_cog_sum_;
 
   mutable int equilibrium_wrench_sample_count_;
   mutable bool equilibrium_wrench_ready_;
-
-  bool pid_wrench_compensation_enabled_;
-  bool pid_wrench_integrator_reset_requested_;
-
-  std::array<bool, 3> pid_compensate_force_axis_;
-  std::array<bool, 3> pid_compensate_torque_axis_;
-
-  Eigen::Vector3d max_pid_linear_acceleration_ff_;
-  Eigen::Vector3d max_pid_angular_acceleration_ff_;
 
   bool admittance_reset_requested_;
 
