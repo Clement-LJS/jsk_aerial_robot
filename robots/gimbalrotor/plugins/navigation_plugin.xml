@@ -5,4 +5,7 @@
   <class name="aerial_robot_navigation/gimbalrotor_perching_navigation" type="aerial_robot_navigation::GimbalrotorPerchingNavigator" base_class_type="aerial_robot_navigation::BaseNavigator">
     <description>plugin for gimbalrotor perching navigation </description>
   </class>
+  <class name="aerial_robot_navigation/gimbalrotor_multilink_perching_navigation" type="aerial_robot_navigation::GimbalrotorMultilinkPerchingNavigator" base_class_type="aerial_robot_navigation::BaseNavigator">
+    <description>plugin for two-active-joint fixed-contact gimbalrotor perching navigation</description>
+  </class>
 </library>

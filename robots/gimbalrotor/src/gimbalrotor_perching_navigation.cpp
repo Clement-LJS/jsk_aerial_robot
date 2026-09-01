@@ -167,6 +167,13 @@ void GimbalrotorPerchingNavigator::rosParamInit()
   getParam<std::string>(navi_nh, "perching_locked_pivot_topic", locked_pivot_topic_, "perching/locked_pivot");
 }
 
+void GimbalrotorPerchingNavigator::reset()
+{
+  GimbalrotorNavigator::reset();
+  perching_enable_ = false;
+  resetPerchingLock();
+}
+
 void GimbalrotorPerchingNavigator::update()
 {
   if(getNaviState() != HOVER_STATE && perching_enable_)
@@ -307,12 +314,8 @@ void GimbalrotorPerchingNavigator::relockCallback(const std_msgs::EmptyConstPtr&
     return;
   }
 
-  perching_locked_ = false;
-  locked_radius_ = 0.0;
-  locked_radius_vec_world_.setValue(
-      0.0,
-      0.0,
-      0.0);
+  /* Virtual so a derived mechanism invalidates its complete lock state. */
+  resetPerchingLock();
 
   if(!tryLockPerching("manual relock"))
   {
@@ -384,8 +387,17 @@ void GimbalrotorPerchingNavigator::manualPitchDeltaCallback(const std_msgs::Floa
     }
   }
 
-  double delta_pitch = command_pitch_sign_ * msg->data;
+  double delta_pitch = msg->data;
   delta_pitch = clamp(delta_pitch, -max_pitch_delta_, max_pitch_delta_);
+
+  applyManualPitchDelta(delta_pitch);
+}
+
+void GimbalrotorPerchingNavigator::applyManualPitchDelta(double delta_pitch)
+{
+  /* Default single-DOF behavior is intentionally unchanged. */
+
+  delta_pitch *= command_pitch_sign_;
 
   const double target_pitch = normalizeAngle(locked_robot_rpy_.y() + delta_pitch);
   const tf::Vector3 target_pos = computeArcPositionFromPitch(target_pitch);
@@ -400,6 +412,31 @@ void GimbalrotorPerchingNavigator::manualPitchDeltaCallback(const std_msgs::Floa
   //     "[GimbalrotorPerchingNavigator] manual pitch delta %.3f deg -> target pitch %.3f deg",
   //     delta_pitch * 180.0 / PI,
   //     target_pitch * 180.0 / PI);
+}
+
+bool GimbalrotorPerchingNavigator::perchingSessionEnabled() const
+{
+  return perching_enable_;
+}
+
+void GimbalrotorPerchingNavigator::commitPerchingLockDiagnostics(
+    const tf::Vector3& robot_pos_world,
+    const tf::Vector3& robot_rpy,
+    const tf::Vector3& pivot_world)
+{
+  locked_robot_pos_world_ = robot_pos_world;
+  locked_robot_rpy_ = robot_rpy;
+  locked_pivot_world_ = pivot_world;
+  perching_point_world_ = pivot_world;
+  locked_radius_vec_world_ = robot_pos_world - pivot_world;
+  locked_radius_ = norm2D(
+      locked_radius_vec_world_.x(),
+      locked_radius_vec_world_.z());
+  locked_y_offset_ = robot_pos_world.y() - pivot_world.y();
+  perching_locked_ = true;
+
+  publishLockedDebugPose();
+  publishLockedPivot();
 }
 
 bool GimbalrotorPerchingNavigator::tryLockPerching(const std::string& reason)

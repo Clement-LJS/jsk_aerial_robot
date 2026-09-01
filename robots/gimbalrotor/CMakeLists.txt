@@ -12,6 +12,7 @@ find_package(catkin REQUIRED COMPONENTS
   spinal
   pluginlib
   roscpp
+  sensor_msgs
   std_msgs
   tf
   )
@@ -27,6 +28,7 @@ catkin_package(
     geometry_msgs
     pluginlib
     roscpp
+    sensor_msgs
     spinal
     std_msgs
     tf
@@ -40,8 +42,8 @@ include_directories(
 add_library(gimbalrotor_controller
   src/control/gimbalrotor_controller.cpp
   src/control/gimbalrotor_admittance_controller.cpp
-  src/control/gimbalrotor_perching_admittance_controller.cpp)
-target_link_libraries(gimbalrotor_controller ${catkin_LIBRARIES})
+  src/control/gimbalrotor_perching_admittance_controller.cpp
+  src/control/gimbalrotor_multilink_perching_admittance_controller.cpp)
 
 add_library(gimbalrotor_robot_model
   src/model/gimbalrotor_robot_model.cpp)
@@ -49,8 +51,13 @@ target_link_libraries(gimbalrotor_robot_model ${catkin_LIBRARIES})
 
 add_library(gimbalrotor_navigation
   src/gimbalrotor_navigation.cpp
-  src/gimbalrotor_perching_navigation.cpp)
+  src/gimbalrotor_perching_navigation.cpp
+  src/gimbalrotor_multilink_perching_navigation.cpp)
 target_link_libraries(gimbalrotor_navigation ${catkin_LIBRARIES})
+
+target_link_libraries(gimbalrotor_controller
+  gimbalrotor_navigation
+  ${catkin_LIBRARIES})
 
 install(DIRECTORY config plugins launch
   DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}

@@ -10,4 +10,8 @@
   <class name="aerial_robot_control/gimbalrotor_perching_admittance_controller" type="aerial_robot_control::GimbalrotorPerchingAdmittanceController" base_class_type="aerial_robot_control::ControlBase">
     <description>plugin for gimbalrotor perching-constrained admittance control </description>
   </class>
+
+  <class name="aerial_robot_control/gimbalrotor_multilink_perching_admittance_controller" type="aerial_robot_control::GimbalrotorMultilinkPerchingAdmittanceController" base_class_type="aerial_robot_control::ControlBase">
+    <description>two-active-joint fixed-contact perching controller with pitch-joint admittance</description>
+  </class>
 </library>

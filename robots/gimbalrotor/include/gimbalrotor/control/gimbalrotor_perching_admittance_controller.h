@@ -52,6 +52,34 @@ protected:
   virtual Eigen::Matrix<double, 6, 1>
   getExternalWrenchWorld() const override;
 
+  virtual bool computeResidualPerchingPitchTorque(
+      const Eigen::Matrix<double, 6, 1>& wrench_cog_world,
+      const Eigen::Matrix<double, 6, 1>& wrench_pivot_world,
+      const Eigen::Matrix<double, 6, 1>& equilibrium_wrench_pivot_world,
+      const Eigen::Vector3d& cog_pos_world,
+      const Eigen::Vector3d& pivot_pos_world,
+      const Eigen::Matrix3d& R_world_constraint,
+      const Eigen::Vector3d& constraint_axis_world,
+      double& residual_pitch_torque,
+      Eigen::Vector3d& pitch_axis_world) const;
+
+  virtual bool allowPerchingEquilibriumTareCollection() const;
+  virtual bool allowPerchingAdmittanceArming() const;
+  virtual bool useLegacyPlanarPerchingConstraintFrame() const;
+
+  void invalidatePerchingAdmittanceTare();
+  bool perchingEquilibriumTareReady() const;
+
+  bool perchingPitchOutputFinite(
+      const AdmittanceCoreOutput& output) const;
+
+  double perchingPitchTorqueSign() const
+  {
+    return perching_pitch_torque_sign_;
+  }
+
+  virtual Eigen::Matrix3d getComplianceToWorldRotation() const override;
+
 private:
   void perchingRosParamInit();
 
@@ -104,9 +132,6 @@ private:
 
   bool perchingPitchAdmittanceConfigValid() const;
 
-  bool perchingPitchOutputFinite(
-      const AdmittanceCoreOutput& output) const;
-
   double safeAdmittanceDt() const;
 
   void publishContactAdmittanceDiagnostics() const;
@@ -132,7 +157,6 @@ private:
       tf::Vector3& pos,
       tf::Vector3& rpy) const;
 
-  virtual Eigen::Matrix3d getComplianceToWorldRotation() const override;
   void publishPivotWrenchFrame(
       const tf::Vector3& pivot_world,
       const Eigen::Matrix3d& R_world_constraint,

@@ -27,6 +27,15 @@ namespace aerial_robot_navigation
     void naviCallback(const aerial_robot_msgs::FlightNavConstPtr & msg) override;
     void reset() override;
 
+    /*
+     * The gimbalrotor pose controller tracks the CoG frame while this
+     * rotation describes baselink relative to that frame.  Derived
+     * navigators which own a complete body-pose constraint need both sides
+     * of that convention to produce a consistent target.
+     */
+    void setBaselinkRotationTargetRelativeToCog(const tf::Quaternion& target);
+    tf::Quaternion getCommandedBaselinkRotationRelativeToCog() const;
+
   private:
     ros::Publisher target_baselink_rpy_pub_;
     ros::Subscriber final_target_baselink_rot_sub_, final_target_baselink_rpy_sub_;

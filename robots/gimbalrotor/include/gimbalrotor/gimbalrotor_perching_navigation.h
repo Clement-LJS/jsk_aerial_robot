@@ -38,8 +38,23 @@ public:
 
   void update() override;
 
-private:
+protected:
   void rosParamInit() override;
+  void reset() override;
+
+  virtual bool tryLockPerching(const std::string& reason);
+  virtual void resetPerchingLock();
+  virtual void applyPerchingConstraint(aerial_robot_msgs::FlightNav& nav_msg);
+  virtual void applyActivePerchingTarget();
+  virtual void applyManualPitchDelta(double delta);
+
+  bool perchingSessionEnabled() const;
+  void commitPerchingLockDiagnostics(
+      const tf::Vector3& robot_pos_world,
+      const tf::Vector3& robot_rpy,
+      const tf::Vector3& pivot_world);
+
+private:
   void naviCallback(const aerial_robot_msgs::FlightNavConstPtr& msg) override;
 
   void perchingEnableCallback(const std_msgs::BoolConstPtr& msg);
@@ -49,12 +64,6 @@ private:
   void resetCallback(const std_msgs::EmptyConstPtr& msg);
   void manualPitchDeltaCallback(const std_msgs::Float64ConstPtr& msg);
 
-  bool tryLockPerching(const std::string& reason);
-  void resetPerchingLock();
-
-  void applyPerchingConstraint(aerial_robot_msgs::FlightNav& nav_msg);
-
-  void applyActivePerchingTarget();
   aerial_robot_msgs::FlightNav buildActivePerchingNavCommand();
   tf::Vector3 computeActiveHoldPosition() const;
   double computeActiveHoldPitch() const;
