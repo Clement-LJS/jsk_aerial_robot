@@ -9,7 +9,6 @@
 #include <aerial_robot_estimation/state_estimation.h>
 
 #include <std_msgs/Float32MultiArray.h>
-#include <std_msgs/Bool.h>
 #include <std_msgs/UInt32.h>
 #include <std_msgs/UInt8.h>
 
@@ -47,7 +46,6 @@ protected:
   ros::Publisher rpy_gain_pub_;                  // for spinal
   ros::Publisher torque_allocation_matrix_inv_pub_; // for spinal
   ros::Publisher gimbal_dof_pub_;                // for spinal
-  ros::Subscriber perching_servo_neutral_mode_sub_;
 
   boost::shared_ptr<GimbalrotorRobotModel> gimbalrotor_robot_model_;
 
@@ -71,17 +69,9 @@ protected:
 
   bool gimbal_calc_in_fc_;
   bool underactuate_;
-  bool perching_servo_neutral_mode_;
-  bool previous_perching_servo_neutral_mode_;
-
-  bool previous_perching_takeoff_collective_active_;
 
   double target_roll_ = 0.0;
   double target_pitch_ = 0.0;
-  double perching_neutral_collective_acc_ = 9.80665;
-  double perching_neutral_collective_ramp_time_ = 0.8;
-  std::string perching_servo_neutral_mode_topic_;
-  ros::Time perching_neutral_enter_time_;
 
   /*
    * Make these virtual so the multilink controller can override them.
@@ -100,7 +90,6 @@ protected:
   virtual void sendTorqueAllocationMatrixInv();
   virtual void setAttitudeGains();
   virtual void modifyTargetWrenchAccCog(Eigen::VectorXd& target_wrench_acc_cog);
-  void perchingServoNeutralModeCallback(const std_msgs::Bool::ConstPtr& msg);
 };
 
 } // namespace aerial_robot_control

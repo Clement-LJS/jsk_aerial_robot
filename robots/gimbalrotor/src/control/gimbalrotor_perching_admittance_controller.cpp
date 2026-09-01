@@ -1594,55 +1594,65 @@ preparePerchingAdmittanceInput()
 
 void GimbalrotorPerchingAdmittanceController::controlCore()
 {
-  const bool servo_neutral_mode = perching_servo_neutral_mode_;
+  const bool hover_state = navigator_ && navigator_->getNaviState() == aerial_robot_navigation::HOVER_STATE;
+
   bool effective_enabled = false;
   bool reset_requested = false;
   bool reset_pid_wrench_integrators = false;
   bool perching_active = false;
+  bool cleared_perching_runtime_state = false;
 
-  /*
-   * Suppress the ROS pitch integral term only while
-   * contact admittance is active or recovering.
-   *
-   * Perching mode by itself does not suppress the integral.
-   */
   bool suppress_pitch_i_limit = false;
 
   {
     std::lock_guard<std::mutex> lock(perching_state_mutex_);
-    perching_active = perching_enabled_for_constraint_;
 
-    if(servo_neutral_mode)
+    if(!hover_state)
     {
-      const bool had_active_admittance_state =
+      const bool has_stale_perching_runtime_state =
+          perching_enabled_for_constraint_ ||
           perching_admittance_enabled_ ||
+          has_locked_pose_msg_ ||
+          has_locked_pivot_ ||
+          has_locked_pose_ ||
+          equilibrium_wrench_ready_ ||
+          equilibrium_wrench_sample_count_ > 0 ||
           contact_active_ ||
           recovery_active_ ||
-          effective_admittance_enabled_;
+          pid_wrench_compensation_enabled_;
 
-      /*
-      * Takeoff and landing must use the exact navigator pitch/arc target.
-      * A compliance offset would make target position and pitch inconsistent.
-      */
-      perching_admittance_enabled_ = false;
-      resetContactGateUnsafe();
-
-      /*
-      * Servo-neutral mode must not preserve an enabled PID
-      * equilibrium-wrench feedforward state. Otherwise, the old
-      * tare can automatically resume when neutral mode ends.
-      */
-      if(pid_wrench_compensation_enabled_)
+      if(has_stale_perching_runtime_state)
       {
-        pid_wrench_compensation_enabled_ = false;
-        pid_wrench_integrator_reset_requested_ = true;
-      }
+        perching_enabled_for_constraint_ = false;
+        perching_admittance_enabled_ = false;
 
-      if(had_active_admittance_state)
-      {
+        has_locked_pose_msg_ = false;
+        has_locked_pivot_ = false;
+        has_locked_pose_ = false;
+
+        locked_pose_stamp_ = ros::Time(0);
+        locked_pivot_stamp_ = ros::Time(0);
+        accepted_locked_pose_stamp_ = ros::Time(0);
+        accepted_locked_pivot_stamp_ = ros::Time(0);
+
+        locked_radius_ = 0.0;
+
+        R_world_constraint_.setIdentity();
+        prepared_R_world_constraint_.setIdentity();
+        constraint_axis_world_ = Eigen::Vector3d::UnitY();
+
+        prepared_perching_admittance_wrench_world_.setZero();
+
+        resetEquilibriumWrenchUnsafe();
+        resetContactGateUnsafe();
+
         admittance_reset_requested_ = true;
+
+        cleared_perching_runtime_state = true;
       }
     }
+
+    perching_active = perching_enabled_for_constraint_ && hover_state;
 
     if(recovery_active_ && recoveryComplete())
     {
@@ -1655,22 +1665,31 @@ void GimbalrotorPerchingAdmittanceController::controlCore()
     }
   }
 
-  if(perching_active &&
-     !servo_neutral_mode)
+  if(cleared_perching_runtime_state)
+  {
+    ROS_WARN_THROTTLE(
+        1.0,
+        "[GimbalrotorPerchingAdmittanceController] "
+        "Perching session cleared because navigation is not "
+        "in HOVER_STATE. A new perching/enable=true command "
+        "and a fresh lock/tare are required after returning "
+        "to HOVER_STATE.");
+  }
+
+  if(perching_active)
   {
     preparePerchingAdmittanceInput();
   }
-
+ 
   {
     std::lock_guard<std::mutex> lock(perching_state_mutex_);
 
     suppress_pitch_i_limit =
-        !servo_neutral_mode &&
-        perching_enabled_for_constraint_ &&
+        perching_active &&
         perching_admittance_enabled_ &&
         (contact_active_ || recovery_active_);
 
-    if(perching_enabled_for_constraint_)
+    if(perching_active)
     {
       /*
        * Publishing perching/admittance_enable=true arms the
@@ -1685,7 +1704,6 @@ void GimbalrotorPerchingAdmittanceController::controlCore()
        *   - recovery: zero-input admittance + PID.
        */
       effective_enabled =
-          !servo_neutral_mode &&
           perching_admittance_enabled_ &&
           has_locked_pose_ &&
           equilibrium_wrench_ready_ &&
@@ -1872,7 +1890,7 @@ modifyTargetWrenchAccCog(Eigen::VectorXd& target_wrench_acc_cog)
 
   {
     std::lock_guard<std::mutex> lock(perching_state_mutex_);
-    perching_active = perching_enabled_for_constraint_;
+    perching_active = perching_enabled_for_constraint_ && navigator_ && navigator_->getNaviState() == aerial_robot_navigation::HOVER_STATE;
     lock_valid = has_locked_pose_;
     tare_ready = equilibrium_wrench_ready_;
     feedforward_enabled = pid_wrench_compensation_enabled_;
@@ -1883,8 +1901,7 @@ modifyTargetWrenchAccCog(Eigen::VectorXd& target_wrench_acc_cog)
      !lock_valid ||
      !tare_ready ||
      !feedforward_enabled ||
-     underactuate_ ||
-     perching_servo_neutral_mode_)
+     underactuate_)
   {
     return;
   }
@@ -2031,47 +2048,139 @@ modifyTargetWrenchAccCog(Eigen::VectorXd& target_wrench_acc_cog)
 
 void GimbalrotorPerchingAdmittanceController::perchingEnableCallback(const std_msgs::Bool::ConstPtr& msg)
 {
-  bool mode_changed = false;
+  const bool hover_state = navigator_ && navigator_->getNaviState() == aerial_robot_navigation::HOVER_STATE;
+
+  bool enabled_now = false;
+  bool disabled_now = false;
+  bool rejected_enable = false;
 
   {
     std::lock_guard<std::mutex> lock(perching_state_mutex_);
 
-    mode_changed = perching_enabled_for_constraint_ != msg->data;
-
-    if(!mode_changed)
+    if(msg->data && !hover_state)
     {
-      return;
+      rejected_enable = true;
+
+      perching_enabled_for_constraint_ = false;
+      perching_admittance_enabled_ = false;
+
+      has_locked_pose_msg_ = false;
+      has_locked_pivot_ = false;
+      has_locked_pose_ = false;
+
+      locked_pose_stamp_ = ros::Time(0);
+      locked_pivot_stamp_ = ros::Time(0);
+      accepted_locked_pose_stamp_ = ros::Time(0);
+      accepted_locked_pivot_stamp_ = ros::Time(0);
+
+      locked_radius_ = 0.0;
+
+      R_world_constraint_.setIdentity();
+      prepared_R_world_constraint_.setIdentity();
+      constraint_axis_world_ = Eigen::Vector3d::UnitY();
+
+      prepared_perching_admittance_wrench_world_.setZero();
+
+      resetEquilibriumWrenchUnsafe();
+      resetContactGateUnsafe();
+
+      admittance_reset_requested_ = true;
     }
+    else if(!msg->data)
+    {
+      disabled_now = perching_enabled_for_constraint_;
 
-    perching_enabled_for_constraint_ = msg->data;
+      perching_enabled_for_constraint_ = false;
+      perching_admittance_enabled_ = false;
 
-    /*
-     * A mode change invalidates the previous lock-dependent equilibrium wrench and contact state.
-     */
-    perching_admittance_enabled_ = false;
+      has_locked_pose_msg_ = false;
+      has_locked_pivot_ = false;
+      has_locked_pose_ = false;
 
-    resetEquilibriumWrenchUnsafe();
-    resetContactGateUnsafe();
+      locked_pose_stamp_ = ros::Time(0);
+      locked_pivot_stamp_ = ros::Time(0);
+      accepted_locked_pose_stamp_ = ros::Time(0);
+      accepted_locked_pivot_stamp_ = ros::Time(0);
 
-    admittance_reset_requested_ = true;
+      locked_radius_ = 0.0;
+
+      R_world_constraint_.setIdentity();
+      prepared_R_world_constraint_.setIdentity();
+      constraint_axis_world_ = Eigen::Vector3d::UnitY();
+
+      prepared_perching_admittance_wrench_world_.setZero();
+
+      resetEquilibriumWrenchUnsafe();
+      resetContactGateUnsafe();
+
+      admittance_reset_requested_ = true;
+    }
+    else
+    {
+      if(perching_enabled_for_constraint_)
+      {
+        return;
+      }
+
+      perching_enabled_for_constraint_ = true;
+      perching_admittance_enabled_ = false;
+
+      has_locked_pose_msg_ = false;
+      has_locked_pivot_ = false;
+      has_locked_pose_ = false;
+
+      locked_pose_stamp_ = ros::Time(0);
+      locked_pivot_stamp_ = ros::Time(0);
+      accepted_locked_pose_stamp_ = ros::Time(0);
+      accepted_locked_pivot_stamp_ = ros::Time(0);
+
+      locked_radius_ = 0.0;
+
+      R_world_constraint_.setIdentity();
+      prepared_R_world_constraint_.setIdentity();
+      constraint_axis_world_ = Eigen::Vector3d::UnitY();
+
+      prepared_perching_admittance_wrench_world_.setZero();
+
+      resetEquilibriumWrenchUnsafe();
+      resetContactGateUnsafe();
+
+      admittance_reset_requested_ = true;
+
+      enabled_now = true;
+    }
   }
 
-  if(msg->data)
+  if(rejected_enable)
+  {
+    ROS_ERROR(
+        "[GimbalrotorPerchingAdmittanceController] "
+        "Perching enable rejected because navigation is not "
+        "in HOVER_STATE. Enable perching again after returning "
+        "to HOVER_STATE.");
+
+    return;
+  }
+
+  if(enabled_now)
   {
     ROS_WARN_STREAM(
         "[GimbalrotorPerchingAdmittanceController] "
-        "Perching navigation enabled. "
-        "Collecting equilibrium wrench while admittance "
-        "is disabled. Required samples: "
+        "Perching navigation enabled. Waiting for a fresh "
+        "locked pose/pivot and collecting equilibrium wrench. "
+        "Required samples: "
         << equilibrium_wrench_required_samples_);
+
+    return;
   }
-  else
+
+  if(!msg->data)
   {
     ROS_WARN(
         "[GimbalrotorPerchingAdmittanceController] "
-        "Perching navigation disabled. "
-        "Equilibrium wrench has been cleared. "
-        "Normal admittance trigger is active.");
+        "Perching navigation disabled. Lock, equilibrium wrench, "
+        "contact state, recovery state, and perching admittance "
+        "have been cleared. Normal admittance trigger is active.");
   }
 }
 
@@ -2216,12 +2325,36 @@ lockedPoseCallback(
 void GimbalrotorPerchingAdmittanceController::updateLockedConstraintFromLockedPoseAndPivot()
 {
   std::lock_guard<std::mutex> lock(perching_state_mutex_);
+  
+  const bool hover_state =navigator_ && navigator_->getNaviState() == aerial_robot_navigation::HOVER_STATE;
+
+  if(!hover_state)
+  {
+    has_locked_pose_msg_ = false;
+    has_locked_pivot_ = false;
+    has_locked_pose_ = false;
+
+    locked_pose_stamp_ = ros::Time(0);
+    locked_pivot_stamp_ = ros::Time(0);
+    accepted_locked_pose_stamp_ = ros::Time(0);
+    accepted_locked_pivot_stamp_ = ros::Time(0);
+
+    locked_radius_ = 0.0;
+
+    R_world_constraint_.setIdentity();
+    prepared_R_world_constraint_.setIdentity();
+    prepared_perching_admittance_wrench_world_.setZero();
+
+    resetEquilibriumWrenchUnsafe();
+    resetContactGateUnsafe();
+
+    admittance_reset_requested_ = true;
+
+    return;
+  }
 
   const bool previously_valid = has_locked_pose_;
 
-  /*
-   * A locked robot pose is always required.
-   */
   if(!has_locked_pose_msg_)
   {
     has_locked_pose_ = false;
@@ -2547,7 +2680,7 @@ void GimbalrotorPerchingAdmittanceController::
 pidWrenchCompensateCallback(const std_msgs::Bool::ConstPtr& msg)
 {
   const bool underactuated = underactuate_;
-  const bool servo_neutral_mode = perching_servo_neutral_mode_;
+  const bool hover_state = navigator_ && navigator_->getNaviState() == aerial_robot_navigation::HOVER_STATE;
 
   bool enable_accepted = false;
   bool became_enabled = false;
@@ -2580,6 +2713,10 @@ pidWrenchCompensateCallback(const std_msgs::Bool::ConstPtr& msg)
     {
       pid_wrench_compensation_enabled_ = false;
     }
+    else if(!hover_state)
+    {
+      pid_wrench_compensation_enabled_ = false;
+    }
     else if(!lock_valid)
     {
       pid_wrench_compensation_enabled_ = false;
@@ -2589,10 +2726,6 @@ pidWrenchCompensateCallback(const std_msgs::Bool::ConstPtr& msg)
       pid_wrench_compensation_enabled_ = false;
     }
     else if(underactuated)
-    {
-      pid_wrench_compensation_enabled_ = false;
-    }
-    else if(servo_neutral_mode)
     {
       pid_wrench_compensation_enabled_ = false;
     }
@@ -2647,6 +2780,13 @@ pidWrenchCompensateCallback(const std_msgs::Bool::ConstPtr& msg)
         "Cannot enable PID equilibrium-wrench feedforward: "
         "perching mode is inactive.");
   }
+  else if(!hover_state)
+  {
+    ROS_ERROR(
+        "[GimbalrotorPerchingAdmittanceController] "
+        "Cannot enable PID equilibrium-wrench feedforward "
+        "outside HOVER_STATE.");
+  }
   else if(!lock_valid)
   {
     ROS_ERROR(
@@ -2671,13 +2811,6 @@ pidWrenchCompensateCallback(const std_msgs::Bool::ConstPtr& msg)
         "Cannot enable PID equilibrium-wrench feedforward: "
         "controller/underactuate is true.");
   }
-  else if(servo_neutral_mode)
-  {
-    ROS_ERROR(
-        "[GimbalrotorPerchingAdmittanceController] "
-        "Cannot enable PID equilibrium-wrench feedforward: "
-        "servo-neutral mode is active.");
-  }
 }
 
 Eigen::Matrix3d GimbalrotorPerchingAdmittanceController::getComplianceToWorldRotation() const
@@ -2685,7 +2818,7 @@ Eigen::Matrix3d GimbalrotorPerchingAdmittanceController::getComplianceToWorldRot
   {
     std::lock_guard<std::mutex> lock(perching_state_mutex_);
 
-    if(perching_enabled_for_constraint_)
+    if(perching_enabled_for_constraint_ && navigator_ && navigator_->getNaviState() == aerial_robot_navigation::HOVER_STATE)
     {
       return prepared_R_world_constraint_;
     }
@@ -2707,10 +2840,12 @@ void GimbalrotorPerchingAdmittanceController::perchingAdmittanceEnableCallback(c
 
   int collected_samples = 0;
 
+  const bool hover_state = navigator_ && navigator_->getNaviState() == aerial_robot_navigation::HOVER_STATE;
+
   {
     std::lock_guard<std::mutex> lock(perching_state_mutex_);
 
-    lock_valid = perching_enabled_for_constraint_ && has_locked_pose_;
+    lock_valid = hover_state && perching_enabled_for_constraint_ && has_locked_pose_;
     tare_ready = equilibrium_wrench_ready_;
     collected_samples = equilibrium_wrench_sample_count_;
 
@@ -2729,6 +2864,12 @@ void GimbalrotorPerchingAdmittanceController::perchingAdmittanceEnableCallback(c
 
       enable_accepted = true;
       fresh_tare_requested = true;
+    }
+    else if(!hover_state)
+    {
+        perching_admittance_enabled_ = false;
+        resetContactGateUnsafe();
+        admittance_reset_requested_ = true;
     }
     else if(!config_valid)
     {
@@ -2781,6 +2922,12 @@ void GimbalrotorPerchingAdmittanceController::perchingAdmittanceEnableCallback(c
         "[GimbalrotorPerchingAdmittanceController] "
         "Perching admittance disabled. "
         "Fresh equilibrium-wrench collection requested.");
+  }
+  else if(!hover_state)
+  {
+    ROS_ERROR(
+        "[GimbalrotorPerchingAdmittanceController] "
+        "Cannot enable perching admittance outside HOVER_STATE.");
   }
   else if(!config_valid)
   {
@@ -2853,7 +3000,7 @@ Eigen::Matrix<double, 6, 1> GimbalrotorPerchingAdmittanceController::getExternal
 
   {
     std::lock_guard<std::mutex> lock(perching_state_mutex_);
-    perching_active = perching_enabled_for_constraint_;
+    perching_active = perching_enabled_for_constraint_ && navigator_ && navigator_->getNaviState() == aerial_robot_navigation::HOVER_STATE;
 
     if(perching_active)
     {
@@ -2873,11 +3020,9 @@ applyAdmittanceOutputToNavigator(
   bool perching_active = false;
 
   {
-    std::lock_guard<std::mutex> lock(
-        perching_state_mutex_);
+    std::lock_guard<std::mutex> lock(perching_state_mutex_);
 
-    perching_active =
-        perching_enabled_for_constraint_;
+    perching_active = perching_enabled_for_constraint_ && navigator_ && navigator_->getNaviState() == aerial_robot_navigation::HOVER_STATE;
   }
 
   /*
@@ -2909,7 +3054,9 @@ applyAdmittanceOutputToNavigator(
      * Recheck the state while holding the lock.
      * It may have changed after the first snapshot.
      */
-    if(!perching_enabled_for_constraint_ ||
+    if(!navigator_ ||
+       navigator_->getNaviState() != aerial_robot_navigation::HOVER_STATE ||
+       !perching_enabled_for_constraint_ ||
        !perching_admittance_enabled_ ||
        !has_locked_pose_ ||
        !(contact_active_ || recovery_active_) ||
