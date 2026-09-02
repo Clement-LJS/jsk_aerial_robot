@@ -15,7 +15,22 @@ Same as: keyboard_command.py
 
 ### `keyboard_perching_pitch.py`
 
-Manually changes the pitch delta relative to the locked perching orientation.
+Manually changes the pitch delta relative to the locked perching orientation.(For passive pitch joint)
+
+### `keyboard_perching_secondary.py`
+
+rosrun gimbalrotor keyboard_perching_secondary.py \
+  _pitch_step_deg:=0.5 \
+  _secondary_step_deg:=0.5
+
+e: disables admittance, enables perching, locks current contact transform and both joint angles 
+j(-) / l(+): move yaw/roll joint 
+s: press and wait for secondary_settled=True
+i(+) / k(-): move pitch servo 
+t: after completing all joint movements 
+a: arm multilink perching admittance 
+space: returns both joints to the angles captured when "e" was pressed 
+d: disables admittance and perching
 
 ### `keyboard_servo.py`
 
