@@ -37,6 +37,13 @@ servo_controller:
        type: effort_controllers/JointPositionController
 
 
+
+ joints:
+   angle_sgn: 1
+   angle_scale: 0.00076699
+   zero_point_offset: 2047
+   torque_scale: 0.01
+
    # for low pass filter
    filter_flag: true
    sample_freq: 50.0 # 50Hz

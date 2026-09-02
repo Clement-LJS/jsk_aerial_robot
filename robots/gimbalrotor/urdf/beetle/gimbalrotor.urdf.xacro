@@ -6,7 +6,6 @@
   <xacro:arg name="wrench_sensor" default="false"/>
   <xacro:arg name="use_pitch_joint" default="true"/>
 
-
   
   <xacro:macro name="gimbalrotor_center_link" params="child1 child2 child3 child4">
     ## dummy
@@ -292,6 +291,103 @@
 
 
 
+
+
+
+
+
+
+
+
+
+
+  <xacro:if value="$(arg use_pitch_joint)">
+    ## passive hand link
+    <link name="pitch_pipe_link">
+      <inertial>
+  <origin xyz="0.23238 -0.01452 0.00876"/>
+	<mass value="0.001"/>
+	<inertia
+	    ixx="0.001" ixy="0.001" ixz="0.001"
+	    iyy="0.001" iyz="0.001"
+	    izz="0.001"/>
+      </inertial>
+      <visual>
+	<origin xyz="0 0 0" rpy="0 0 0"/>
+	<geometry>
+      <mesh filename="package://gimbalrotor/urdf/beetle/mesh/pitchjoint_asm.STL" scale="0.001 0.001 0.001"/>
+	</geometry>
+      </visual>
+      <collision>
+	<origin xyz="0.236 0.024 0" rpy="0 0 0"/>
+	<geometry>
+	  <box size="0.253 0.09 0.038"/>
+	</geometry>
+      </collision>
+    </link>
+  </xacro:if>
+
+
+  <xacro:if value="$(arg use_pitch_joint)">
+    ## passive hand link
+    <link name="inter_joint_junction_link">
+      <inertial>
+  <origin xyz="0.23238 -0.01452 0.00876"/>
+	<mass value="0.001"/>
+	<inertia
+      ixx="0.001" ixy="0.001" ixz="0.001"
+	    iyy="0.001" iyz="0.001"
+	    izz="0.001"/>
+      </inertial>
+      <visual>
+	<origin xyz="0.02450 0 0" rpy="0 0 0"/>
+	<geometry>
+      <mesh filename="package://gimbalrotor/urdf/beetle/mesh/inter_joint_junction_full.STL" scale="0.001 0.001 0.001"/>
+	</geometry>
+      </visual>
+      <collision>
+	<origin xyz="0.236 0.024 0" rpy="0 0 0"/>
+	<geometry>
+	  <box size="0.253 0.09 0.138"/>
+	</geometry>
+      </collision>
+    </link>
+  </xacro:if>
+
+
+  <xacro:if value="$(arg use_pitch_joint)">
+    ## passive hand link
+    <link name="yaw_hand_link">
+      <inertial>
+  <origin xyz="0.23238 -0.01452 0.00876"/>
+	<mass value="0.001"/>
+	<inertia
+	    ixx="0.001" ixy="0.001" ixz="0.001"
+	    iyy="0.001" iyz="0.001"
+	    izz="0.001"/>
+      </inertial>
+      <visual>
+	<origin xyz="0.012 0 0" rpy="0 0 0"/>
+	<geometry>
+      <mesh filename="package://gimbalrotor/urdf/beetle/mesh/yawjoint_hand_asm.STL" scale="0.001 0.001 0.001"/>
+	</geometry>
+      </visual>
+      <collision>
+	<origin xyz="0.236 0.024 0" rpy="0 0 0"/>
+	<geometry>
+	  <box size="0.253 0.09 0.038"/>
+	</geometry>
+      </collision>
+    </link>
+  </xacro:if>
+
+
+
+
+
+
+
+
   <xacro:if value="$(arg wrench_sensor)">
     <!-- saw link  -->
     <link name="wrench_sensor">
@@ -343,8 +439,6 @@
       <axis xyz="0 0 0"/>
     </joint>
   </xacro:if>
-
-
 
 
 
@@ -432,7 +526,7 @@
 
 
   <!-- Configuration-only link and joint for lock servo, index 4 -->
-  <link name="lock_servo_dummy_link"/>
+  <!-- <link name="lock_servo_dummy_link"/>
 
   <joint name="lock_servo_joint" type="revolute">
     <parent link="passive_hand_link"/>
@@ -444,10 +538,10 @@
         upper="6.284"
         effort="2.0"
         velocity="10.0"/>
-  </joint>
+  </joint> -->
 
   <!-- Configuration-only link and joint for hand servo, index 5 -->
-  <link name="hand_servo_dummy_link"/>
+  <!-- <link name="hand_servo_dummy_link"/>
 
   <joint name="hand_servo_joint" type="revolute">
     <parent link="passive_hand_link"/>
@@ -459,49 +553,11 @@
         upper="6.284"
         effort="2.0"
         velocity="10.0"/>
-  </joint>
+  </joint> -->
   
-  <!-- <!-\- hand lock joint  -\-> -->
-  <!-- <link name="lock_servo_profile_link"> -->
-  <!--   <inertial> -->
-  <!--     <origin xyz="0 0 0" rpy="0 0 0"/> -->
-  <!--     <mass value="0.000001"/> -->
-  <!--     <inertia -->
-  <!--         ixx="0.000000001" ixy="0" ixz="0" -->
-  <!--         iyy="0.000000001" iyz="0" -->
-  <!--         izz="0.000000001"/> -->
-  <!--   </inertial> -->
-  <!-- </link> -->
 
-  <!-- <joint name="lock_joint" type="revolute"> -->
-  <!--   <parent link="passive_hand_link"/> -->
-  <!--   <child link="lock_servo_profile_link"/> -->
-  <!--   <origin xyz="0 0 0" rpy="0 0 0"/> -->
-  <!--   <axis xyz="1 0 0"/> -->
 
-  <!--   <limit -->
-  <!--       lower="-3.063" upper="-1.760" effort="2.0" velocity="3.0"/> -->
-  <!-- </joint> -->
 
-  <!-- <link name="hand_servo_profile_link"> -->
-  <!--   <inertial> -->
-  <!--     <origin xyz="0 0 0" rpy="0 0 0"/> -->
-  <!--     <mass value="0.000001"/> -->
-  <!--     <inertia -->
-  <!--         ixx="0.000000001" ixy="0" ixz="0" -->
-  <!--         iyy="0.000000001" iyz="0" -->
-  <!--         izz="0.000000001"/> -->
-  <!--   </inertial> -->
-  <!-- </link> -->
 
-  <!-- <joint name="hand_joint" type="revolute"> -->
-  <!--   <parent link="passive_hand_link"/> -->
-  <!--   <child link="hand_servo_profile_link"/> -->
-  <!--   <origin xyz="0 0 0" rpy="0 0 0"/> -->
-  <!--   <axis xyz="1 0 0"/> -->
-
-  <!--   <limit -->
-  <!--       lower="1.462" upper="3.073" effort="2.0" velocity="3.0"/> -->
-  <!-- </joint> -->
   
 </robot>
