@@ -1,5 +1,9 @@
 <library path="lib/libaerial_robot_motion">
   <class name="aerial_robot_motion/StateLimit" type="aerial_robot_motion::constraint::StateLimitConstraint" base_class_type="aerial_robot_motion::constraint::Base"/>
   <class name="aerial_robot_motion/JointLimit" type="aerial_robot_motion::constraint::JointLimitConstraint" base_class_type="aerial_robot_motion::constraint::Base"/>
+  <class name="aerial_robot_motion/AccelerationLimit" type="aerial_robot_motion::constraint::AccelerationLimitConstraint" base_class_type="aerial_robot_motion::constraint::Base"/>
   <class name="aerial_robot_motion/RevoluteContact" type="aerial_robot_motion::constraint::RevoluteContactConstraint" base_class_type="aerial_robot_motion::constraint::Base"/>
+  <class name="aerial_robot_motion/StaticThrust" type="aerial_robot_motion::constraint::StaticThrustConstraint" base_class_type="aerial_robot_motion::constraint::Base"/>
+  <class name="aerial_robot_motion/JointTorque" type="aerial_robot_motion::constraint::JointTorqueConstraint" base_class_type="aerial_robot_motion::constraint::Base"/>
+  <class name="aerial_robot_motion/FeasibleControl" type="aerial_robot_motion::constraint::FeasibleControlConstraint" base_class_type="aerial_robot_motion::constraint::Base"/>
 </library>

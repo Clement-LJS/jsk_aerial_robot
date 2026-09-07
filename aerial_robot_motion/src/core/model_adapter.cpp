@@ -3,6 +3,7 @@
 #include <kdl/treejnttojacsolver.hpp>
 #include <kdl/treefksolverpos_recursive.hpp>
 #include <XmlRpcValue.h>
+#include <algorithm>
 #include <cmath>
 #include <limits>
 #include <set>
@@ -67,14 +68,20 @@ void ModelAdapter::initializeModel(const boost::shared_ptr<aerial_robot_model::R
                                   const ros::NodeHandle& private_nh)
 {
   model_ = model;
+  transformable_model_ = boost::dynamic_pointer_cast<aerial_robot_model::transformable::RobotModel>(model_);
   info_ = ModelInfo{}; required_joints_.clear(); fixed_joints_.clear();
+  selected_model_joint_indices_.clear();
+  need_static_thrust_ = need_joint_torque_ = need_feasible_control_ = false;
   if (!model_ || model_->getTree().getNrOfSegments() == 0 || model_->getMass() < 0)
     throw std::runtime_error("robot model has no valid KDL tree");
   info_.root_link = model_->getRootFrameName();
-  if (const auto articulated = boost::dynamic_pointer_cast<aerial_robot_model::transformable::RobotModel>(model_))
+  if (transformable_model_)
   {
-    info_.joint_names = articulated->getLinkJointNames();
-    info_.joint_indices = articulated->getLinkJointIndices();
+    info_.joint_names = transformable_model_->getLinkJointNames();
+    info_.joint_indices = transformable_model_->getLinkJointIndices();
+    info_.supports_physical_constraints = true;
+    info_.thrust_lower = model_->getThrustLowerLimit();
+    info_.thrust_upper = model_->getThrustUpperLimit();
   }
   const int n = info_.joint_names.size();
   if (info_.joint_indices.size() != static_cast<size_t>(n))
@@ -82,7 +89,9 @@ void ModelAdapter::initializeModel(const boost::shared_ptr<aerial_robot_model::R
   info_.lower.resize(n);
   info_.upper.resize(n);
   info_.velocity.resize(n);
+  info_.effort.resize(n);
   std::set<int> selected;
+  const auto& model_joint_names = model_->getJointNames();
   for (int i = 0; i < n; ++i)
   {
     const auto joint = model_->getUrdfModel().getJoint(info_.joint_names[i]);
@@ -94,9 +103,15 @@ void ModelAdapter::initializeModel(const boost::shared_ptr<aerial_robot_model::R
     info_.lower[i] = continuous ? -std::numeric_limits<double>::infinity() : joint->limits->lower;
     info_.upper[i] = continuous ? std::numeric_limits<double>::infinity() : joint->limits->upper;
     info_.velocity[i] = joint->limits->velocity;
+    info_.effort[i] = joint->limits->effort;
     if (std::isnan(info_.lower[i]) || std::isnan(info_.upper[i]) || info_.lower[i] > info_.upper[i] ||
         !std::isfinite(info_.velocity[i]) || info_.velocity[i] <= 0)
       throw std::runtime_error("invalid mechanical limits for " + info_.joint_names[i]);
+    const auto model_entry = std::find(model_joint_names.begin(), model_joint_names.end(), info_.joint_names[i]);
+    if (model_entry == model_joint_names.end())
+      throw std::runtime_error("commanded joint is absent from model Jacobian order: " + info_.joint_names[i]);
+    selected_model_joint_indices_.push_back(
+        static_cast<int>(std::distance(model_joint_names.begin(), model_entry)));
   }
   for (const auto& name : model_->getJointNames())
     required_joints_[name] = model_->getJointIndexMap().at(name);
@@ -127,6 +142,15 @@ void ModelAdapter::initializeModel(const boost::shared_ptr<aerial_robot_model::R
       throw std::invalid_argument("configured frame is absent from robot model: " + name);
   tool_offset_ = offsetParameter(private_nh, "tool_offset");
   contact_offset_ = offsetParameter(private_nh, "contact_offset");
+}
+
+void ModelAdapter::configurePhysicalData(bool static_thrust, bool joint_torque, bool feasible_control)
+{
+  if ((static_thrust || joint_torque || feasible_control) && !transformable_model_)
+    throw std::invalid_argument("physical constraints require the generic transformable robot-model interface");
+  need_static_thrust_ = static_thrust;
+  need_joint_torque_ = joint_torque;
+  need_feasible_control_ = feasible_control;
 }
 
 bool ModelAdapter::readJoints(const sensor_msgs::JointState& message, KDL::JntArray& full,
@@ -207,10 +231,114 @@ void ModelAdapter::update(MotionState& state)
   state.cog = state.root * eigenFrame(model_->getCog<KDL::Frame>());
   state.tool_jacobian = frameJacobian(state, tool_frame_, tool_offset_);
   state.contact_jacobian = frameJacobian(state, contact_frame_, contact_offset_);
+  updatePhysical(state);
   if (!state.root.matrix().allFinite() || !state.tool.matrix().allFinite() ||
       !state.contact.matrix().allFinite() || !state.cog.matrix().allFinite() ||
       !state.tool_jacobian.allFinite() || !state.contact_jacobian.allFinite())
     throw std::runtime_error("robot model produced nonfinite kinematics");
+}
+
+Eigen::MatrixXd ModelAdapter::qpPhysicalJacobian(const MotionState& state,
+                                                 const Eigen::MatrixXd& full) const
+{
+  const int model_dimension = 6 + model_->getJointNum();
+  if ((full.cols() != model_dimension && full.cols() != info_.dimension()) ||
+      full.rows() == 0 || !full.allFinite())
+    return Eigen::MatrixXd{};
+  Eigen::MatrixXd mapping = Eigen::MatrixXd::Zero(full.cols(), info_.dimension());
+  // Transform world-frame root rates into the KDL-root axes used by the
+  // transformable model's virtual six root columns.
+  mapping.block<3, 3>(0, 0) = state.root.linear().transpose();
+  mapping.block<3, 3>(3, 3) = state.root.linear().transpose();
+  if (full.cols() != model_dimension)
+  {
+    mapping.bottomRightCorner(info_.joint_names.size(), info_.joint_names.size()).setIdentity();
+  }
+  else
+  {
+    for (size_t i = 0; i < selected_model_joint_indices_.size(); ++i)
+    {
+      const int row = 6 + selected_model_joint_indices_[i];
+      if (row < 6 || row >= model_dimension) return Eigen::MatrixXd{};
+      mapping(row, 6 + i) = 1.0;
+    }
+  }
+  return full * mapping;
+}
+
+void ModelAdapter::updatePhysical(MotionState& state)
+{
+  state.physical = PhysicalState{};
+  if (!need_static_thrust_ && !need_joint_torque_ && !need_feasible_control_) return;
+  if (!transformable_model_) throw std::runtime_error("transformable physical model is unavailable");
+
+  // These calls are deliberately centralized. Plugins consume only values in
+  // QP order and never guess how model-internal/gimbal joint columns are laid out.
+  // Calling the virtual aggregate lets derived transformable models apply their
+  // own internal-joint coupling before the adapter performs the final mapping.
+  transformable_model_->updateJacobians(state.full_joints, false);
+
+  if (need_static_thrust_ || need_joint_torque_)
+  {
+    if (need_static_thrust_)
+    {
+      state.physical.static_thrust = model_->getStaticThrust();
+      state.physical.static_thrust_jacobian =
+          qpPhysicalJacobian(state, transformable_model_->getLambdaJacobian());
+      state.physical.static_thrust_available =
+          state.physical.static_thrust.size() > 0 && state.physical.static_thrust.allFinite() &&
+          state.physical.static_thrust_jacobian.rows() == state.physical.static_thrust.size() &&
+          state.physical.static_thrust_jacobian.cols() == info_.dimension() &&
+          state.physical.static_thrust_jacobian.allFinite();
+    }
+  }
+
+  if (need_joint_torque_)
+  {
+    const auto& full_torque = transformable_model_->getJointTorque();
+    const auto full_jacobian = qpPhysicalJacobian(state, transformable_model_->getJointTorqueJacobian());
+    state.physical.joint_torque.resize(info_.joint_names.size());
+    state.physical.joint_torque_jacobian.resize(info_.joint_names.size(), info_.dimension());
+    bool valid = full_torque.size() == model_->getJointNum() &&
+                 full_jacobian.rows() == model_->getJointNum() &&
+                 full_jacobian.cols() == info_.dimension();
+    for (size_t i = 0; valid && i < selected_model_joint_indices_.size(); ++i)
+    {
+      const int row = selected_model_joint_indices_[i];
+      if (row < 0 || row >= full_torque.size()) { valid = false; break; }
+      state.physical.joint_torque[i] = full_torque[row];
+      state.physical.joint_torque_jacobian.row(i) = full_jacobian.row(row);
+    }
+    state.physical.joint_torque_available = valid && state.physical.joint_torque.allFinite() &&
+                                             state.physical.joint_torque_jacobian.allFinite();
+  }
+
+  if (need_feasible_control_)
+  {
+    state.physical.feasible_force_margin = transformable_model_->getApproxFeasibleControlFDists();
+    state.physical.feasible_torque_margin = transformable_model_->getApproxFeasibleControlTDists();
+    state.physical.feasible_force_jacobian =
+        qpPhysicalJacobian(state, transformable_model_->getFeasibleControlFDistsJacobian());
+    state.physical.feasible_torque_jacobian =
+        qpPhysicalJacobian(state, transformable_model_->getFeasibleControlTDistsJacobian());
+    state.physical.feasible_control_available =
+        state.physical.feasible_force_margin.size() > 0 &&
+        state.physical.feasible_torque_margin.size() > 0 &&
+        state.physical.feasible_force_margin.allFinite() &&
+        state.physical.feasible_torque_margin.allFinite() &&
+        state.physical.feasible_force_jacobian.rows() == state.physical.feasible_force_margin.size() &&
+        state.physical.feasible_torque_jacobian.rows() == state.physical.feasible_torque_margin.size() &&
+        state.physical.feasible_force_jacobian.cols() == info_.dimension() &&
+        state.physical.feasible_torque_jacobian.cols() == info_.dimension() &&
+        state.physical.feasible_force_jacobian.allFinite() &&
+        state.physical.feasible_torque_jacobian.allFinite();
+  }
+  if (need_static_thrust_ && !state.physical.static_thrust_available)
+    throw std::runtime_error("transformable model returned invalid static-thrust data or Jacobian");
+  if (need_joint_torque_ && !state.physical.joint_torque_available)
+    throw std::runtime_error("transformable model returned invalid selected-joint torque data or Jacobian");
+  if (need_feasible_control_ && !state.physical.feasible_control_available)
+    throw std::runtime_error("transformable model returned invalid feasible-control margins or Jacobians");
 }
 
 Eigen::Isometry3d ModelAdapter::framePose(const MotionState& state, const std::string& segment,

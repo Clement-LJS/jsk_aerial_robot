@@ -6,6 +6,17 @@ bridge: {full_attitude: true}
 command_inhibit_topic: perching/enable
 hinge_axis: [0, 1, 0]
 hinge_axis_frame: contact
+constraint_plugins:
+  - {name: state_limit, type: aerial_robot_motion/StateLimit}
+  - {name: joint_limit, type: aerial_robot_motion/JointLimit}
+  - {name: acceleration_limit, type: aerial_robot_motion/AccelerationLimit}
+  - {name: revolute_contact, type: aerial_robot_motion/RevoluteContact}
+constraints:
+  revolute_contact:
+    position_gain: 3.0
+    orientation_gain: 3.0
+    max_position_correction_velocity: 0.05
+    max_orientation_correction_velocity: 0.2
 costs:
   cartesian_pose:
     axes_frame: tool
@@ -14,7 +25,3 @@ costs:
     root_translation_weight: 1.0
     root_rotation_weight: 1.0
     joint_weight: 0.01
-admittance:
-  enabled: false
-  frame: tool
-  axes: [0, 0, 0, 0, 1, 0]

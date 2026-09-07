@@ -16,8 +16,23 @@ struct ModelInfo
   std::string root_link;
   std::vector<std::string> joint_names;  // Commanded link joints only, in QP order.
   std::vector<int> joint_indices;       // Corresponding full KDL state indices.
-  Eigen::VectorXd lower, upper, velocity;
+  Eigen::VectorXd lower, upper, velocity, effort;
+  bool supports_physical_constraints = false;
+  double thrust_lower = 0.0, thrust_upper = 0.0;
   int dimension() const { return 6 + joint_names.size(); }
+};
+
+struct PhysicalState
+{
+  bool static_thrust_available = false;
+  bool joint_torque_available = false;
+  bool feasible_control_available = false;
+  Eigen::VectorXd static_thrust;
+  Eigen::MatrixXd static_thrust_jacobian;
+  Eigen::VectorXd joint_torque;
+  Eigen::MatrixXd joint_torque_jacobian;
+  Eigen::VectorXd feasible_force_margin, feasible_torque_margin;
+  Eigen::MatrixXd feasible_force_jacobian, feasible_torque_jacobian;
 };
 
 struct MotionState
@@ -32,6 +47,9 @@ struct MotionState
   // World-frame spatial twists, about the respective frame origins.
   // Columns are [v_root_world, omega_root_world, qdot_link].
   Eigen::MatrixXd tool_jacobian, contact_jacobian;
+  // Optional transformable-model values and derivatives, already mapped to
+  // [v_root_world, omega_root_world, qdot_link].
+  PhysicalState physical;
 };
 
 struct MotionContext

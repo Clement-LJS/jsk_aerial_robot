@@ -5,6 +5,3 @@ bridge: {full_attitude: false}
 costs:
   cartesian_pose:
     weights: [1, 1, 1, 0, 0, 1]
-constraint_plugins:
-  - {name: state_limit, type: aerial_robot_motion/StateLimit}
-

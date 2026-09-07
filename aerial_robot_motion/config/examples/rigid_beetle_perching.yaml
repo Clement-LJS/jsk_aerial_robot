@@ -9,6 +9,17 @@ contact_frame: base_link
 contact_offset_xyz: [-0.34867, 0, 0.0375]
 contact_offset_rpy: [0, 0, 0]
 hinge_axis: [0, 1, 0]
+constraint_plugins:
+  - {name: state_limit, type: aerial_robot_motion/StateLimit}
+  - {name: joint_limit, type: aerial_robot_motion/JointLimit}
+  - {name: acceleration_limit, type: aerial_robot_motion/AccelerationLimit}
+  - {name: revolute_contact, type: aerial_robot_motion/RevoluteContact}
+constraints:
+  revolute_contact:
+    position_gain: 3.0
+    orientation_gain: 3.0
+    max_position_correction_velocity: 0.05
+    max_orientation_correction_velocity: 0.2
 fixed_joint_positions: {hand_servo_joint: 0.0, lock_servo_joint: 0.0}
 command_inhibit_topic: perching/enable
 bridge: {full_attitude: true}
@@ -18,7 +29,3 @@ costs:
     # The hinged rigid tool must translate as it pitches. Do not also ask it to
     # hold its original xyz; the hinge constraint determines the needed motion.
     weights: [0, 0, 0, 0, 1, 0]
-admittance:
-  enabled: false
-  frame: tool
-  axes: [0, 0, 0, 0, 1, 0]

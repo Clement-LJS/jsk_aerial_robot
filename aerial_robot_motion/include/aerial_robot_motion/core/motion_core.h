@@ -3,7 +3,6 @@
 #include <aerial_robot_motion/cost/base_plugin.h>
 #include <aerial_robot_motion/constraint/base_plugin.h>
 #include <aerial_robot_motion/command/motion_command_manager.h>
-#include <aerial_robot_motion/compliance/cartesian_admittance.h>
 #include <aerial_robot_motion/execution/whole_body_reference_bridge.h>
 #include <aerial_robot_motion/solver/qpoases_solver.h>
 #include <tf2_ros/transform_listener.h>
@@ -25,6 +24,7 @@ private:
   bool perching(std_srvs::SetBool::Request&, std_srvs::SetBool::Response&);
   bool resetTarget(std_srvs::Trigger::Request&, std_srvs::Trigger::Response&);
   bool measurements(MotionState&, std::string&);
+  void resetOptimizationState();
   void diagnostic(bool valid, const std::string& text, const MotionContext* context = nullptr,
                   const QPProblem* problem = nullptr, const Eigen::VectorXd* solution = nullptr, double seconds = 0);
   ros::NodeHandle nh_, pnh_;
@@ -36,7 +36,6 @@ private:
   tf2_ros::Buffer tf_;
   tf2_ros::TransformListener tf_listener_;
   command::MotionCommandManager commands_;
-  compliance::CartesianAdmittance admittance_;
   WholeBodyReferenceBridge bridge_;
   QpOasesSolver solver_;
   ros::Subscriber odom_sub_, cog_sub_, joint_sub_, flight_sub_, inhibit_sub_;

@@ -24,7 +24,10 @@ include_directories(include ${catkin_INCLUDE_DIRS} ${EIGEN3_INCLUDE_DIRS} ${oroc
 add_library(aerial_robot_motion
   src/core/model_adapter.cpp src/core/motion_core.cpp
   src/cost/cartesian_pose.cpp src/cost/state_velocity.cpp src/cost/nominal_posture.cpp
-  src/constraint/state_limit.cpp src/constraint/joint_limit.cpp src/constraint/revolute_contact.cpp
+  src/constraint/state_limit.cpp src/constraint/joint_limit.cpp
+  src/constraint/acceleration_limit.cpp src/constraint/revolute_contact.cpp
+  src/constraint/static_thrust.cpp src/constraint/joint_torque.cpp
+  src/constraint/feasible_control.cpp
   src/solver/qpoases_solver.cpp src/command/motion_command_manager.cpp
   src/compliance/cartesian_admittance.cpp src/execution/whole_body_reference_bridge.cpp)
 target_include_directories(aerial_robot_motion PRIVATE ${QPOASES_INCLUDE_DIR})

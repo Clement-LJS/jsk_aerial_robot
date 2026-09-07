@@ -11,6 +11,8 @@ public:
   virtual void initialize(const ros::NodeHandle& nh, const ModelInfo& info)
     { info_ = info; name_ = nh.getNamespace(); }
   virtual bool update(const MotionContext& context, QPProblem& problem) = 0;
+  virtual void solutionAccepted(const MotionContext&, const Eigen::VectorXd&) {}
+  virtual void reset() {}
   const std::string& name() const { return name_; }
 protected:
   ModelInfo info_;

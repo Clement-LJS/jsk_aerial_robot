@@ -65,23 +65,32 @@ MotionCore::MotionCore(ros::NodeHandle nh, ros::NodeHandle pnh)
     throw std::invalid_argument("invalid timing or QP regularization");
   pnh_.param("publish_commands", publish_commands_, false);
   pnh_.param("hover_state", hover_state_, 5);
-  pnh_.param<std::string>("hinge_axis_frame", hinge_frame_, "contact");
-  if (hinge_frame_ != "contact" && hinge_frame_ != "world")
-    throw std::invalid_argument("hinge_axis_frame must be contact or world");
-  hinge_axis_ = vectorParam(pnh_, "hinge_axis", 3, 0, false);
-  if (hinge_axis_.norm() < 1e-9) throw std::invalid_argument("hinge_axis must be nonzero");
-  hinge_axis_.normalize();
   model_.initialize(nh_, pnh_);
   costs_ = loadPlugins(pnh_, "cost_plugins", "costs", cost_loader_, model_.info());
   constraints_ = loadPlugins(pnh_, "constraint_plugins", "constraints", constraint_loader_, model_.info());
   if (costs_.empty()) throw std::invalid_argument("at least one cost plugin is required");
-  // The perching service requires the contact constraint to be in the list.
+  bool need_static_thrust = false, need_joint_torque = false, need_feasible_control = false;
   XmlRpc::XmlRpcValue entries; pnh_.getParam("constraint_plugins", entries);
   for (int i = 0; i < entries.size(); ++i)
-    if (static_cast<std::string>(entries[i]["type"]) == "aerial_robot_motion/RevoluteContact") has_contact_plugin_ = true;
+  {
+    const std::string type = static_cast<std::string>(entries[i]["type"]);
+    if (type == "aerial_robot_motion/RevoluteContact") has_contact_plugin_ = true;
+    else if (type == "aerial_robot_motion/StaticThrust") need_static_thrust = true;
+    else if (type == "aerial_robot_motion/JointTorque") need_joint_torque = true;
+    else if (type == "aerial_robot_motion/FeasibleControl") need_feasible_control = true;
+  }
+  model_.configurePhysicalData(need_static_thrust, need_joint_torque, need_feasible_control);
+  if (has_contact_plugin_)
+  {
+    pnh_.param<std::string>("hinge_axis_frame", hinge_frame_, "contact");
+    if (hinge_frame_ != "contact" && hinge_frame_ != "world")
+      throw std::invalid_argument("hinge_axis_frame must be contact or world");
+    hinge_axis_ = vectorParam(pnh_, "hinge_axis", 3, 0, false);
+    if (hinge_axis_.norm() < 1e-9) throw std::invalid_argument("hinge_axis must be nonzero");
+    hinge_axis_.normalize();
+  }
   solver_.configure(ros::NodeHandle(pnh_, "solver"));
   commands_.initialize(pnh_, tf_, world_);
-  admittance_.initialize(pnh_, tf_, world_);
   bridge_.initialize(nh_, pnh_, model_.info(), world_);
   std::string topic;
   pnh_.param<std::string>("odom_topic", topic, "uav/baselink/odom");
@@ -98,7 +107,8 @@ MotionCore::MotionCore(ros::NodeHandle nh, ros::NodeHandle pnh)
   if (!topic.empty()) inhibit_sub_ = nh_.subscribe<std_msgs::Bool>(topic, 1,
       [this](const std_msgs::BoolConstPtr& msg) { inhibited_ = msg->data; });
   diagnostics_ = pnh_.advertise<diagnostic_msgs::DiagnosticArray>("status", 1, true);
-  perching_service_ = pnh_.advertiseService("perching/enable", &MotionCore::perching, this);
+  if (has_contact_plugin_)
+    perching_service_ = pnh_.advertiseService("perching/enable", &MotionCore::perching, this);
   reset_service_ = pnh_.advertiseService("command/reset", &MotionCore::resetTarget, this);
   timer_ = nh_.createTimer(ros::Duration(1 / rate_), &MotionCore::update, this);
   ROS_INFO("Motion core ready: %d variables, %zu link joints, commands %s", model_.info().dimension(),
@@ -108,6 +118,12 @@ MotionCore::MotionCore(ros::NodeHandle nh, ros::NodeHandle pnh)
 void MotionCore::odometry(const nav_msgs::OdometryConstPtr& msg) { odom_ = *msg; have_odom_ = true; }
 void MotionCore::cogOdometry(const nav_msgs::OdometryConstPtr& msg) { cog_ = *msg; have_cog_ = true; }
 void MotionCore::jointState(const sensor_msgs::JointStateConstPtr& msg) { joints_ = *msg; have_joints_ = true; }
+
+void MotionCore::resetOptimizationState()
+{
+  solver_.reset();
+  for (const auto& constraint : constraints_) constraint->reset();
+}
 
 bool MotionCore::measurements(MotionState& state, std::string& error)
 {
@@ -150,7 +166,8 @@ bool MotionCore::perching(std_srvs::SetBool::Request& req, std_srvs::SetBool::Re
   {
     if (!req.data)
     {
-      perched_ = false; solver_.reset(); res.success = true; res.message = "contact released"; return true;
+      perched_ = false; resetOptimizationState();
+      res.success = true; res.message = "contact released"; return true;
     }
     if (!has_contact_plugin_) throw std::runtime_error("RevoluteContact plugin is not configured");
     if (perched_) { res.success = true; res.message = "contact remains locked"; return true; }
@@ -160,7 +177,7 @@ bool MotionCore::perching(std_srvs::SetBool::Request& req, std_srvs::SetBool::Re
     locked_axis_ = hinge_frame_ == "world" ? hinge_axis_ : state.contact.linear() * hinge_axis_;
     hinge_local_ = state.contact.linear().transpose() * locked_axis_;
     perched_ = true;
-    commands_.resetTarget(state.tool); admittance_.reset(); solver_.reset();
+    commands_.resetTarget(state.tool); resetOptimizationState();
     res.success = true; res.message = "contact locked from current measured state; target reset to current tool";
   }
   catch (const std::exception& e) { res.success = false; res.message = e.what(); }
@@ -173,7 +190,7 @@ bool MotionCore::resetTarget(std_srvs::Trigger::Request&, std_srvs::Trigger::Res
   {
     MotionState state; std::string error;
     if (!measurements(state, error)) throw std::runtime_error(error);
-    commands_.resetTarget(state.tool); admittance_.reset(); solver_.reset();
+    commands_.resetTarget(state.tool); resetOptimizationState();
     res.success = true; res.message = "target reset to measured tool";
   }
   catch (const std::exception& e) { res.success = false; res.message = e.what(); }
@@ -190,7 +207,7 @@ void MotionCore::update(const ros::TimerEvent&)
     const auto now = ros::Time::now();
     if (publish_commands_ && (inhibited_ || flight_state_ != hover_state_ || !fresh(flight_stamp_, now, timeout_)))
     {
-      last_solved_stamp_ = ros::Time{}; admittance_.reset();
+      last_solved_stamp_ = ros::Time{}; resetOptimizationState();
       diagnostic(false, inhibited_ ? "legacy motion inhibits commands" : "waiting for fresh HOVER flight state"); return;
     }
     // No second solve on the same sensor sample, including after infeasibility.
@@ -199,10 +216,10 @@ void MotionCore::update(const ros::TimerEvent&)
     last_solved_stamp_ = ctx.state.stamp;
     if (!validStep(ctx.dt) || ctx.dt > max_dt_)
     {
-      admittance_.reset(); solver_.reset(); diagnostic(false, "invalid state update dt; holding reference"); return;
+      resetOptimizationState(); diagnostic(false, "invalid state update dt; holding reference"); return;
     }
-    ctx.target = admittance_.update(commands_.target(), ctx.state.tool, ctx.dt, now, ctx.state.stamp);
-    ctx.target_twist = admittance_.targetTwist();
+    ctx.target = commands_.target();
+    ctx.target_twist.setZero();
     ctx.contact_active = perched_; ctx.locked_contact_position = locked_position_;
     ctx.locked_hinge_world = locked_axis_; ctx.hinge_contact = hinge_local_;
     QPProblem problem; problem.reset(model_.info().dimension(), regularization_);
@@ -235,6 +252,7 @@ void MotionCore::update(const ros::TimerEvent&)
       if (pos_error > contact_tolerance_ || angle_error > contact_angle_tolerance_)
         throw std::runtime_error("integrated reference exceeds nonlinear contact tolerance");
     }
+    for (const auto& constraint : constraints_) constraint->solutionAccepted(ctx, velocity);
     bridge_.publish(reference, publish_commands_);
     diagnostic(true, status, &ctx, &problem, &velocity, seconds);
   }
@@ -258,7 +276,7 @@ void MotionCore::diagnostic(bool valid, const std::string& text, const MotionCon
   };
   add("valid", valid); add("commands_enabled", publish_commands_); add("variables", model_.info().dimension());
   add("constraints", problem ? problem->A.rows() : 0); add("solve_seconds", seconds);
-  add("perched", perched_); add("admittance_enabled", admittance_.enabled());
+  add("perched", perched_);
   std::string costs, constraints;
   for (const auto& p : costs_) costs += p->name() + " ";
   for (const auto& p : constraints_) constraints += p->name() + " ";

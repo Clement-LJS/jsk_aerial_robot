@@ -2,6 +2,7 @@
 #include <aerial_robot_motion/core/ros_conversions.h>
 #include <aerial_robot_motion/solver/qpoases_solver.h>
 #include <aerial_robot_motion/constraint/joint_limit.h>
+#include <aerial_robot_motion/constraint/acceleration_limit.h>
 #include <aerial_robot_motion/constraint/revolute_contact.h>
 #include <aerial_robot_motion/cost/cartesian_pose.h>
 #include <Eigen/SVD>
@@ -91,21 +92,42 @@ TEST(JointLimits, DamperBlocksTowardLimitButAllowsRetreat)
   ModelInfo empty;
   EXPECT_TRUE(constraint::JointLimitConstraint::bounds(empty, Eigen::VectorXd{}, 0.02, 0.2, 0.01, lo, hi));
 }
+TEST(AccelerationLimits, StartsFromRestAndUsesOnlyAcceptedHistory)
+{
+  const Eigen::VectorXd limits = Eigen::VectorXd::Constant(7, 2.0);
+  Eigen::VectorXd lower, upper;
+  ASSERT_TRUE(constraint::AccelerationLimitConstraint::bounds(
+      Eigen::VectorXd{}, false, 0.02, limits, lower, upper));
+  EXPECT_TRUE(lower.isApprox(Eigen::VectorXd::Constant(7, -0.04)));
+  EXPECT_TRUE(upper.isApprox(Eigen::VectorXd::Constant(7, 0.04)));
+  const Eigen::VectorXd previous = Eigen::VectorXd::LinSpaced(7, -0.3, 0.3);
+  ASSERT_TRUE(constraint::AccelerationLimitConstraint::bounds(
+      previous, true, 0.02, limits, lower, upper));
+  EXPECT_TRUE(lower.isApprox((previous.array() - 0.04).matrix()));
+  EXPECT_TRUE(upper.isApprox((previous.array() + 0.04).matrix()));
+  EXPECT_FALSE(constraint::AccelerationLimitConstraint::bounds(
+      Eigen::VectorXd::Zero(6), true, 0.02, limits, lower, upper));
+  EXPECT_FALSE(constraint::AccelerationLimitConstraint::bounds(
+      previous, true, 0.0, limits, lower, upper));
+}
 TEST(Contact, ExactlyFiveRowsAllowOnlyHingeRotationAndCorrectDrift)
 {
   MotionContext ctx; ctx.contact_active = true; ctx.state.contact_jacobian = Eigen::MatrixXd::Identity(6, 6);
   Eigen::MatrixXd a; Eigen::VectorXd b;
-  ASSERT_TRUE(constraint::RevoluteContactConstraint::equality(ctx, 3, 3, a, b));
+  ASSERT_TRUE(constraint::RevoluteContactConstraint::equality(ctx, 3, 3, 0.05, 0.2, a, b));
   EXPECT_EQ(a.rows(), 5); EXPECT_EQ(a.fullPivLu().rank(), 5);
   Vector6 free = Vector6::Zero(); free[4] = 1; EXPECT_NEAR((a * free).norm(), 0, 1e-12);
   ctx.state.contact.translation().x() = 0.01;
   ctx.state.contact.linear() = rotationExp(Eigen::Vector3d(0, 2.5, 0));
-  ASSERT_TRUE(constraint::RevoluteContactConstraint::equality(ctx, 3, 3, a, b));
+  ASSERT_TRUE(constraint::RevoluteContactConstraint::equality(ctx, 3, 3, 0.05, 0.2, a, b));
   EXPECT_NEAR(b[0], -0.03, 1e-12); EXPECT_LT(b.tail<2>().norm(), 1e-10);
   ctx.state.contact.linear() = rotationExp(Eigen::Vector3d(0.02, 0, 0)) * ctx.state.contact.linear();
-  ASSERT_TRUE(constraint::RevoluteContactConstraint::equality(ctx, 3, 3, a, b));
+  ASSERT_TRUE(constraint::RevoluteContactConstraint::equality(ctx, 3, 3, 0.05, 0.02, a, b));
+  EXPECT_LE(b.head<3>().norm(), 0.05 + 1e-12);
+  EXPECT_LE(b.tail<2>().norm(), 0.02 + 1e-12);
   QPProblem p; p.reset(6, 1); p.appendConstraints(a, b, b);
   QpOasesSolver solver; Eigen::VectorXd x; std::string status;
   ASSERT_TRUE(solver.solve(p, x, status)); EXPECT_LT(x[3], 0);
-  ctx.locked_hinge_world.setZero(); EXPECT_FALSE(constraint::RevoluteContactConstraint::equality(ctx, 3, 3, a, b));
+  ctx.locked_hinge_world.setZero();
+  EXPECT_FALSE(constraint::RevoluteContactConstraint::equality(ctx, 3, 3, 0.05, 0.2, a, b));
 }

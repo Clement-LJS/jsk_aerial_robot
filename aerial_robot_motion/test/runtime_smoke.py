@@ -40,7 +40,20 @@ class RuntimeSmoke(unittest.TestCase):
         package = rospkg.RosPack().get_path("aerial_robot_motion")
         with open(os.path.join(package, "config/default.yaml"), encoding="utf-8") as stream:
             params = yaml.safe_load(stream)
+        default_types = {entry["type"] for entry in params["constraint_plugins"]}
+        self.assertNotIn("aerial_robot_motion/RevoluteContact", default_types)
+        self.assertIn("aerial_robot_motion/AccelerationLimit", default_types)
+        self.assertNotIn("admittance", params)
         params.update(publish_commands=True, tool_frame="body", contact_frame="body")
+        params["constraint_plugins"].append(
+            {"name": "revolute_contact", "type": "aerial_robot_motion/RevoluteContact"})
+        params["constraints"]["revolute_contact"] = {
+            "position_gain": 3.0,
+            "orientation_gain": 3.0,
+            "max_position_correction_velocity": 0.05,
+            "max_orientation_correction_velocity": 0.2,
+        }
+        params["hinge_axis"] = [0, 1, 0]
         params["bridge"]["full_attitude"] = True
         params["contact_offset_xyz"] = [-0.3, 0, 0]
         rospy.set_param(private, params)

@@ -1,0 +1,23 @@
+# Optional physical-feasibility example for transformable robot-model plugins.
+# Load after default.yaml and provide a model whose analytical physical
+# Jacobians are finite. These constraints are skipped while perching is active
+# because the static model does not include the unknown contact reaction.
+bridge: {full_attitude: false}
+constraint_plugins:
+  - {name: state_limit, type: aerial_robot_motion/StateLimit}
+  - {name: joint_limit, type: aerial_robot_motion/JointLimit}
+  - {name: acceleration_limit, type: aerial_robot_motion/AccelerationLimit}
+  - {name: static_thrust, type: aerial_robot_motion/StaticThrust}
+  - {name: joint_torque, type: aerial_robot_motion/JointTorque}
+  - {name: feasible_control, type: aerial_robot_motion/FeasibleControl}
+constraints:
+  static_thrust: {}
+  joint_torque: {}
+  feasible_control:
+    minimum_force_margin: 0.0
+    minimum_torque_margin: 0.0
+costs:
+  state_velocity:
+    root_translation_weight: 1.0
+    root_rotation_weight: 1.0
+    joint_weight: 0.01

@@ -1,4 +1,5 @@
-# Velocities/Jacobians are world-frame; offsets are in their parent link.
+# Generic free-flight baseline. Velocities/Jacobians are world-frame; offsets
+# are in their parent link. Perching and physical feasibility are opt-in examples.
 update_rate: 50.0
 world_frame: world
 odom_topic: uav/baselink/odom
@@ -17,7 +18,7 @@ cost_plugins:
 constraint_plugins:
   - {name: state_limit, type: aerial_robot_motion/StateLimit}
   - {name: joint_limit, type: aerial_robot_motion/JointLimit}
-  - {name: revolute_contact, type: aerial_robot_motion/RevoluteContact}
+  - {name: acceleration_limit, type: aerial_robot_motion/AccelerationLimit}
 
 costs:
   cartesian_pose:
@@ -37,11 +38,10 @@ constraints:
   joint_limit:
     damping_range: 0.15
     safety_margin: 0.01
-  revolute_contact:
-    position_gain: 3.0
-    orientation_gain: 3.0
-
-hinge_axis: [0, 1, 0]
+  acceleration_limit:
+    root_linear_acceleration: [1.0, 1.0, 1.0]
+    root_angular_acceleration: [2.0, 2.0, 2.0]
+    joint_acceleration_default: 2.0
 bridge:
   full_attitude: false
   navigation_topic: uav/nav
@@ -49,14 +49,3 @@ bridge:
 
 command:
   frame: tool
-admittance:
-  enabled: false
-  frame: tool
-  wrench_topic: external_wrench
-  wrench_reference: [0, 0, 0, 0, 0, 0]
-  axes: [0, 0, 0, 0, 0, 0]
-  mass: [1, 1, 1, 1, 1, 1]
-  damping: [20, 20, 20, 20, 20, 20]
-  stiffness: [50, 50, 50, 50, 50, 50]
-  displacement_limit: [0.02, 0.02, 0.02, 0.05, 0.05, 0.05]
-  velocity_limit: [0.05, 0.05, 0.05, 0.1, 0.1, 0.1]

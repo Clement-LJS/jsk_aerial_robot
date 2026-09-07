@@ -2,6 +2,7 @@
 
 #include <aerial_robot_motion/core/motion_state.h>
 #include <aerial_robot_model/model/aerial_robot_model.h>
+#include <aerial_robot_model/model/transformable_aerial_robot_model.h>
 #include <nav_msgs/Odometry.h>
 #include <pluginlib/class_loader.h>
 #include <ros/node_handle.h>
@@ -18,6 +19,7 @@ public:
   void initialize(const ros::NodeHandle& nh, const ros::NodeHandle& private_nh);
   void initializeModel(const boost::shared_ptr<aerial_robot_model::RobotModel>& model,
                        const ros::NodeHandle& private_nh);
+  void configurePhysicalData(bool static_thrust, bool joint_torque, bool feasible_control);
   const ModelInfo& info() const { return info_; }
   std::string baselink() const { return model_->getBaselinkName(); }
   bool needsJointState() const { return !required_joints_.empty(); }
@@ -35,13 +37,18 @@ public:
 
 private:
   void update(MotionState& state);
+  void updatePhysical(MotionState& state);
+  Eigen::MatrixXd qpPhysicalJacobian(const MotionState& state, const Eigen::MatrixXd& full) const;
   pluginlib::ClassLoader<aerial_robot_model::RobotModel> loader_;
   boost::shared_ptr<aerial_robot_model::RobotModel> model_;
+  boost::shared_ptr<aerial_robot_model::transformable::RobotModel> transformable_model_;
   ModelInfo info_;
   std::string tool_frame_, contact_frame_;
   Eigen::Isometry3d tool_offset_ = Eigen::Isometry3d::Identity();
   Eigen::Isometry3d contact_offset_ = Eigen::Isometry3d::Identity();
   std::map<std::string, int> required_joints_;
   std::map<int, double> fixed_joints_;
+  std::vector<int> selected_model_joint_indices_;
+  bool need_static_thrust_ = false, need_joint_torque_ = false, need_feasible_control_ = false;
 };
 }  // namespace aerial_robot_motion
