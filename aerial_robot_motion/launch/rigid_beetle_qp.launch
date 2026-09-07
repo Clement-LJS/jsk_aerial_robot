@@ -1,0 +1,21 @@
+<launch>
+  <arg name="robot_id" default=""/>
+  <arg name="start_robot" default="false"/>
+  <arg name="simulation" default="true"/>
+  <arg name="publish_commands" default="false"/>
+  <!-- This opt-in bringup preserves all existing launch defaults. -->
+  <include file="$(find gimbalrotor)/launch/bringup.launch" if="$(arg start_robot)">
+    <arg name="robot_id" value="$(arg robot_id)"/>
+    <arg name="airframe" value="beetle"/>
+    <arg name="simulation" value="$(arg simulation)"/>
+    <arg name="real_machine" value="$(eval not arg('simulation'))"/>
+    <arg name="direct_model_name" value="unused"/>
+    <arg name="flight_navigation_plugin_name" value="aerial_robot_navigation/gimbalrotor_navigation"/>
+    <arg name="model_options" value="use_saw:=true use_hand:=true"/>
+  </include>
+  <include file="$(find aerial_robot_motion)/launch/aerial_robot_motion.launch">
+    <arg name="robot_ns" value="gimbalrotor$(arg robot_id)"/>
+    <arg name="config" value="$(find aerial_robot_motion)/config/examples/rigid_beetle_perching.yaml"/>
+    <arg name="publish_commands" value="$(arg publish_commands)"/>
+  </include>
+</launch>

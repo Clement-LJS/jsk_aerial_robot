@@ -1,0 +1,24 @@
+# Existing rigid Beetle validation example: n == 0, six QP variables.
+# For the intended multilink robot use gimbalrotor_perching.yaml instead.
+# Launch its URDF with use_saw:=true. Gimbals remain flight-controller outputs.
+tool_frame: saw
+tool_offset_xyz: [0, 0, 0]
+tool_offset_rpy: [0, 0, 0]
+contact_frame: base_link
+# Existing NavigationConfig.yaml hand_perching_center_offset_baselink values.
+contact_offset_xyz: [-0.34867, 0, 0.0375]
+contact_offset_rpy: [0, 0, 0]
+hinge_axis: [0, 1, 0]
+fixed_joint_positions: {hand_servo_joint: 0.0, lock_servo_joint: 0.0}
+command_inhibit_topic: perching/enable
+bridge: {full_attitude: true}
+costs:
+  cartesian_pose:
+    axes_frame: tool
+    # The hinged rigid tool must translate as it pitches. Do not also ask it to
+    # hold its original xyz; the hinge constraint determines the needed motion.
+    weights: [0, 0, 0, 0, 1, 0]
+admittance:
+  enabled: false
+  frame: tool
+  axes: [0, 0, 0, 0, 1, 0]

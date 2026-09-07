@@ -1,0 +1,5 @@
+<library path="lib/libaerial_robot_motion">
+  <class name="aerial_robot_motion/CartesianPose" type="aerial_robot_motion::cost::CartesianPoseCost" base_class_type="aerial_robot_motion::cost::Base"/>
+  <class name="aerial_robot_motion/StateVelocity" type="aerial_robot_motion::cost::StateVelocityCost" base_class_type="aerial_robot_motion::cost::Base"/>
+  <class name="aerial_robot_motion/NominalPosture" type="aerial_robot_motion::cost::NominalPostureCost" base_class_type="aerial_robot_motion::cost::Base"/>
+</library>

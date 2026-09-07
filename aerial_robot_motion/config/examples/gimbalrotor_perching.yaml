@@ -1,0 +1,20 @@
+# Multilink Beetle: use its existing robot-model plugin and complete joint state.
+# No joint list/count is assumed. The model supplies the n link-joint indices.
+# Provide tool_frame and contact_frame (or parent+offset) from the actual URDF.
+# Select the plain navigator; legacy perching must not rewrite this QP's output.
+bridge: {full_attitude: true}
+command_inhibit_topic: perching/enable
+hinge_axis: [0, 1, 0]
+hinge_axis_frame: contact
+costs:
+  cartesian_pose:
+    axes_frame: tool
+    weights: [1, 1, 1, 1, 1, 1]
+  state_velocity:
+    root_translation_weight: 1.0
+    root_rotation_weight: 1.0
+    joint_weight: 0.01
+admittance:
+  enabled: false
+  frame: tool
+  axes: [0, 0, 0, 0, 1, 0]

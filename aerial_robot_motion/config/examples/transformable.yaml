@@ -1,0 +1,9 @@
+# Choose the robot's existing robot_model_plugin_name and tool/contact frames
+# in its namespace. Link names/indices/limits come from that model.
+bridge: {full_attitude: false}
+costs:
+  state_velocity:
+    root_translation_weight: 1.0
+    root_rotation_weight: 1.0
+    joint_weight: 0.01
+

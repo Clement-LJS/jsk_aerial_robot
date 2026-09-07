@@ -1,0 +1,10 @@
+# Load after default.yaml. A fixed multirotor uses six QP variables.
+# The ordinary navigator exposes xyz/yaw references. Roll/pitch body variables
+# are constrained by the bridge capability mask; tool roll/pitch tasks are off.
+bridge: {full_attitude: false}
+costs:
+  cartesian_pose:
+    weights: [1, 1, 1, 0, 0, 1]
+constraint_plugins:
+  - {name: state_limit, type: aerial_robot_motion/StateLimit}
+

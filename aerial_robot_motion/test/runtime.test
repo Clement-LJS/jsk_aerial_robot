@@ -1,0 +1,3 @@
+<launch>
+  <test test-name="runtime_smoke" pkg="aerial_robot_motion" type="runtime_smoke.py" time-limit="45"/>
+</launch>

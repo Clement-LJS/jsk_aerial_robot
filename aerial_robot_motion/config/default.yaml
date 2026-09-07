@@ -1,0 +1,62 @@
+# Velocities/Jacobians are world-frame; offsets are in their parent link.
+update_rate: 50.0
+world_frame: world
+odom_topic: uav/baselink/odom
+cog_odometry_topic: uav/cog/odom
+joint_state_topic: joint_states
+flight_state_topic: flight_state
+hover_state: 5
+state_timeout: 0.2
+max_dt: 0.1
+publish_commands: false
+qp_regularization: 0.000001
+
+cost_plugins:
+  - {name: cartesian_pose, type: aerial_robot_motion/CartesianPose}
+  - {name: state_velocity, type: aerial_robot_motion/StateVelocity}
+constraint_plugins:
+  - {name: state_limit, type: aerial_robot_motion/StateLimit}
+  - {name: joint_limit, type: aerial_robot_motion/JointLimit}
+  - {name: revolute_contact, type: aerial_robot_motion/RevoluteContact}
+
+costs:
+  cartesian_pose:
+    gains: [2, 2, 2, 2, 2, 2]
+    weights: [1, 1, 1, 1, 1, 1]
+    max_twist: [0.1, 0.1, 0.1, 0.15, 0.15, 0.15]
+  state_velocity:
+    root_translation_weight: 0.01
+    root_rotation_weight: 0.01
+    joint_weight: 0.001
+constraints:
+  state_limit:
+    root_linear_limits: [0.1, 0.1, 0.1]
+    root_angular_limits: [0.15, 0.15, 0.15]
+    max_translation_step: 0.005
+    max_rotation_step: 0.005
+  joint_limit:
+    damping_range: 0.15
+    safety_margin: 0.01
+  revolute_contact:
+    position_gain: 3.0
+    orientation_gain: 3.0
+
+hinge_axis: [0, 1, 0]
+bridge:
+  full_attitude: false
+  navigation_topic: uav/nav
+  joint_command_topic: joints_ctrl
+
+command:
+  frame: tool
+admittance:
+  enabled: false
+  frame: tool
+  wrench_topic: external_wrench
+  wrench_reference: [0, 0, 0, 0, 0, 0]
+  axes: [0, 0, 0, 0, 0, 0]
+  mass: [1, 1, 1, 1, 1, 1]
+  damping: [20, 20, 20, 20, 20, 20]
+  stiffness: [50, 50, 50, 50, 50, 50]
+  displacement_limit: [0.02, 0.02, 0.02, 0.05, 0.05, 0.05]
+  velocity_limit: [0.05, 0.05, 0.05, 0.1, 0.1, 0.1]

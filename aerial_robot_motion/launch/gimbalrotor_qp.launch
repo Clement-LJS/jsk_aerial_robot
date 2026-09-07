@@ -1,0 +1,17 @@
+<launch>
+  <!-- Start the intended multilink robot with its own model/servo bringup first.
+       Required frame arguments prevent silently applying rigid-Beetle geometry. -->
+  <arg name="robot_ns" default="gimbalrotor"/>
+  <arg name="tool_frame"/>
+  <arg name="contact_frame"/>
+  <arg name="config" default="$(find aerial_robot_motion)/config/examples/gimbalrotor_perching.yaml"/>
+  <arg name="publish_commands" default="false"/>
+  <node pkg="aerial_robot_motion" type="aerial_robot_motion_node" name="motion"
+        ns="$(arg robot_ns)" output="screen" required="true">
+    <rosparam command="load" file="$(find aerial_robot_motion)/config/default.yaml"/>
+    <rosparam command="load" file="$(arg config)"/>
+    <param name="tool_frame" value="$(arg tool_frame)"/>
+    <param name="contact_frame" value="$(arg contact_frame)"/>
+    <param name="publish_commands" value="$(arg publish_commands)"/>
+  </node>
+</launch>

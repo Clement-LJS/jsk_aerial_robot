@@ -1,0 +1,11 @@
+<launch>
+  <arg name="robot_ns" default="aerial_robot"/>
+  <arg name="config" default="$(find aerial_robot_motion)/config/default.yaml"/>
+  <arg name="publish_commands" default="false"/>
+  <node pkg="aerial_robot_motion" type="aerial_robot_motion_node" name="motion"
+        ns="$(arg robot_ns)" output="screen" required="true">
+    <rosparam command="load" file="$(find aerial_robot_motion)/config/default.yaml"/>
+    <rosparam command="load" file="$(arg config)"/>
+    <param name="publish_commands" value="$(arg publish_commands)"/>
+  </node>
+</launch>
