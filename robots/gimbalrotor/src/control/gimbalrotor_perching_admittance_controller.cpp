@@ -4,11 +4,6 @@
 
 #include <cmath>
 
-namespace
-{
-const double PI = 3.14159265358979323846;
-}
-
 namespace aerial_robot_control
 {
 
@@ -33,8 +28,6 @@ GimbalrotorPerchingAdmittanceController::GimbalrotorPerchingAdmittanceController
     use_branch_pose_if_no_point_(false),
     require_perching_lock_(true),
     min_valid_radius_(0.05),
-    max_pitch_delta_(0.78539816339),
-    arc_pitch_sign_(1.0),
     contact_torque_filter_alpha_(0.10),
     contact_on_threshold_(0.04),
     contact_off_threshold_(0.02),
@@ -44,7 +37,6 @@ GimbalrotorPerchingAdmittanceController::GimbalrotorPerchingAdmittanceController
     recovery_rate_epsilon_(0.01),
     perching_pitch_torque_sign_(1.0),
     locked_radius_(0.0),
-    locked_x_side_(1.0), 
     maximum_lock_stamp_difference_(0.05),
     equilibrium_wrench_required_samples_(80),
     equilibrium_wrench_sample_count_(0),
@@ -62,9 +54,8 @@ GimbalrotorPerchingAdmittanceController::GimbalrotorPerchingAdmittanceController
   perching_point_world_.setValue(0.0, 0.0, 0.0);
   branch_pos_world_.setValue(0.0, 0.0, 0.0);
   locked_robot_pos_world_.setValue(0.0, 0.0, 0.0);
-  locked_robot_rpy_.setValue(0.0, 0.0, 0.0);
+  locked_robot_orientation_.setValue(0.0, 0.0, 0.0, 1.0);
   locked_pivot_world_.setValue(0.0, 0.0, 0.0);
-  locked_radius_vec_world_.setValue(0.0, 0.0, 0.0);
 
   locked_pose_stamp_ = ros::Time(0);
   locked_pivot_stamp_ = ros::Time(0);
@@ -75,7 +66,7 @@ GimbalrotorPerchingAdmittanceController::GimbalrotorPerchingAdmittanceController
 
   R_world_constraint_.setIdentity();
 
-  constraint_axis_world_ = Eigen::Vector3d::UnitY();
+  constraint_axis_world_ = Eigen::Vector3d::Zero();
 
   equilibrium_wrench_pivot_world_.setZero();
   equilibrium_wrench_pivot_sum_.setZero();
@@ -161,9 +152,9 @@ void GimbalrotorPerchingAdmittanceController::initialize(
    * GimbalrotorPerchingNavigator publishes this as latched.
    * It contains:
    *   - locked robot position
-   *   - locked robot RPY
+   *   - locked robot quaternion
    *
-   * We use this to reconstruct the same pitch arc in the admittance controller.
+   * The shared geometry helper derives the same locked local-Y axis.
    */
   locked_pose_sub_ =
       nh_.subscribe(
@@ -261,17 +252,12 @@ void GimbalrotorPerchingAdmittanceController::reset()
   locked_robot_pos_world_.setValue(
       0.0, 0.0, 0.0);
 
-  locked_robot_rpy_.setValue(
-      0.0, 0.0, 0.0);
+  locked_robot_orientation_.setValue(0.0, 0.0, 0.0, 1.0);
 
   locked_pivot_world_.setValue(
       0.0, 0.0, 0.0);
 
-  locked_radius_vec_world_.setValue(
-      0.0, 0.0, 0.0);
-
   locked_radius_ = 0.0;
-  locked_x_side_ = 1.0;
 
   locked_pose_stamp_ = ros::Time(0);
   locked_pivot_stamp_ = ros::Time(0);
@@ -281,7 +267,7 @@ void GimbalrotorPerchingAdmittanceController::reset()
   R_world_constraint_.setIdentity();
   prepared_R_world_constraint_.setIdentity();
 
-  constraint_axis_world_ = Eigen::Vector3d::UnitY();
+  constraint_axis_world_ = Eigen::Vector3d::Zero();
 
   resetEquilibriumWrenchUnsafe();
   resetContactGateUnsafe();
@@ -338,10 +324,8 @@ void GimbalrotorPerchingAdmittanceController::perchingRosParamInit()
       true);
 
   /*
-   * These must match the perching navigator parameters.
-   *
-   * If they are not explicitly set under controller/admittance/perching,
-   * read the existing navigation parameters.
+   * The navigator owns the angle limit and arc sign. Only the radius validity
+   * threshold is needed here to validate the received constraint frame.
    */
   ros::NodeHandle navi_nh(nh_, "navigation");
 
@@ -350,36 +334,6 @@ void GimbalrotorPerchingAdmittanceController::perchingRosParamInit()
       "perching_min_valid_radius",
       min_valid_radius_,
       0.05);
-
-  getParam<double>(
-      navi_nh,
-      "perching_max_pitch_delta",
-      max_pitch_delta_,
-      0.78539816339);
-
-  getParam<double>(
-      navi_nh,
-      "perching_arc_pitch_sign",
-      arc_pitch_sign_,
-      1.0);
-
-  getParam<double>(
-      imp_perch_nh,
-      "perching_min_valid_radius",
-      min_valid_radius_,
-      min_valid_radius_);
-
-  getParam<double>(
-      imp_perch_nh,
-      "perching_max_pitch_delta",
-      max_pitch_delta_,
-      max_pitch_delta_);
-
-  getParam<double>(
-      imp_perch_nh,
-      "perching_arc_pitch_sign",
-      arc_pitch_sign_,
-      arc_pitch_sign_);
 
   if(!std::isfinite(min_valid_radius_) ||
      min_valid_radius_ <= 1.0e-6)
@@ -392,33 +346,6 @@ void GimbalrotorPerchingAdmittanceController::perchingRosParamInit()
 
     min_valid_radius_ = 0.05;
   }
-
-  if(!std::isfinite(max_pitch_delta_) ||
-     max_pitch_delta_ <= 0.0 ||
-     max_pitch_delta_ > PI)
-  {
-    ROS_WARN(
-        "[GimbalrotorPerchingAdmittanceController] "
-        "Invalid perching_max_pitch_delta %.6f. "
-        "Using 0.5235987756 rad.",
-        max_pitch_delta_);
-
-    max_pitch_delta_ = 0.5235987756;
-  }
-
-  if(!std::isfinite(arc_pitch_sign_) ||
-     arc_pitch_sign_ == 0.0)
-  {
-    ROS_WARN(
-        "[GimbalrotorPerchingAdmittanceController] "
-        "Invalid perching_arc_pitch_sign %.6f. "
-        "Using 1.0.",
-        arc_pitch_sign_);
-
-    arc_pitch_sign_ = 1.0;
-  }
-
-  arc_pitch_sign_ = arc_pitch_sign_ >= 0.0 ? 1.0 : -1.0;
 
   if(!std::isfinite(external_wrench_timeout_) ||
      external_wrench_timeout_ <= 0.0)
@@ -649,10 +576,7 @@ void GimbalrotorPerchingAdmittanceController::perchingRosParamInit()
 
   ROS_WARN("[GimbalrotorPerchingAdmittanceController] perching_min_valid_radius: %.4f",
            min_valid_radius_);
-  ROS_WARN("[GimbalrotorPerchingAdmittanceController] perching_max_pitch_delta deg: %.2f",
-           max_pitch_delta_ * 180.0 / PI);
-  ROS_WARN("[GimbalrotorPerchingAdmittanceController] perching_arc_pitch_sign: %.2f",
-           arc_pitch_sign_);
+
 }
 
 void GimbalrotorPerchingAdmittanceController::resetEquilibriumWrenchUnsafe()
@@ -957,7 +881,7 @@ preparePerchingAdmittanceInput()
 
   tf::Vector3 pivot_world_tf;
   Eigen::Matrix3d R_world_constraint = Eigen::Matrix3d::Identity();
-  Eigen::Vector3d constraint_axis_world = Eigen::Vector3d::UnitY();
+  Eigen::Vector3d constraint_axis_world = Eigen::Vector3d::Zero();
   ros::Time accepted_pose_stamp_snapshot;
   ros::Time accepted_pivot_stamp_snapshot;
 
@@ -1423,7 +1347,7 @@ void GimbalrotorPerchingAdmittanceController::controlCore()
 
         R_world_constraint_.setIdentity();
         prepared_R_world_constraint_.setIdentity();
-        constraint_axis_world_ = Eigen::Vector3d::UnitY();
+        constraint_axis_world_ = Eigen::Vector3d::Zero();
 
         prepared_perching_admittance_wrench_world_.setZero();
 
@@ -1672,7 +1596,7 @@ void GimbalrotorPerchingAdmittanceController::perchingEnableCallback(const std_m
 
       R_world_constraint_.setIdentity();
       prepared_R_world_constraint_.setIdentity();
-      constraint_axis_world_ = Eigen::Vector3d::UnitY();
+      constraint_axis_world_ = Eigen::Vector3d::Zero();
 
       prepared_perching_admittance_wrench_world_.setZero();
 
@@ -1701,7 +1625,7 @@ void GimbalrotorPerchingAdmittanceController::perchingEnableCallback(const std_m
 
       R_world_constraint_.setIdentity();
       prepared_R_world_constraint_.setIdentity();
-      constraint_axis_world_ = Eigen::Vector3d::UnitY();
+      constraint_axis_world_ = Eigen::Vector3d::Zero();
 
       prepared_perching_admittance_wrench_world_.setZero();
 
@@ -1733,7 +1657,7 @@ void GimbalrotorPerchingAdmittanceController::perchingEnableCallback(const std_m
 
       R_world_constraint_.setIdentity();
       prepared_R_world_constraint_.setIdentity();
-      constraint_axis_world_ = Eigen::Vector3d::UnitY();
+      constraint_axis_world_ = Eigen::Vector3d::Zero();
 
       prepared_perching_admittance_wrench_world_.setZero();
 
@@ -1892,10 +1816,9 @@ lockedPoseCallback(
     std::lock_guard<std::mutex> lock(
         perching_state_mutex_);
 
-    poseMsgToTfPosRpy(
-        *msg,
-        locked_robot_pos_world_,
-        locked_robot_rpy_);
+    tf::pointMsgToTF(msg->pose.position, locked_robot_pos_world_);
+    tf::quaternionMsgToTF(msg->pose.orientation, locked_robot_orientation_);
+    locked_robot_orientation_.normalize();
 
     if(msg->header.stamp.isZero())
     {
@@ -2039,7 +1962,9 @@ void GimbalrotorPerchingAdmittanceController::updateLockedConstraintFromLockedPo
 
     const double stamp_difference = std::abs((locked_pose_stamp_ - locked_pivot_stamp_).toSec());
 
-    if(stamp_difference > maximum_lock_stamp_difference_)
+    if(stamp_difference > maximum_lock_stamp_difference_ ||
+       (dynamic_cast<perching_geometry::TargetProvider*>(navigator_.get()) &&
+        locked_pose_stamp_ != locked_pivot_stamp_))
     {
       has_locked_pose_ = false;
 
@@ -2073,19 +1998,11 @@ void GimbalrotorPerchingAdmittanceController::updateLockedConstraintFromLockedPo
   }
 
   perching_point_world_ = locked_pivot_world_;
-  locked_radius_vec_world_ = locked_robot_pos_world_ - locked_pivot_world_;
-  locked_radius_ = norm2D(locked_radius_vec_world_.x(), locked_radius_vec_world_.z());
+  const bool geometry_valid = geometry_.initialize(locked_robot_pos_world_, locked_pivot_world_,
+                                                    locked_robot_orientation_, min_valid_radius_);
+  locked_radius_ = geometry_valid ? geometry_.radial().length() : 0.0;
 
-  if(locked_robot_pos_world_.x() - locked_pivot_world_.x() >= 0.0)
-  {
-    locked_x_side_ = 1.0;
-  }
-  else
-  {
-    locked_x_side_ = -1.0;
-  }
-
-  if(!std::isfinite(locked_radius_) || locked_radius_ < min_valid_radius_)
+  if(!geometry_valid)
   {
     has_locked_pose_ = false;
 
@@ -2107,21 +2024,11 @@ void GimbalrotorPerchingAdmittanceController::updateLockedConstraintFromLockedPo
     return;
   }
 
-  /*
-   * Minimum current implementation:
-   * physical branch axis is world Y.
-   */
-  constraint_axis_world_ = Eigen::Vector3d::UnitY();
+  // Physical passive revolute axis: locked navigation/CoG local +Y in world.
+  constraint_axis_world_ = Eigen::Vector3d(geometry_.axis.x(), geometry_.axis.y(), geometry_.axis.z());
 
-  Eigen::Vector3d radial_world(
-      locked_radius_vec_world_.x(),
-      locked_radius_vec_world_.y(),
-      locked_radius_vec_world_.z());
-
-  /*
-   * Remove the component parallel to the branch.
-   */
-  radial_world -= constraint_axis_world_ * constraint_axis_world_.dot(radial_world);
+  const tf::Vector3 radial = geometry_.radial();
+  Eigen::Vector3d radial_world(radial.x(), radial.y(), radial.z());
 
   const double radial_norm = radial_world.norm();
 
@@ -2184,7 +2091,7 @@ void GimbalrotorPerchingAdmittanceController::updateLockedConstraintFromLockedPo
    * into world-frame vectors:
    *
    * constraint X = radial
-   * constraint Y = branch axis
+   * constraint Y = locked local +Y passive axis
    * constraint Z = tangent
    */
   R_world_constraint_.col(0) = radial_world;
@@ -2253,12 +2160,6 @@ void GimbalrotorPerchingAdmittanceController::updateLockedConstraintFromLockedPo
       locked_robot_pos_world_.x(),
       locked_robot_pos_world_.y(),
       locked_robot_pos_world_.z());
-
-  ROS_WARN(
-      "[GimbalrotorPerchingAdmittanceController] "
-      "Locked pitch: %.2f deg",
-      locked_robot_rpy_.y() *
-      180.0 / PI);
 
   ROS_WARN(
       "[GimbalrotorPerchingAdmittanceController] "
@@ -2500,10 +2401,6 @@ applyAdmittanceOutputToNavigator(
   tf::Vector3 modified_target_pos;
   tf::Vector3 modified_target_rpy;
 
-  double nominal_pitch = 0.0;
-  double admittance_pitch_offset = 0.0;
-  double target_pitch = 0.0;
-
   {
     std::lock_guard<std::mutex> lock(
         perching_state_mutex_);
@@ -2523,263 +2420,31 @@ applyAdmittanceOutputToNavigator(
       return;
     }
 
-    if(!perchingPitchOutputFinite(output) ||
-       !std::isfinite(original_target_rpy.y()))
-    {
-      ROS_ERROR_THROTTLE(
-          1.0,
-          "[GimbalrotorPerchingAdmittanceController] "
-          "Rejected non-finite pitch admittance target injection.");
+    if(!perchingPitchOutputFinite(output)) return;
 
+    const auto* provider = dynamic_cast<const perching_geometry::TargetProvider*>(navigator_.get());
+    perching_geometry::Pose pose;
+    // Require the exact navigator lock pair. This also rejects a mixed pair
+    // delivered during relock, even when its stamps are within the tolerance.
+    if(!provider || accepted_locked_pose_stamp_ != accepted_locked_pivot_stamp_ ||
+       !provider->perchingAdmittanceTarget(accepted_locked_pose_stamp_,
+           output.angle_offset_compliance(1), original_target_pos, pose))
       return;
-    }
-
-  nominal_pitch = original_target_rpy.y();
-
-  /*
-  * Constraint coordinate Y is the branch axis.
-  * Rotational admittance Y therefore produces
-  * the perching pitch correction.
-  */
-  admittance_pitch_offset = output.angle_offset_compliance(1);
-
-  /*
-  * The final pitch command must obey the same
-  * locked-pose pitch limit used by the perching arc.
-  *
-  * Without this clamp, the position can be generated
-  * at the clamped angle while the attitude controller
-  * receives an unclamped pitch target.
-  */
-  double target_pitch_delta =
-      normalizeAngle(
-          nominal_pitch +
-          admittance_pitch_offset -
-          locked_robot_rpy_.y());
-
-  target_pitch_delta =
-      clamp(
-          target_pitch_delta,
-          -max_pitch_delta_,
-          max_pitch_delta_);
-
-  target_pitch =
-      normalizeAngle(
-          locked_robot_rpy_.y() +
-          target_pitch_delta);
-
-    if(!std::isfinite(target_pitch))
-    {
-      ROS_ERROR_THROTTLE(
-          1.0,
-          "[GimbalrotorPerchingAdmittanceController] "
-          "Rejected non-finite perching pitch target.");
-
-      return;
-    }
-
-    /*
-     * This function reads locked geometry.
-     * The perching-state mutex is held here.
-     */
-    modified_target_pos =
-        computePerchingArcPositionFromPitch(
-            target_pitch,
-            original_target_pos);
-
-    if(!std::isfinite(modified_target_pos.x()) ||
-       !std::isfinite(modified_target_pos.y()) ||
-       !std::isfinite(modified_target_pos.z()))
-    {
-      ROS_ERROR_THROTTLE(
-          1.0,
-          "[GimbalrotorPerchingAdmittanceController] "
-          "Rejected non-finite perching arc target.");
-
-      return;
-    }
-
-    modified_target_rpy = original_target_rpy;
-    modified_target_rpy.setY(target_pitch);
+    modified_target_pos = pose.position;
+    double roll, pitch, yaw;
+    tf::Matrix3x3(pose.orientation).getRPY(roll, pitch, yaw);
+    const double perching_pitch = pitch;
+    // locked_pose contains NORMAL's reference, not measured lock roll/yaw.
+    // Match navigation: apply local-Y pitch without rebasing roll/yaw intent.
+    tf::Matrix3x3(geometry_.orientation).getRPY(roll, pitch, yaw);
+    modified_target_rpy.setValue(roll, perching_pitch, yaw);
   }
 
   /*
-   * Do not hold the state mutex while calling into navigator code.
+   * Release the state mutex before mutating navigator targets.
    */
   navigator_->setTargetPos(modified_target_pos);
   navigator_->setTargetRPY(modified_target_rpy);
-}
-
-tf::Vector3
-GimbalrotorPerchingAdmittanceController::computePerchingArcPositionFromPitch(
-    double target_pitch,
-    const tf::Vector3& original_target_pos) const
-{
-  /*
-   * Same geometric idea as GimbalrotorPerchingNavigator::computeArcPositionFromPitch().
-   *
-   * Locked:
-   *   pivot C
-   *   robot position P0
-   *   radius vector r0 = P0 - C
-   *   pitch theta0
-   *
-   * Command:
-   *   target pitch theta
-   *
-   * Compute:
-   *   dtheta = theta - theta0
-   *   r_des = RotY(dtheta) * r0
-   *   P_des = C + r_des
-   *
-   * Use only X-Z radius because branch axis is world Y.
-   */
-  double delta_pitch =
-      normalizeAngle(target_pitch - locked_robot_rpy_.y());
-
-  delta_pitch =
-      clamp(delta_pitch, -max_pitch_delta_, max_pitch_delta_);
-
-  const double signed_delta =
-      arc_pitch_sign_ * delta_pitch;
-
-  tf::Vector3 locked_radius_xz(
-      locked_radius_vec_world_.x(),
-      0.0,
-      locked_radius_vec_world_.z());
-
-  double length_xz =
-      norm2D(
-          locked_radius_xz.x(),
-          locked_radius_xz.z());
-
-  if(length_xz < 1.0e-6)
-    {
-      locked_radius_xz.setX(locked_x_side_ * locked_radius_);
-      locked_radius_xz.setY(0.0);
-      locked_radius_xz.setZ(0.0);
-      length_xz = locked_radius_;
-    }
-
-  if(length_xz < 1.0e-6)
-    {
-      locked_radius_xz.setX(locked_x_side_);
-      locked_radius_xz.setY(0.0);
-      locked_radius_xz.setZ(0.0);
-      length_xz = 1.0;
-    }
-
-  locked_radius_xz.setX(
-      locked_radius_xz.x() / length_xz * locked_radius_);
-  locked_radius_xz.setY(0.0);
-  locked_radius_xz.setZ(
-      locked_radius_xz.z() / length_xz * locked_radius_);
-
-  tf::Matrix3x3 rot(
-      tf::createQuaternionFromRPY(
-          0.0,
-          signed_delta,
-          0.0));
-
-  tf::Vector3 rotated_radius =
-      rot * locked_radius_xz;
-
-  double rotated_length_xz =
-      norm2D(
-          rotated_radius.x(),
-          rotated_radius.z());
-
-  if(rotated_length_xz < 1.0e-6)
-    {
-      rotated_radius.setX(locked_x_side_ * locked_radius_);
-      rotated_radius.setY(0.0);
-      rotated_radius.setZ(0.0);
-    }
-  else
-    {
-      rotated_radius.setX(
-          rotated_radius.x() / rotated_length_xz * locked_radius_);
-      rotated_radius.setY(0.0);
-      rotated_radius.setZ(
-          rotated_radius.z() / rotated_length_xz * locked_radius_);
-    }
-
-  tf::Vector3 target_pos =
-      perching_point_world_ + rotated_radius;
-
-  /*
-   * Preserve Y generated by GimbalrotorPerchingNavigator.
-   *
-   * The navigator already handles Y deadband/compliance. This controller should
-   * not duplicate that logic.
-   */
-  target_pos.setY(original_target_pos.y());
-
-  return target_pos;
-}
-
-double GimbalrotorPerchingAdmittanceController::clamp(
-    double value,
-    double min_value,
-    double max_value) const
-{
-  if(value < min_value)
-    {
-      return min_value;
-    }
-
-  if(value > max_value)
-    {
-      return max_value;
-    }
-
-  return value;
-}
-
-double GimbalrotorPerchingAdmittanceController::normalizeAngle(
-    double angle) const
-{
-  while(angle > PI)
-    {
-      angle -= 2.0 * PI;
-    }
-
-  while(angle < -PI)
-    {
-      angle += 2.0 * PI;
-    }
-
-  return angle;
-}
-
-double GimbalrotorPerchingAdmittanceController::norm2D(
-    double x,
-    double z) const
-{
-  return std::sqrt(x * x + z * z);
-}
-
-void GimbalrotorPerchingAdmittanceController::poseMsgToTfPosRpy(
-    const geometry_msgs::PoseStamped& msg,
-    tf::Vector3& pos,
-    tf::Vector3& rpy) const
-{
-  pos.setValue(
-      msg.pose.position.x,
-      msg.pose.position.y,
-      msg.pose.position.z);
-
-  tf::Quaternion q;
-  tf::quaternionMsgToTF(msg.pose.orientation, q);
-  q.normalize();
-
-  double roll = 0.0;
-  double pitch = 0.0;
-  double yaw = 0.0;
-
-  tf::Matrix3x3(q).getRPY(roll, pitch, yaw);
-
-  rpy.setValue(roll, pitch, yaw);
 }
 
 void GimbalrotorPerchingAdmittanceController::publishPivotWrenchFrame(

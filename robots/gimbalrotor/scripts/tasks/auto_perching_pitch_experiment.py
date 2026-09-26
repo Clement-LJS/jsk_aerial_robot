@@ -5,9 +5,7 @@ from __future__ import print_function
 import math
 
 import rospy
-from geometry_msgs.msg import PoseStamped
 from std_msgs.msg import Float64
-from tf.transformations import euler_from_quaternion
 
 
 # ============================================================
@@ -25,18 +23,6 @@ PUBLISH_INTERVAL = 0.02
 # ============================================================
 # Functions
 # ============================================================
-
-def get_pitch_from_pose(pose):
-    quaternion = [pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w]
-
-    _, pitch, _ = euler_from_quaternion(quaternion)
-
-    return pitch
-
-
-def normalize_angle(angle):
-    return math.atan2(math.sin(angle), math.cos(angle))
-
 
 def publish_pitch_delta(publisher, pitch_delta_rad):
     message = Float64()
@@ -61,18 +47,17 @@ def main():
 
     rospy.sleep(1.0)
 
-    # Read the locked perching orientation.
-    locked_pose_msg = rospy.wait_for_message("/gimbalrotor/perching/locked_pose", PoseStamped)
-
-    # Read the current nominal commanded orientation.
-    commanded_pose_msg = rospy.wait_for_message("/gimbalrotor/perching/commanded_pose", PoseStamped)
-
-    locked_pitch = get_pitch_from_pose(locked_pose_msg.pose)
-
-    commanded_pitch = get_pitch_from_pose(commanded_pose_msg.pose)
-
-    # manual_pitch_delta is relative to the locked pitch.
-    pitch_delta_rad = normalize_angle(commanded_pitch - locked_pitch)
+    # The state is the bounded logical rotation about locked local +Y.
+    delta_msg = rospy.wait_for_message("/gimbalrotor/perching/commanded_pitch_delta", Float64)
+    command_sign = float(rospy.get_param("/gimbalrotor/navigation/perching_command_pitch_sign", 1.0))
+    if math.isnan(command_sign) or math.isinf(command_sign) or command_sign == 0.0:
+        command_sign = 1.0
+    command_sign = 1.0 if command_sign > 0.0 else -1.0
+    if math.isnan(delta_msg.data) or math.isinf(delta_msg.data):
+        rospy.logerr("Invalid commanded local-axis pitch delta")
+        return
+    # Convert state back to manual input units; the navigator applies this sign.
+    pitch_delta_rad = delta_msg.data / command_sign
 
     rospy.loginfo("Starting from current pitch delta: %.2f deg", math.degrees(pitch_delta_rad))
 
@@ -82,7 +67,7 @@ def main():
         if rospy.is_shutdown():
             break
 
-        # Positive pitch delta moves downward.
+        # Positive input retains the configured cutting-direction sign convention.
         pitch_delta_rad += step_rad
 
         publish_pitch_delta(publisher, pitch_delta_rad)

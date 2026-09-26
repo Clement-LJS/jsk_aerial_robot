@@ -42,8 +42,8 @@ navigation:
   # If true, first enable locks pivot/radius once. Use /gimbalrotor/perching/relock to relock manually.
   perching_lock_once: true
 
-  # false: target_pitch is absolute pitch [rad].
-  # true: target_pitch is delta pitch from locked pitch [rad].
+  # false: project the requested absolute RPY attitude onto the locked local-Y arc.
+  # true: target_pitch is a logical locked local +Y rotation delta [rad].
   perching_command_pitch_as_delta: true
 
   # If position command is sent while perching is enabled, constrain it onto branch pitch arc.
@@ -61,7 +61,7 @@ navigation:
   # Safety: invalid branch/robot distance below this will not lock.
   perching_min_valid_radius: 0.05
 
-  # Max allowed pitch change from locked pose [rad].
+  # Max logical rotation about locked local +Y from the locked pose [rad].
   # 0.5236 = 30 deg
   # 0.7854 = 45 deg
   # 1.0472 = 60 deg
@@ -78,6 +78,8 @@ navigation:
   perching_reset_topic: "perching/reset"
 
   perching_active_hold_enable: true
+  # Translational deadband along locked local +Y (legacy parameter name), in meters.
+  # Set to zero for a strict revolute constraint.
   perching_y_compliance_deadband: 0.03
 
   perching_accept_uav_nav_pitch_command: false

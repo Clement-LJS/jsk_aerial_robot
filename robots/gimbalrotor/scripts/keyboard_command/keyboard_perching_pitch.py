@@ -34,12 +34,11 @@ step  = 0.02 rad
 limit = +/-20 deg
 
 Meaning:
-This command is relative to the locked perching pitch.
-
-Example:
-  +0.10 rad means locked_pitch + 0.10 rad
-  -0.10 rad means locked_pitch - 0.10 rad
-   0.00 rad means return to locked_pitch
+This command is a rotation delta about the locked robot/navigation local +Y
+passive revolute axis, in radians, not a world Euler-pitch increment.
+The navigator applies perching_command_pitch_sign to this input, then
+perching_arc_pitch_sign to the bounded logical delta for both position and attitude.
+Zero returns to the locked pose, subject to the configured axial deadband.
 
 This does NOT publish /gimbalrotor/uav/nav.
 Therefore it will not fight /perching_cutting_mission.

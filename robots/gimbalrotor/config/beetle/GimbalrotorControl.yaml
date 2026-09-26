@@ -168,9 +168,7 @@ controller:
 
       require_perching_lock: true
 
-      perching_min_valid_radius: 0.05
-      perching_max_pitch_delta: 0.5235987756
-      perching_arc_pitch_sign: 1.0
+      # Perching geometry, radius threshold, angle limit and arc sign come from navigation.
 
       # Maximum allowed time difference between the
       # separately published locked pose and pivot.

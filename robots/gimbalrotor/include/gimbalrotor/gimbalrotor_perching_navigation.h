@@ -6,6 +6,7 @@
 #include <string>
 
 #include <gimbalrotor/gimbalrotor_navigation.h>
+#include <gimbalrotor/perching_geometry.h>
 
 #include <aerial_robot_msgs/FlightNav.h>
 
@@ -23,7 +24,7 @@
 namespace aerial_robot_navigation
 {
 
-class GimbalrotorPerchingNavigator : public GimbalrotorNavigator
+class GimbalrotorPerchingNavigator : public GimbalrotorNavigator, public perching_geometry::TargetProvider
 {
 public:
   GimbalrotorPerchingNavigator();
@@ -37,6 +38,8 @@ public:
       double loop_du) override;
 
   void update() override;
+  bool perchingAdmittanceTarget(const ros::Time& lock_stamp, double physical_offset,
+      const tf::Vector3& nominal_position, perching_geometry::Pose& pose) const override;
 
 private:
   void rosParamInit() override;
@@ -52,26 +55,17 @@ private:
   bool tryLockPerching(const std::string& reason);
   void resetPerchingLock();
 
-  void applyPerchingConstraint(aerial_robot_msgs::FlightNav& nav_msg);
+  bool applyPerchingConstraint(aerial_robot_msgs::FlightNav& nav_msg);
 
   void applyActivePerchingTarget();
   aerial_robot_msgs::FlightNav buildActivePerchingNavCommand();
-  tf::Vector3 computeActiveHoldPosition() const;
-  double computeActiveHoldPitch() const;
-  double computeCompliantTargetY() const;
 
   bool hasPitchCommand(const aerial_robot_msgs::FlightNav& nav_msg) const;
   bool hasPositionCommand(const aerial_robot_msgs::FlightNav& nav_msg) const;
   bool hasVelocityCommand(const aerial_robot_msgs::FlightNav& nav_msg) const;
 
-  double getCommandedPitch(const aerial_robot_msgs::FlightNav& nav_msg) const;
-
   tf::Vector3 getCurrentRobotPos() const;
   tf::Vector3 getCurrentRobotRPY() const;
-
-  tf::Vector3 computeArcPositionFromPitch(double target_pitch) const;
-  tf::Vector3 projectPositionToPitchArc(const tf::Vector3& desired_pos) const;
-  tf::Vector3 projectVelocityToPitchArcTangent(const tf::Vector3& desired_vel) const;
 
   tf::Vector3 getDesiredPosition(const aerial_robot_msgs::FlightNav& nav_msg) const;
   tf::Vector3 getDesiredVelocity(const aerial_robot_msgs::FlightNav& nav_msg) const;
@@ -80,7 +74,6 @@ private:
   tf::Matrix3x3 getCurrentBaselinkRot() const;
 
   tf::Vector3 computeHandPerchingCenterWorldFromBaselink() const;
-  double computeRadiusPitchArcAngle(const tf::Vector3& radius_vec_world) const;
 
   bool isManualPivotMode() const;
   bool isBranchPivotMode() const;
@@ -89,13 +82,13 @@ private:
   tf::Vector3 computeLockPivotWorld() const;
 
   double clamp(double value, double min_value, double max_value) const;
-  double normalizeAngle(double angle) const;
-  double norm2D(double x, double z) const;
-  double norm3D(const tf::Vector3& v) const;
 
   void publishLockedDebugPose();
   void publishLockedPivot();
-  void publishCommandedDebugPose(const tf::Vector3& pos, double pitch);
+  void publishCommandedDebugPose(const perching_geometry::Pose& pose);
+  bool activePose(perching_geometry::Pose& pose) const;
+  void applyAxialCompliance(perching_geometry::Pose& pose) const;
+  void setPoseCommand(aerial_robot_msgs::FlightNav& msg, const perching_geometry::Pose& pose);
 
   ros::Subscriber perching_enable_sub_;
   ros::Subscriber branch_pose_sub_;
@@ -107,6 +100,7 @@ private:
   ros::Publisher locked_pose_pub_;
   ros::Publisher locked_pivot_pub_;
   ros::Publisher commanded_pose_pub_;
+  ros::Publisher commanded_pitch_delta_pub_;
 
   bool perching_enable_;
   bool perching_locked_;
@@ -143,22 +137,18 @@ private:
   bool has_branch_pose_;
   bool has_perching_point_;
 
-  bool has_active_pitch_target_;
-  double active_target_pitch_;
+  double active_pitch_delta_;
+  perching_geometry::Lock geometry_;
+  ros::Time lock_stamp_;
 
   tf::Vector3 branch_pos_world_;
   tf::Vector3 perching_point_world_;
 
   tf::Vector3 locked_robot_pos_world_;
-  tf::Vector3 locked_robot_rpy_;
+  tf::Vector3 reference_locked_rpy_;  // Pre-lock target roll/yaw, measured lock pitch.
   tf::Vector3 locked_pivot_world_;
-  tf::Vector3 locked_radius_vec_world_;
 
   double locked_radius_;
-  double locked_radius_pitch_arc_angle_;
-  double locked_pitch_to_radius_angle_offset_;
-  double locked_y_offset_;
-  double locked_x_side_;
 };
 
 }  // namespace aerial_robot_navigation

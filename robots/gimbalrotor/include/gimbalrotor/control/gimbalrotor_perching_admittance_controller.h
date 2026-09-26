@@ -2,6 +2,7 @@
 #pragma once
 
 #include <gimbalrotor/control/gimbalrotor_admittance_controller.h>
+#include <gimbalrotor/perching_geometry.h>
 
 #include <geometry_msgs/PointStamped.h>
 #include <geometry_msgs/PoseStamped.h>
@@ -111,27 +112,6 @@ private:
 
   void publishContactAdmittanceDiagnostics() const;
 
-  tf::Vector3 computePerchingArcPositionFromPitch(
-      double target_pitch,
-      const tf::Vector3& original_target_pos) const;
-
-  double clamp(
-      double value,
-      double min_value,
-      double max_value) const;
-
-  double normalizeAngle(
-      double angle) const;
-
-  double norm2D(
-      double x,
-      double z) const;
-
-  void poseMsgToTfPosRpy(
-      const geometry_msgs::PoseStamped& msg,
-      tf::Vector3& pos,
-      tf::Vector3& rpy) const;
-
   virtual Eigen::Matrix3d getComplianceToWorldRotation() const override;
   void publishPivotWrenchFrame(
       const tf::Vector3& pivot_world,
@@ -178,8 +158,6 @@ private:
   bool require_perching_lock_;
 
   double min_valid_radius_;
-  double max_pitch_delta_;
-  double arc_pitch_sign_;
 
   double contact_torque_filter_alpha_;
   double contact_on_threshold_;
@@ -194,12 +172,11 @@ private:
   tf::Vector3 branch_pos_world_;
 
   tf::Vector3 locked_robot_pos_world_;
-  tf::Vector3 locked_robot_rpy_;
+  tf::Quaternion locked_robot_orientation_;
+  perching_geometry::Lock geometry_;
   tf::Vector3 locked_pivot_world_;
-  tf::Vector3 locked_radius_vec_world_;
 
   double locked_radius_;
-  double locked_x_side_;
 
   Eigen::Matrix3d R_world_constraint_;
   Eigen::Vector3d constraint_axis_world_;
