@@ -3,6 +3,7 @@
 #pragma once
 
 #include <cmath>
+#include <mutex>
 #include <string>
 
 #include <gimbalrotor/gimbalrotor_navigation.h>
@@ -38,6 +39,7 @@ public:
       double loop_du) override;
 
   void update() override;
+  perching_geometry::Session perchingSession() const override;
   bool perchingAdmittanceTarget(const ros::Time& lock_stamp, double physical_offset,
       const tf::Vector3& nominal_position, perching_geometry::Pose& pose) const override;
 
@@ -46,6 +48,8 @@ private:
   void naviCallback(const aerial_robot_msgs::FlightNavConstPtr& msg) override;
 
   void perchingEnableCallback(const std_msgs::BoolConstPtr& msg);
+  void perchingSlantedEnableCallback(const std_msgs::BoolConstPtr& msg);
+  void selectPerchingMode(perching_geometry::Mode mode, bool enable);
   void branchPoseCallback(const geometry_msgs::PoseStampedConstPtr& msg);
   void perchingPointCallback(const geometry_msgs::PointStampedConstPtr& msg);
   void relockCallback(const std_msgs::EmptyConstPtr& msg);
@@ -91,6 +95,7 @@ private:
   void setPoseCommand(aerial_robot_msgs::FlightNav& msg, const perching_geometry::Pose& pose);
 
   ros::Subscriber perching_enable_sub_;
+  ros::Subscriber perching_slanted_enable_sub_;
   ros::Subscriber branch_pose_sub_;
   ros::Subscriber perching_point_sub_;
   ros::Subscriber relock_sub_;
@@ -102,7 +107,8 @@ private:
   ros::Publisher commanded_pose_pub_;
   ros::Publisher commanded_pitch_delta_pub_;
 
-  bool perching_enable_;
+  mutable std::recursive_mutex perching_state_mutex_;
+  perching_geometry::Mode perching_mode_;
   bool perching_locked_;
   bool perching_lock_once_;
 
@@ -127,6 +133,7 @@ private:
   tf::Vector3 hand_perching_center_offset_baselink_; 
   
   std::string perching_enable_topic_;
+  std::string perching_slanted_enable_topic_;
   std::string branch_pose_topic_;
   std::string perching_point_topic_;
   std::string locked_pivot_topic_;
@@ -138,14 +145,15 @@ private:
   bool has_perching_point_;
 
   double active_pitch_delta_;
-  perching_geometry::Lock geometry_;
+  perching_geometry::Lock geometry_;  // Authoritative reference quaternion for both modes.
   ros::Time lock_stamp_;
+  ros::Time last_lock_stamp_;  // Never reuse a lock identity, even with paused ROS time.
 
   tf::Vector3 branch_pos_world_;
   tf::Vector3 perching_point_world_;
 
   tf::Vector3 locked_robot_pos_world_;
-  tf::Vector3 reference_locked_rpy_;  // Pre-lock target roll/yaw, measured lock pitch.
+  tf::Vector3 reference_locked_rpy_;  // Reference Euler angles for NORMAL commands and logging.
   tf::Vector3 locked_pivot_world_;
 
   double locked_radius_;

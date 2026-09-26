@@ -71,7 +71,9 @@ navigation:
   perching_arc_pitch_sign: 1.0
   perching_command_pitch_sign: 1.0
   
+  # NORMAL preserves target roll/yaw; SLANTED latches full measured orientation.
   perching_enable_topic: "perching/enable"
+  perching_slanted_enable_topic: "perching/slanted_enable"
   perching_branch_pose_topic: "perching/branch_pose"
   perching_point_topic: "perching/point"
   perching_relock_topic: "perching/relock"

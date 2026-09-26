@@ -65,6 +65,12 @@ private:
   void perchingEnableCallback(
       const std_msgs::Bool::ConstPtr& msg);
 
+  void perchingSlantedEnableCallback(const std_msgs::Bool::ConstPtr& msg);
+  void selectPerchingMode(perching_geometry::Mode mode, bool enable);
+  // Caller holds perching_state_mutex_. Navigator mode/stamp are authoritative.
+  void synchronizePerchingModeUnsafe();
+  void resetPerchingLockUnsafe();
+
   void perchingPointCallback(
       const geometry_msgs::PointStamped::ConstPtr& msg);
 
@@ -123,6 +129,7 @@ private:
   ros::Subscriber perching_admittance_enable_sub_;
 
   ros::Subscriber perching_enable_sub_for_constraint_;
+  ros::Subscriber perching_slanted_enable_sub_;
   ros::Subscriber perching_point_sub_;
   ros::Subscriber branch_pose_sub_;
   ros::Subscriber locked_pose_sub_;
@@ -136,6 +143,7 @@ private:
   ros::Publisher pivot_external_wrench_est_pub_;
 
   std::string perching_enable_topic_for_constraint_;
+  std::string perching_slanted_enable_topic_;
   std::string perching_admittance_enable_topic_;
   std::string perching_point_topic_;
   std::string perching_branch_pose_topic_;
@@ -147,7 +155,8 @@ private:
   bool perching_admittance_enabled_;
   bool effective_admittance_enabled_;
 
-  bool perching_enabled_for_constraint_;
+  perching_geometry::Mode perching_mode_;
+  ros::Time navigator_lock_stamp_;
   bool has_perching_point_;
   bool has_branch_pose_;
   bool has_locked_pose_msg_;

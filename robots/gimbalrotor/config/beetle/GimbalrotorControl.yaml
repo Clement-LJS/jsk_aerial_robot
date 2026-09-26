@@ -150,7 +150,9 @@ controller:
     perching:
       # Perching navigation state.
       # Full topic: /gimbalrotor/perching/enable
+      # NORMAL preserves target roll/yaw; SLANTED latches full measured orientation.
       perching_enable_topic: perching/enable
+      perching_slanted_enable_topic: "perching/slanted_enable"
 
       # Separate perching admittance trigger.
       # Full topic: /gimbalrotor/perching/admittance_enable

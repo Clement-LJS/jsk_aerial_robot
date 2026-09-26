@@ -8,6 +8,14 @@
 
 namespace perching_geometry
 {
+enum class Mode { DISABLED, NORMAL, SLANTED };
+
+struct Session
+{
+  Mode mode;
+  ros::Time lock_stamp;
+};
+
 inline bool finite(const tf::Vector3& v)
 {
   return std::isfinite(v.x()) && std::isfinite(v.y()) && std::isfinite(v.z());
@@ -97,6 +105,9 @@ class TargetProvider
 {
 public:
   virtual ~TargetProvider() = default;
+  // Read mode and lock identity together across asynchronous callbacks.
+  virtual Session perchingSession() const = 0;
+  Mode perchingMode() const { return perchingSession().mode; }
   virtual bool perchingAdmittanceTarget(const ros::Time& lock_stamp,
       double physical_offset, const tf::Vector3& nominal_position, Pose& pose) const = 0;
 };
