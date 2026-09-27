@@ -38,3 +38,31 @@ servo_controller:
 
 
 
+ joints:
+   angle_sgn: 1
+   angle_scale: 0.00076699
+   zero_point_offset: 2047
+   torque_scale: 0.01
+
+   # for low pass filter
+   filter_flag: true
+   sample_freq: 50.0 # 50Hz
+   cutoff_freq: 10.0 # 10Hz, test
+
+   # for simulation
+   simulation:
+     pid: {p: 50.0, i: 0.01, d: 2.0}
+     init_value: 0.0
+     type: effort_controllers/JointPositionController
+
+   controller1:
+     id: 4
+     name: joint_pitch
+     simulation:
+       init_value: 0
+
+   controller2:
+     id: 5
+     name: joint_yaw
+     simulation:
+       init_value: 0
