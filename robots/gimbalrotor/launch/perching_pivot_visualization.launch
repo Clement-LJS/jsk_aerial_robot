@@ -1,0 +1,23 @@
+<launch>
+  <!-- Run alongside bringup. For bag replay without bringup, set load_navigation_params:=true. -->
+  <arg name="robot_namespace" default="/gimbalrotor"/>
+  <arg name="world_frame" default="world"/>
+  <arg name="base_frame" default=""/>
+  <arg name="load_navigation_params" default="false"/>
+  <arg name="launch_rviz" default="true"/>
+
+  <rosparam if="$(arg load_navigation_params)"
+            file="$(find gimbalrotor)/config/NavigationConfig.yaml"
+            command="load" ns="$(arg robot_namespace)"/>
+
+  <node pkg="gimbalrotor" type="visualize_hand_perching_center.py"
+        name="visualize_hand_perching_center" output="screen">
+    <param name="robot_namespace" value="$(arg robot_namespace)"/>
+    <param name="world_frame" value="$(arg world_frame)"/>
+    <param name="base_frame" value="$(arg base_frame)"/>
+  </node>
+
+  <node pkg="rviz" type="rviz" name="perching_pivot_rviz"
+        args="-d $(find gimbalrotor)/config/perching_pivot.rviz"
+        if="$(arg launch_rviz)" output="screen"/>
+</launch>
