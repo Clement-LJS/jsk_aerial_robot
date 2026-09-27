@@ -1,4 +1,4 @@
-aerial_robot_control_name: aerial_robot_control/gimbalrotor_controller
+aerial_robot_control_name: aerial_robot_control/gimbalrotor_perching_admittance_controller
 
 controller:
   torque_allocation_matrix_inv_pub_interval: 0.05
@@ -57,7 +57,7 @@ controller:
     d_gain: 7.0
     limit_sum: 20.0
     limit_p: 20.0
-    limit_i: 10.0
+    limit_i: 15.0
     limit_d: 20.0
 
     start_rp_integration_height: 0.15
@@ -119,15 +119,15 @@ controller:
     stiffness_z: 100.0
 
     inertia_roll: 0.08
-    inertia_pitch: 0.20
+    inertia_pitch: 0.40 #0.60 #0.20
     inertia_yaw: 0.08
 
     rot_damping_roll: 0.5
-    rot_damping_pitch: 2.0
+    rot_damping_pitch: 5.0 #3.5 #2.0
     rot_damping_yaw: 0.5
 
     rot_stiffness_roll: 1.0
-    rot_stiffness_pitch: 5.0
+    rot_stiffness_pitch: 4.5 #5.0
     rot_stiffness_yaw: 1.0
 
     force_limit_x: 0.0
