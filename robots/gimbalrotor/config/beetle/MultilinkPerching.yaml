@@ -1,0 +1,22 @@
+navigation:
+  multilink_perching:
+    pitch_joint_name: "joint_pitch"
+    secondary_joint_name: "joint_yaw"
+    contact_link_name: "yaw_hand_link"
+
+    joint_command_topic: joints_ctrl
+    joint_state_topic: joint_states
+    secondary_joint_target_topic: perching/multilink/secondary_joint_target
+
+    secondary_position_tolerance: 0.02
+    secondary_velocity_tolerance: 0.05
+    secondary_settle_duration: 0.30
+    joint_state_timeout: 0.15
+
+    joint_state_future_tolerance: 0.02
+
+    pitch_axis_alignment_threshold: 0.90
+    secondary_axis_alignment_threshold: 0.90
+
+    pitch_command_sign: 1.0
+    secondary_command_sign: 1.0

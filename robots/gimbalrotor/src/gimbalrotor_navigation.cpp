@@ -68,6 +68,19 @@ void GimbalrotorNavigator::targetBaselinkRPYCallback(const geometry_msgs::Vector
 
 
 
+void GimbalrotorNavigator::setBaselinkRotationTargetRelativeToCog(
+    const tf::Quaternion& target)
+{
+  final_target_baselink_rot_ = target;
+  final_target_baselink_rot_.normalize();
+  target_omega_.setValue(0, 0, 0);
+}
+
+tf::Quaternion GimbalrotorNavigator::getCommandedBaselinkRotationRelativeToCog() const
+{
+  return curr_target_baselink_rot_;
+}
+
 void GimbalrotorNavigator::naviCallback(const aerial_robot_msgs::FlightNavConstPtr & msg)
 {
   BaseNavigator::naviCallback(msg);

@@ -43,7 +43,25 @@ public:
   bool perchingAdmittanceTarget(const ros::Time& lock_stamp, double physical_offset,
       const tf::Vector3& nominal_position, perching_geometry::Pose& pose) const override;
 
+protected:
+  virtual bool supportsPerchingMode(perching_geometry::Mode mode) const
+  {
+    return mode == perching_geometry::Mode::NORMAL || mode == perching_geometry::Mode::SLANTED;
+  }
+  virtual bool tryLockPerching(const std::string& reason);
+  virtual void resetPerchingLock();
+  virtual void applyActivePerchingTarget();
+  virtual bool applyPerchingConstraint(aerial_robot_msgs::FlightNav& nav_msg);
+  virtual void applyManualPitchDelta(double delta);
+
+  // Derived FK navigators share session serialization without exposing geometry state.
+  std::recursive_mutex& perchingStateMutex() const { return perching_state_mutex_; }
+  void commitFixedContactLock(const tf::Vector3& cog_position,
+                             const tf::Quaternion& cog_orientation,
+                             const tf::Vector3& contact_position);
+
 private:
+  void commitPerchingLockIdentity();
   void rosParamInit() override;
   void naviCallback(const aerial_robot_msgs::FlightNavConstPtr& msg) override;
 
@@ -56,12 +74,6 @@ private:
   void resetCallback(const std_msgs::EmptyConstPtr& msg);
   void manualPitchDeltaCallback(const std_msgs::Float64ConstPtr& msg);
 
-  bool tryLockPerching(const std::string& reason);
-  void resetPerchingLock();
-
-  bool applyPerchingConstraint(aerial_robot_msgs::FlightNav& nav_msg);
-
-  void applyActivePerchingTarget();
   aerial_robot_msgs::FlightNav buildActivePerchingNavCommand();
 
   bool hasPitchCommand(const aerial_robot_msgs::FlightNav& nav_msg) const;

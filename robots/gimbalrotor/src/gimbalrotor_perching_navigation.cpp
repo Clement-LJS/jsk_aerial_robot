@@ -230,6 +230,11 @@ void GimbalrotorPerchingNavigator::perchingSlantedEnableCallback(const std_msgs:
 void GimbalrotorPerchingNavigator::selectPerchingMode(perching_geometry::Mode mode, bool enable)
 {
   std::lock_guard<std::recursive_mutex> lock(perching_state_mutex_);
+  if(enable && !supportsPerchingMode(mode))
+  {
+    ROS_WARN_THROTTLE(1.0, "Multilink perching supports NORMAL mode only; slanted_enable was ignored.");
+    return;
+  }
   if(!enable && perching_mode_ != mode) return;
 
   resetPerchingLock();
@@ -364,8 +369,14 @@ void GimbalrotorPerchingNavigator::manualPitchDeltaCallback(const std_msgs::Floa
     }
   }
 
+  if(!std::isfinite(msg->data)) return;
+  applyManualPitchDelta(msg->data);
+}
+
+void GimbalrotorPerchingNavigator::applyManualPitchDelta(double delta)
+{
   perching_geometry::Pose pose;
-  if(!geometry_.target(command_pitch_sign_ * msg->data, max_pitch_delta_, arc_pitch_sign_, pose))
+  if(!geometry_.target(command_pitch_sign_ * delta, max_pitch_delta_, arc_pitch_sign_, pose))
     return;
   active_pitch_delta_ = pose.delta;
   applyAxialCompliance(pose);
@@ -459,11 +470,7 @@ bool GimbalrotorPerchingNavigator::tryLockPerching(const std::string& reason)
   reference_locked_rpy_ = reference_rpy;
   locked_radius_ = geometry_.radial().length();
   active_pitch_delta_ = 0.0;
-  lock_stamp_ = ros::Time::now();
-  if(lock_stamp_ <= last_lock_stamp_) lock_stamp_ = last_lock_stamp_ + ros::Duration(0, 1);
-  last_lock_stamp_ = lock_stamp_;
-
-  perching_locked_ = true;
+  commitPerchingLockIdentity();
 
   ROS_WARN("[GimbalrotorPerchingNavigator] perching mode: %s, locked by %s",
            perching_mode_ == perching_geometry::Mode::NORMAL ? "NORMAL" : "SLANTED", reason.c_str());
@@ -498,6 +505,31 @@ bool GimbalrotorPerchingNavigator::tryLockPerching(const std::string& reason)
   if(activePose(pose)) publishCommandedDebugPose(pose);
 
   return true;
+}
+
+void GimbalrotorPerchingNavigator::commitPerchingLockIdentity()
+{
+  lock_stamp_ = ros::Time::now();
+  if(lock_stamp_ <= last_lock_stamp_) lock_stamp_ = last_lock_stamp_ + ros::Duration(0, 1);
+  last_lock_stamp_ = lock_stamp_;
+
+  perching_locked_ = true;
+}
+
+void GimbalrotorPerchingNavigator::commitFixedContactLock(
+    const tf::Vector3& cog_position, const tf::Quaternion& cog_orientation,
+    const tf::Vector3& contact_position)
+{
+  // A fixed-contact lock shares the session identity, never the circular-arc geometry.
+  commitPerchingLockIdentity();
+  locked_pivot_world_ = contact_position;
+  geometry_msgs::PoseStamped pose;
+  pose.header.stamp = lock_stamp_;
+  pose.header.frame_id = "world";
+  tf::pointTFToMsg(cog_position, pose.pose.position);
+  tf::quaternionTFToMsg(cog_orientation, pose.pose.orientation);
+  locked_pose_pub_.publish(pose);
+  publishLockedPivot();
 }
 
 void GimbalrotorPerchingNavigator::naviCallback(const aerial_robot_msgs::FlightNavConstPtr& msg)

@@ -27,6 +27,10 @@ namespace aerial_robot_navigation
     void naviCallback(const aerial_robot_msgs::FlightNavConstPtr & msg) override;
     void reset() override;
 
+    // Baselink orientation relative to the commanded CoG attitude.
+    void setBaselinkRotationTargetRelativeToCog(const tf::Quaternion& target);
+    tf::Quaternion getCommandedBaselinkRotationRelativeToCog() const;
+
   private:
     ros::Publisher target_baselink_rpy_pub_;
     ros::Subscriber final_target_baselink_rot_sub_, final_target_baselink_rpy_sub_;
