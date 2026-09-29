@@ -56,13 +56,14 @@ servo_controller:
      type: effort_controllers/JointPositionController
 
    controller1:
-     id: 4
+     id: 6
      name: joint_pitch
+     angle_sgn: -1
      simulation:
        init_value: 0
 
    controller2:
-     id: 5
+     id: 7
      name: joint_yaw
      simulation:
        init_value: 0
