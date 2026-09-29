@@ -36,7 +36,7 @@ navigation:
     pitch_rezero_axis_z: 0.0
 
     # Sign must match how passive rotation changes measured body pitch.
-    pitch_rezero_command_sign: 1.0
+    pitch_rezero_command_sign: -1.0
     pitch_rezero_kp: 1.0                # approximately 1/s
     pitch_rezero_rate_limit: 0.1745329   # rad/s (10 deg/s)
     pitch_rezero_max_delta: 0.5235988    # rad (30 deg from trigger pose)

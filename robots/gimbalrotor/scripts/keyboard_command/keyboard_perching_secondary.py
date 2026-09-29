@@ -160,11 +160,11 @@ class PerchingKeyboard(object):
                 "perching/multilink/secondary_joint_target"))
 
         self.pitch_step = math.radians(
-            float(rospy.get_param("~pitch_step_deg", 1.0)))
+            float(rospy.get_param("~pitch_step_deg", 0.2)))
         self.pitch_delta_limit = math.radians(
             abs(float(rospy.get_param("~pitch_delta_limit_deg", 20.0))))
         self.secondary_step = math.radians(
-            float(rospy.get_param("~secondary_step_deg", 1.0)))
+            float(rospy.get_param("~secondary_step_deg", 0.2)))
         self.secondary_lower = math.radians(
             float(rospy.get_param("~secondary_lower_limit_deg", -90.0)))
         self.secondary_upper = math.radians(
