@@ -71,6 +71,7 @@ GimbalrotorMultilinkPerchingNavigator()
     secondary_settled_(false),
     mechanism_target_generation_(0)
 {
+  resetPitchRezeroState();
 }
 
 void GimbalrotorMultilinkPerchingNavigator::initialize(
@@ -110,6 +111,27 @@ void GimbalrotorMultilinkPerchingNavigator::initialize(
       &GimbalrotorMultilinkPerchingNavigator::
           secondaryJointTargetCallback,
       this);
+
+  if(pitch_rezero_config_valid_)
+    pitch_rezero_sub_ = nh_.subscribe(
+        pitch_rezero_topic_, 1,
+        &GimbalrotorMultilinkPerchingNavigator::pitchRezeroCallback, this);
+  pitch_rezero_active_pub_ = nh_.advertise<std_msgs::Bool>(
+      "perching/multilink/pitch_rezero_active", 1);
+  pitch_rezero_ready_pub_ = nh_.advertise<std_msgs::Bool>(
+      "perching/multilink/pitch_rezero_ready", 1);
+  pitch_rezero_failed_pub_ = nh_.advertise<std_msgs::Bool>(
+      "perching/multilink/pitch_rezero_failed", 1);
+  pitch_joint_hold_error_pub_ = nh_.advertise<std_msgs::Float64>(
+      "perching/multilink/pitch_joint_hold_error", 1);
+  secondary_joint_hold_error_pub_ = nh_.advertise<std_msgs::Float64>(
+      "perching/multilink/secondary_joint_hold_error", 1);
+  passive_pitch_delta_pub_ = nh_.advertise<std_msgs::Float64>(
+      "perching/multilink/passive_pitch_delta", 1);
+  body_pitch_pub_ = nh_.advertise<std_msgs::Float64>(
+      "perching/multilink/body_pitch", 1);
+  body_pitch_rate_pub_ = nh_.advertise<std_msgs::Float64>(
+      "perching/multilink/body_pitch_rate", 1);
 
   joint_control_pub_ =
       nh_.advertise<sensor_msgs::JointState>(joint_command_topic_, 1);
@@ -202,6 +224,58 @@ void GimbalrotorMultilinkPerchingNavigator::multilinkRosParamInit()
       0.90);
   multilink_nh.param("pitch_command_sign", pitch_command_sign_, 1.0);
   multilink_nh.param("secondary_command_sign", secondary_command_sign_, 1.0);
+
+  multilink_nh.param("pitch_rezero_topic", pitch_rezero_topic_,
+                    std::string("perching/multilink/pitch_rezero"));
+  multilink_nh.param("pitch_rezero_target_pitch", pitch_rezero_target_pitch_, 0.0);
+  multilink_nh.param("pitch_rezero_kp", pitch_rezero_kp_, 1.0);
+  multilink_nh.param("pitch_rezero_rate_limit", pitch_rezero_rate_limit_, 0.1745329);
+  multilink_nh.param("pitch_rezero_max_delta", pitch_rezero_max_delta_, 0.5235988);
+  multilink_nh.param("pitch_rezero_command_sign", pitch_rezero_command_sign_, 1.0);
+  multilink_nh.param("pitch_rezero_pitch_tolerance", pitch_rezero_pitch_tolerance_, 0.0349066);
+  multilink_nh.param("pitch_rezero_rate_tolerance", pitch_rezero_rate_tolerance_, 0.05);
+  multilink_nh.param("pitch_rezero_stable_duration", pitch_rezero_stable_duration_, 0.3);
+  multilink_nh.param("pitch_rezero_timeout", pitch_rezero_timeout_, 5.0);
+  multilink_nh.param("pitch_rezero_pitch_joint_hold_tolerance",
+                    pitch_rezero_pitch_joint_hold_tolerance_, 0.02);
+  multilink_nh.param("pitch_rezero_secondary_joint_hold_tolerance",
+                    pitch_rezero_secondary_joint_hold_tolerance_, 0.02);
+  for(unsigned int i = 0; i < 3; ++i)
+  {
+    const std::string suffix(1, "xyz"[i]);
+    multilink_nh.param("pitch_rezero_pivot_offset_" + suffix,
+                      pitch_rezero_pivot_offset_(i), 0.0);
+    multilink_nh.param("pitch_rezero_axis_" + suffix,
+                      pitch_rezero_axis_(i), i == 1 ? 1.0 : 0.0);
+  }
+  const auto positive = [](double v) { return std::isfinite(v) && v > 0.0; };
+  std::string topic_error;
+  pitch_rezero_config_valid_ =
+      !pitch_rezero_topic_.empty() &&
+      ros::names::validate(pitch_rezero_topic_, topic_error) &&
+      std::isfinite(pitch_rezero_target_pitch_) &&
+      std::abs(pitch_rezero_target_pitch_) < M_PI / 2.0 &&
+      positive(pitch_rezero_kp_) && positive(pitch_rezero_rate_limit_) &&
+      positive(pitch_rezero_max_delta_) && pitch_rezero_max_delta_ <= M_PI &&
+      std::isfinite(pitch_rezero_command_sign_) && pitch_rezero_command_sign_ != 0.0 &&
+      positive(pitch_rezero_pitch_tolerance_) && pitch_rezero_pitch_tolerance_ < M_PI / 2.0 &&
+      positive(pitch_rezero_rate_tolerance_) &&
+      positive(pitch_rezero_stable_duration_) && positive(pitch_rezero_timeout_) &&
+      pitch_rezero_timeout_ >= pitch_rezero_stable_duration_ &&
+      positive(pitch_rezero_pitch_joint_hold_tolerance_) &&
+      pitch_rezero_pitch_joint_hold_tolerance_ <= 0.5 &&
+      positive(pitch_rezero_secondary_joint_hold_tolerance_) &&
+      pitch_rezero_secondary_joint_hold_tolerance_ <= 0.5 &&
+      frameFinite(KDL::Frame(pitch_rezero_pivot_offset_)) &&
+      frameFinite(KDL::Frame(pitch_rezero_axis_)) &&
+      positive(pitch_rezero_axis_.Norm()) && pitch_rezero_axis_.Norm() > 1.0e-6;
+  if(pitch_rezero_config_valid_)
+  {
+    pitch_rezero_axis_ = pitch_rezero_axis_ / pitch_rezero_axis_.Norm();
+    pitch_rezero_command_sign_ = pitch_rezero_command_sign_ < 0.0 ? -1.0 : 1.0;
+  }
+  else
+    ROS_ERROR("[Multilink] Invalid pitch_rezero configuration; rezero is disabled.");
 
   configured_pitch_limits_valid_ =
       multilink_nh.getParam("pitch_lower_limit", configured_pitch_lower_) &&
@@ -797,6 +871,7 @@ void GimbalrotorMultilinkPerchingNavigator::resetPerchingLock()
   GimbalrotorPerchingNavigator::resetPerchingLock();
 
   std::lock_guard<std::recursive_mutex> lock(perchingStateMutex());
+  resetPitchRezeroState();
   multilink_lock_valid_ = false;
   locked_contact_world_ = KDL::Frame::Identity();
   locked_pitch_joint_ = 0.0;
@@ -833,6 +908,12 @@ bool GimbalrotorMultilinkPerchingNavigator::buildFinalJointTarget(
 
 void GimbalrotorMultilinkPerchingNavigator::applyActivePerchingTarget()
 {
+  std::lock_guard<std::recursive_mutex> state_lock(perchingStateMutex());
+  if(pitch_rezero_state_ != PitchRezeroState::IDLE)
+  {
+    applyPitchRezeroTarget();
+    return;
+  }
   if(perchingMode() != perching_geometry::Mode::NORMAL || getNaviState() != HOVER_STATE ||
      !multilink_model_valid_)
     return;
@@ -884,12 +965,22 @@ void GimbalrotorMultilinkPerchingNavigator::applyActivePerchingTarget()
   }
 
   const KDL::Frame T_W_B_des = locked_contact * T_B_C_final.Inverse();
-  const KDL::Vector p_W_G_des = T_W_B_des * p_B_G_final;
+  if(!commandDesiredBaselinkPose(T_W_B_des, p_B_G_final))
+    return;
+  pitch_joint_final_target_ = pitch_final;
+  secondary_joint_final_target_ = secondary_final;
+  publishJointTarget(pitch_final, secondary_final);
+}
+
+bool GimbalrotorMultilinkPerchingNavigator::commandDesiredBaselinkPose(
+    const KDL::Frame& T_W_B_des, const KDL::Vector& p_B_G)
+{
+  const KDL::Vector p_W_G_des = T_W_B_des * p_B_G;
   if(!frameFinite(T_W_B_des) ||
      !std::isfinite(p_W_G_des.x()) ||
      !std::isfinite(p_W_G_des.y()) ||
      !std::isfinite(p_W_G_des.z()))
-    return;
+    return false;
 
   double qx = 0.0;
   double qy = 0.0;
@@ -908,6 +999,8 @@ void GimbalrotorMultilinkPerchingNavigator::applyActivePerchingTarget()
   setBaselinkRotationTargetRelativeToCog(tf::Quaternion(0.0, 0.0, 0.0, 1.0));
   const tf::Quaternion R_C_B =
       getCommandedBaselinkRotationRelativeToCog();
+  if(!std::isfinite(R_C_B.length2()) || R_C_B.length2() < 1.0e-12)
+    return false;
   tf::Quaternion R_W_G = R_W_B * R_C_B.inverse();
   R_W_G.normalize();
 
@@ -916,7 +1009,7 @@ void GimbalrotorMultilinkPerchingNavigator::applyActivePerchingTarget()
   double yaw = 0.0;
   tf::Matrix3x3(R_W_G).getRPY(roll, pitch, yaw);
   if(!std::isfinite(roll) || !std::isfinite(pitch) || !std::isfinite(yaw))
-    return;
+    return false;
 
   setXyControlMode(POS_CONTROL_MODE);
   setTargetPos(tf::Vector3(p_W_G_des.x(), p_W_G_des.y(), p_W_G_des.z()));
@@ -925,14 +1018,6 @@ void GimbalrotorMultilinkPerchingNavigator::applyActivePerchingTarget()
   setTargetRPY(tf::Vector3(roll, pitch, yaw));
   setTargetOmega(0.0, 0.0, 0.0);
   setTargetAngAcc(0.0, 0.0, 0.0);
-
-  {
-    std::lock_guard<std::recursive_mutex> lock(perchingStateMutex());
-    pitch_joint_final_target_ = pitch_final;
-    secondary_joint_final_target_ = secondary_final;
-  }
-
-  publishJointTarget(pitch_final, secondary_final);
 
   geometry_msgs::PoseStamped pose_msg;
   pose_msg.header.stamp = ros::Time::now();
@@ -945,6 +1030,7 @@ void GimbalrotorMultilinkPerchingNavigator::applyActivePerchingTarget()
   pose_msg.pose.orientation.z = qz;
   pose_msg.pose.orientation.w = qw;
   target_body_pose_pub_.publish(pose_msg);
+  return true;
 }
 
 bool GimbalrotorMultilinkPerchingNavigator::applyPerchingConstraint(
@@ -966,6 +1052,11 @@ bool GimbalrotorMultilinkPerchingNavigator::applyPerchingConstraint(
 void GimbalrotorMultilinkPerchingNavigator::applyManualPitchDelta(double delta)
 {
   std::lock_guard<std::recursive_mutex> lock(perchingStateMutex());
+  if(pitch_rezero_state_ != PitchRezeroState::IDLE)
+  {
+    ROS_WARN_THROTTLE(1.0, "[Multilink] Active joints frozen during pitch rezero/HOLD; relock after ready.");
+    return;
+  }
 
   if(!multilink_model_valid_ ||
      !multilink_lock_valid_ ||
@@ -984,6 +1075,11 @@ void GimbalrotorMultilinkPerchingNavigator::secondaryJointTargetCallback(
     const std_msgs::Float64ConstPtr& msg)
 {
   std::lock_guard<std::recursive_mutex> state_lock(perchingStateMutex());
+  if(pitch_rezero_state_ != PitchRezeroState::IDLE)
+  {
+    ROS_WARN_THROTTLE(1.0, "[Multilink] Active joints frozen during pitch rezero/HOLD; relock after ready.");
+    return;
+  }
   if(perchingMode() != perching_geometry::Mode::NORMAL ||
      getNaviState() != HOVER_STATE || !std::isfinite(msg->data))
     return;
@@ -1081,7 +1177,17 @@ void GimbalrotorMultilinkPerchingNavigator::update()
     }
   }
 
+  if(pitch_rezero_state_ != PitchRezeroState::IDLE &&
+     (!multilinkLockValid() || perchingMode() != perching_geometry::Mode::NORMAL ||
+      getNaviState() != HOVER_STATE))
+    resetPitchRezeroState();
+  updateBodyPitchFeedback();
+  rezero_target_applied_this_update_ = false;
   GimbalrotorPerchingNavigator::update();
+  // Rezero owns a continuous hold even if the parent's optional fixed-contact
+  // hold is disabled. Avoid integrating twice when the parent called our hook.
+  if(pitch_rezero_state_ != PitchRezeroState::IDLE && !rezero_target_applied_this_update_)
+    applyPitchRezeroTarget();
   updateSecondarySettledState();
   publishDiagnostics();
 }
@@ -1142,6 +1248,27 @@ GimbalrotorMultilinkPerchingNavigator::mechanismTargetGeneration() const
 
 void GimbalrotorMultilinkPerchingNavigator::publishDiagnostics() const
 {
+  std::lock_guard<std::recursive_mutex> state_lock(perchingStateMutex());
+  std_msgs::Bool rezero_bool;
+  rezero_bool.data = pitch_rezero_state_ == PitchRezeroState::ACTIVE;
+  pitch_rezero_active_pub_.publish(rezero_bool);
+  rezero_bool.data = pitch_rezero_ready_;
+  pitch_rezero_ready_pub_.publish(rezero_bool);
+  rezero_bool.data = pitch_rezero_failed_;
+  pitch_rezero_failed_pub_.publish(rezero_bool);
+  std_msgs::Float64 rezero_value;
+  rezero_value.data = rezero_pitch_joint_hold_error_;
+  pitch_joint_hold_error_pub_.publish(rezero_value);
+  rezero_value.data = rezero_secondary_joint_hold_error_;
+  secondary_joint_hold_error_pub_.publish(rezero_value);
+  rezero_value.data = rezero_alpha_cmd_;
+  passive_pitch_delta_pub_.publish(rezero_value);
+  rezero_value.data = currentBaselinkPitch();
+  body_pitch_pub_.publish(rezero_value);
+  rezero_value.data = rezero_pitch_rate_valid_ ? rezero_measured_pitch_rate_ :
+      std::numeric_limits<double>::quiet_NaN();
+  body_pitch_rate_pub_.publish(rezero_value);
+
   bool settled = false;
   double pitch_measured = 0.0;
   double pitch_nominal = 0.0;
@@ -1159,6 +1286,12 @@ void GimbalrotorMultilinkPerchingNavigator::publishDiagnostics() const
     secondary_target = secondary_joint_nominal_target_;
   }
 
+  // Do not make stale mechanism samples look fresh to diagnostic consumers.
+  double pitch_velocity, secondary_velocity;
+  if(!readCurrentMechanismState(pitch_measured, secondary_measured,
+                                pitch_velocity, secondary_velocity))
+    pitch_measured = secondary_measured = std::numeric_limits<double>::quiet_NaN();
+
   std_msgs::Bool bool_msg;
   std_msgs::Float64 value_msg;
   bool_msg.data = settled;
@@ -1173,6 +1306,266 @@ void GimbalrotorMultilinkPerchingNavigator::publishDiagnostics() const
   secondary_measured_pub_.publish(value_msg);
   value_msg.data = secondary_target;
   secondary_target_pub_.publish(value_msg);
+}
+
+void GimbalrotorMultilinkPerchingNavigator::resetPitchRezeroState()
+{
+  pitch_rezero_state_ = PitchRezeroState::IDLE;
+  pitch_rezero_ready_ = false;
+  pitch_rezero_failed_ = false;
+  rezero_frozen_pitch_joint_ = 0.0;
+  rezero_frozen_secondary_joint_ = 0.0;
+  rezero_pitch_joint_hold_error_ = 0.0;
+  rezero_secondary_joint_hold_error_ = 0.0;
+  rezero_alpha_cmd_ = 0.0;
+  rezero_start_stamp_ = ros::Time(0);
+  rezero_stable_start_stamp_ = ros::Time(0);
+  rezero_previous_body_pitch_stamp_ = ros::Time(0);
+  rezero_previous_body_pitch_ = 0.0;
+  rezero_measured_pitch_rate_ = 0.0;
+  rezero_feedback_dt_ = 0.0;
+  rezero_pitch_rate_valid_ = false;
+  rezero_pivot_world_ = KDL::Vector::Zero();
+  rezero_axis_world_ = KDL::Vector::Zero();
+  rezero_p_B_G_ = KDL::Vector::Zero();
+  rezero_reference_body_world_ = KDL::Frame::Identity();
+  rezero_last_body_target_ = KDL::Frame::Identity();
+}
+
+bool GimbalrotorMultilinkPerchingNavigator::readBaselinkPose(KDL::Frame& pose) const
+{
+  const tf::Vector3 p = estimator_->getPos(Frame::BASELINK, estimate_mode_);
+  const tf::Matrix3x3 orientation = estimator_->getOrientation(Frame::BASELINK, estimate_mode_);
+  for(unsigned int i = 0; i < 3; ++i)
+    for(unsigned int j = 0; j < 3; ++j)
+      if(!std::isfinite(orientation[i][j])) return false;
+  tf::Quaternion q;
+  orientation.getRotation(q);
+  if(!perching_geometry::finite(p) || !std::isfinite(q.length2()) || q.length2() < 1.0e-12)
+    return false;
+  q.normalize();
+  pose = KDL::Frame(KDL::Rotation::Quaternion(q.x(), q.y(), q.z(), q.w()),
+                    KDL::Vector(p.x(), p.y(), p.z()));
+  return frameFinite(pose);
+}
+
+double GimbalrotorMultilinkPerchingNavigator::currentBaselinkPitch() const
+{
+  KDL::Frame pose;
+  if(!readBaselinkPose(pose)) return std::numeric_limits<double>::quiet_NaN();
+  double roll, pitch, yaw;
+  pose.M.GetRPY(roll, pitch, yaw);
+  return pitch;
+}
+
+double GimbalrotorMultilinkPerchingNavigator::wrapAngle(double angle)
+{
+  return std::remainder(angle, 2.0 * M_PI);
+}
+
+void GimbalrotorMultilinkPerchingNavigator::pitchRezeroCallback(
+    const std_msgs::EmptyConstPtr& msg)
+{
+  (void)msg;
+  std::lock_guard<std::recursive_mutex> lock(perchingStateMutex());
+  double pitch, secondary, pitch_velocity, secondary_velocity;
+  if(perchingMode() != perching_geometry::Mode::NORMAL || getNaviState() != HOVER_STATE ||
+     !multilinkLockValid() || !pitch_rezero_config_valid_ ||
+     pitch_rezero_state_ != PitchRezeroState::IDLE ||
+     !readCurrentMechanismState(pitch, secondary, pitch_velocity, secondary_velocity))
+  {
+    ROS_WARN_THROTTLE(1.0, "[Multilink] Rezero rejected: require NORMAL/HOVER, valid model/config/lock, fresh joints and IDLE.");
+    return;
+  }
+
+  KDL::Frame T_W_B, T_B_C;
+  KDL::Vector p_B_G;
+  const ros::Time now = ros::Time::now();
+  if(now.isZero() || !readBaselinkPose(T_W_B) ||
+     !computeBaselinkToContactTransform(pitch, secondary, T_B_C) ||
+     !computeBaselinkToCogVector(pitch, secondary, p_B_G))
+  {
+    ROS_WARN_THROTTLE(1.0, "[Multilink] Rezero rejected: invalid time, BASELINK pose or mechanism FK/CoG.");
+    return;
+  }
+  const KDL::Frame T_W_C = T_W_B * T_B_C;
+  const KDL::Vector pivot = T_W_C * pitch_rezero_pivot_offset_;
+  KDL::Vector axis = T_W_C.M * pitch_rezero_axis_;
+  if(!frameFinite(T_W_C) || !frameFinite(KDL::Frame(pivot)) ||
+     !frameFinite(KDL::Frame(axis)) || !std::isfinite(axis.Norm()) || axis.Norm() < 1.0e-6)
+  {
+    ROS_WARN_THROTTLE(1.0, "[Multilink] Rezero rejected: invalid passive pivot/axis.");
+    return;
+  }
+  axis = axis / axis.Norm();
+  // Establish a valid initial hold before accepting the trigger.
+  if(!commandDesiredBaselinkPose(T_W_B, p_B_G))
+  {
+    ROS_WARN_THROTTLE(1.0, "[Multilink] Rezero rejected: cannot command initial body pose.");
+    return;
+  }
+  resetPitchRezeroState();
+  rezero_frozen_pitch_joint_ = pitch;
+  rezero_frozen_secondary_joint_ = secondary;
+  rezero_reference_body_world_ = T_W_B;
+  rezero_last_body_target_ = T_W_B;
+  rezero_pivot_world_ = pivot;
+  rezero_axis_world_ = axis;
+  rezero_p_B_G_ = p_B_G;
+  rezero_start_stamp_ = now;
+  double roll, yaw;
+  T_W_B.M.GetRPY(roll, rezero_previous_body_pitch_, yaw);
+  rezero_previous_body_pitch_stamp_ = now;
+  pitch_joint_nominal_target_ = pitch_joint_final_target_ = pitch;
+  secondary_joint_nominal_target_ = secondary_joint_final_target_ = secondary;
+  secondary_settled_ = false;
+  secondary_settle_start_ = ros::Time(0);
+  ++mechanism_target_generation_;
+  pitch_rezero_state_ = PitchRezeroState::ACTIVE;
+  publishJointTarget(pitch, secondary);
+  publishDiagnostics();
+  ROS_WARN("[Multilink] Pitch rezero started about external passive pivot; both active joints frozen.");
+}
+
+void GimbalrotorMultilinkPerchingNavigator::updateBodyPitchFeedback()
+{
+  const ros::Time now = ros::Time::now();
+  const double pitch = currentBaselinkPitch();
+  rezero_pitch_rate_valid_ = false;
+  rezero_feedback_dt_ = 0.0;
+  if(!std::isfinite(pitch) || now.isZero())
+  {
+    rezero_previous_body_pitch_stamp_ = ros::Time(0);
+    return;
+  }
+  if(!rezero_previous_body_pitch_stamp_.isZero())
+  {
+    rezero_feedback_dt_ = (now - rezero_previous_body_pitch_stamp_).toSec();
+    // Long gaps cannot count as continuously observed stabilization.
+    if(std::isfinite(rezero_feedback_dt_) && rezero_feedback_dt_ > 0.0 &&
+       rezero_feedback_dt_ <= 0.1)
+    {
+      rezero_measured_pitch_rate_ =
+          wrapAngle(pitch - rezero_previous_body_pitch_) / rezero_feedback_dt_;
+      rezero_pitch_rate_valid_ = std::isfinite(rezero_measured_pitch_rate_);
+    }
+  }
+  rezero_previous_body_pitch_ = pitch;
+  rezero_previous_body_pitch_stamp_ = now;
+}
+
+void GimbalrotorMultilinkPerchingNavigator::failPitchRezero(const char* reason)
+{
+  pitch_rezero_state_ = PitchRezeroState::HOLD;
+  pitch_rezero_ready_ = false;
+  pitch_rezero_failed_ = true;
+  rezero_stable_start_stamp_ = ros::Time(0);
+  ROS_WARN("[Multilink] Pitch rezero failed (%s); holding last valid rezero pose and frozen joints. Disable perching and retry safely.", reason);
+}
+
+bool GimbalrotorMultilinkPerchingNavigator::verifyPitchRezeroFrozenJoints()
+{
+  if(pitch_rezero_state_ == PitchRezeroState::IDLE) return true;
+
+  double q_pitch, q_secondary, v_pitch, v_secondary;
+  if(!readCurrentMechanismState(q_pitch, q_secondary, v_pitch, v_secondary))
+  {
+    rezero_pitch_joint_hold_error_ = std::numeric_limits<double>::quiet_NaN();
+    rezero_secondary_joint_hold_error_ = std::numeric_limits<double>::quiet_NaN();
+    if(!pitch_rezero_failed_)
+      failPitchRezero("active-joint state unavailable while joints must remain frozen");
+    return false;
+  }
+
+  rezero_pitch_joint_hold_error_ = wrapAngle(q_pitch - rezero_frozen_pitch_joint_);
+  rezero_secondary_joint_hold_error_ = wrapAngle(q_secondary - rezero_frozen_secondary_joint_);
+  if(std::abs(rezero_pitch_joint_hold_error_) > pitch_rezero_pitch_joint_hold_tolerance_)
+  {
+    if(!pitch_rezero_failed_)
+    {
+      ROS_WARN("[Multilink] Pitch rezero active pitch joint hold violation: error=%.4f rad, tolerance=%.4f rad.",
+               rezero_pitch_joint_hold_error_, pitch_rezero_pitch_joint_hold_tolerance_);
+      failPitchRezero("active pitch joint moved outside rezero hold tolerance");
+    }
+    return false;
+  }
+  if(std::abs(rezero_secondary_joint_hold_error_) > pitch_rezero_secondary_joint_hold_tolerance_)
+  {
+    if(!pitch_rezero_failed_)
+    {
+      ROS_WARN("[Multilink] Pitch rezero active secondary joint hold violation: error=%.4f rad, tolerance=%.4f rad.",
+               rezero_secondary_joint_hold_error_, pitch_rezero_secondary_joint_hold_tolerance_);
+      failPitchRezero("active secondary joint moved outside rezero hold tolerance");
+    }
+    return false;
+  }
+  return true;
+}
+
+void GimbalrotorMultilinkPerchingNavigator::updatePitchRezeroCommand()
+{
+  if(pitch_rezero_state_ != PitchRezeroState::ACTIVE) return;
+  const ros::Time now = ros::Time::now();
+  const double elapsed = (now - rezero_start_stamp_).toSec();
+  const double pitch = currentBaselinkPitch();
+  double q_pitch, q_secondary, v_pitch, v_secondary;
+  if(!std::isfinite(elapsed) || elapsed < 0.0 || rezero_feedback_dt_ < 0.0 ||
+     rezero_feedback_dt_ > 0.5)
+    return failPitchRezero("invalid or discontinuous time");
+  if(elapsed > pitch_rezero_timeout_)
+    return failPitchRezero("timeout before stabilization");
+  if(!std::isfinite(pitch) ||
+     !readCurrentMechanismState(q_pitch, q_secondary, v_pitch, v_secondary))
+    return failPitchRezero("invalid body feedback or stale mechanism state");
+
+  const double error = wrapAngle(pitch_rezero_target_pitch_ - pitch);
+  if(rezero_pitch_rate_valid_ && std::abs(error) <= pitch_rezero_pitch_tolerance_ &&
+     std::abs(rezero_measured_pitch_rate_) <= pitch_rezero_rate_tolerance_)
+  {
+    if(rezero_stable_start_stamp_.isZero()) rezero_stable_start_stamp_ = now;
+    if((now - rezero_stable_start_stamp_).toSec() >= pitch_rezero_stable_duration_)
+    {
+      pitch_rezero_state_ = PitchRezeroState::HOLD;
+      pitch_rezero_ready_ = true;
+      pitch_rezero_failed_ = false;
+      ROS_WARN("[Multilink] Pitch rezero ready; body pitch is stable. Publish /perching/relock to commit this pose as the new fixed-contact lock.");
+      return;
+    }
+  }
+  else
+    rezero_stable_start_stamp_ = ros::Time(0);
+
+  if(!std::isfinite(rezero_feedback_dt_) || rezero_feedback_dt_ <= 0.0) return;
+  const double dt = std::min(rezero_feedback_dt_, 0.1);
+  const double rate = pitch_rezero_command_sign_ *
+      clamp(pitch_rezero_kp_ * error, -pitch_rezero_rate_limit_, pitch_rezero_rate_limit_);
+  const double alpha = clamp(rezero_alpha_cmd_ + rate * dt,
+                             -pitch_rezero_max_delta_, pitch_rezero_max_delta_);
+  const KDL::Rotation rotation = KDL::Rotation::Rot(rezero_axis_world_, alpha);
+  const KDL::Frame target(
+      rotation * rezero_reference_body_world_.M,
+      rezero_pivot_world_ + rotation * (rezero_reference_body_world_.p - rezero_pivot_world_));
+  if(!std::isfinite(alpha) || !frameFinite(target) ||
+     !commandDesiredBaselinkPose(target, rezero_p_B_G_))
+    return failPitchRezero("invalid revolute body target");
+  // Commit only a successfully issued target; failures retain the previous pose.
+  rezero_alpha_cmd_ = alpha;
+  rezero_last_body_target_ = target;
+}
+
+void GimbalrotorMultilinkPerchingNavigator::applyPitchRezeroTarget()
+{
+  rezero_target_applied_this_update_ = true;
+  // Monitor ACTIVE and both HOLD outcomes before advancing the passive pivot.
+  const bool frozen_joints_valid = verifyPitchRezeroFrozenJoints();
+  if(pitch_rezero_state_ == PitchRezeroState::ACTIVE && frozen_joints_valid)
+    updatePitchRezeroCommand();
+  pitch_joint_nominal_target_ = pitch_joint_final_target_ = rezero_frozen_pitch_joint_;
+  secondary_joint_nominal_target_ = secondary_joint_final_target_ = rezero_frozen_secondary_joint_;
+  publishJointTarget(rezero_frozen_pitch_joint_, rezero_frozen_secondary_joint_);
+  if(!commandDesiredBaselinkPose(rezero_last_body_target_, rezero_p_B_G_) &&
+     !pitch_rezero_failed_)
+    failPitchRezero("cannot reissue last valid body pose");
 }
 
 bool GimbalrotorMultilinkPerchingNavigator::frameFinite(

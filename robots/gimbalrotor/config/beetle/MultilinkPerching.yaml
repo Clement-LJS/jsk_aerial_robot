@@ -20,3 +20,33 @@ navigation:
 
     pitch_command_sign: 1.0
     secondary_command_sign: 1.0
+
+    # Passive perching-pivot body-pitch rezero (navigation only).
+    pitch_rezero_topic: perching/multilink/pitch_rezero
+    pitch_rezero_target_pitch: 0.0       # BASELINK world pitch [rad]
+
+    # Physical hinge center in contact_link_name [m]. Calibrate from CAD or
+    # measurement if yaw_hand_link origin is not the actual hinge center.
+    pitch_rezero_pivot_offset_x: 0.18999
+    pitch_rezero_pivot_offset_y: 0.0
+    pitch_rezero_pivot_offset_z: 0.0205
+    # Physical hinge axis in contact_link_name; normalized by the navigator.
+    pitch_rezero_axis_x: 0.0
+    pitch_rezero_axis_y: 1.0
+    pitch_rezero_axis_z: 0.0
+
+    # Sign must match how passive rotation changes measured body pitch.
+    pitch_rezero_command_sign: 1.0
+    pitch_rezero_kp: 1.0                # approximately 1/s
+    pitch_rezero_rate_limit: 0.1745329   # rad/s (10 deg/s)
+    pitch_rezero_max_delta: 0.5235988    # rad (30 deg from trigger pose)
+    pitch_rezero_pitch_tolerance: 0.0349066  # rad (2 deg)
+    pitch_rezero_rate_tolerance: 0.05    # rad/s
+    pitch_rezero_stable_duration: 0.30  # s, continuously within both tolerances
+    pitch_rezero_timeout: 5.0           # s; failure holds last valid target
+
+    # Maximum measured deviation from active-joint positions frozen at rezero
+    # start [rad]. Only the external passive perch pivot is assumed to move.
+    # Each tolerance must be finite and in (0, 0.5]; 0.02 rad is about 1.15 deg.
+    pitch_rezero_pitch_joint_hold_tolerance: 0.02
+    pitch_rezero_secondary_joint_hold_tolerance: 0.02

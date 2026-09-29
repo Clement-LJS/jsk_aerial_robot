@@ -7,6 +7,7 @@
 #include <geometry_msgs/PoseStamped.h>
 #include <sensor_msgs/JointState.h>
 #include <std_msgs/Bool.h>
+#include <std_msgs/Empty.h>
 #include <std_msgs/Float64.h>
 
 #include <kdl/frames.hpp>
@@ -56,6 +57,70 @@ protected:
   void applyManualPitchDelta(double delta) override;
 
 private:
+  enum class PitchRezeroState { IDLE = 0, ACTIVE, HOLD };
+
+  void pitchRezeroCallback(const std_msgs::EmptyConstPtr& msg);
+  void resetPitchRezeroState();
+  void failPitchRezero(const char* reason);
+  bool verifyPitchRezeroFrozenJoints();
+  void updateBodyPitchFeedback();
+  void updatePitchRezeroCommand();
+  void applyPitchRezeroTarget();
+  bool readBaselinkPose(KDL::Frame& pose) const;
+  double currentBaselinkPitch() const;
+  static double wrapAngle(double angle);
+  bool commandDesiredBaselinkPose(const KDL::Frame& T_W_B_des,
+                                 const KDL::Vector& p_B_G);
+
+  // This hinge is an external contact DOF, never an additional model joint.
+  PitchRezeroState pitch_rezero_state_ = PitchRezeroState::IDLE;
+  bool pitch_rezero_ready_ = false;
+  bool pitch_rezero_failed_ = false;
+  bool pitch_rezero_config_valid_ = false;
+  bool rezero_target_applied_this_update_ = false;
+  std::string pitch_rezero_topic_;
+  KDL::Vector pitch_rezero_pivot_offset_;
+  KDL::Vector pitch_rezero_axis_;
+  double pitch_rezero_target_pitch_ = 0.0;
+  double pitch_rezero_kp_ = 1.0;
+  double pitch_rezero_rate_limit_ = 0.1745329;
+  double pitch_rezero_max_delta_ = 0.5235988;
+  double pitch_rezero_command_sign_ = 1.0;
+  double pitch_rezero_pitch_tolerance_ = 0.0349066;
+  double pitch_rezero_rate_tolerance_ = 0.05;
+  double pitch_rezero_stable_duration_ = 0.30;
+  double pitch_rezero_timeout_ = 5.0;
+  double pitch_rezero_pitch_joint_hold_tolerance_ = 0.02;
+  double pitch_rezero_secondary_joint_hold_tolerance_ = 0.02;
+
+  double rezero_frozen_pitch_joint_ = 0.0;
+  double rezero_frozen_secondary_joint_ = 0.0;
+  double rezero_pitch_joint_hold_error_ = 0.0;
+  double rezero_secondary_joint_hold_error_ = 0.0;
+  KDL::Vector rezero_pivot_world_;
+  KDL::Vector rezero_axis_world_;
+  KDL::Vector rezero_p_B_G_;
+  KDL::Frame rezero_reference_body_world_;
+  KDL::Frame rezero_last_body_target_;
+  double rezero_alpha_cmd_ = 0.0;
+  ros::Time rezero_start_stamp_;
+  ros::Time rezero_stable_start_stamp_;
+  double rezero_previous_body_pitch_ = 0.0;
+  ros::Time rezero_previous_body_pitch_stamp_;
+  double rezero_measured_pitch_rate_ = 0.0;
+  double rezero_feedback_dt_ = 0.0;
+  bool rezero_pitch_rate_valid_ = false;
+
+  ros::Subscriber pitch_rezero_sub_;
+  ros::Publisher pitch_rezero_active_pub_;
+  ros::Publisher pitch_rezero_ready_pub_;
+  ros::Publisher pitch_rezero_failed_pub_;
+  ros::Publisher pitch_joint_hold_error_pub_;
+  ros::Publisher secondary_joint_hold_error_pub_;
+  ros::Publisher passive_pitch_delta_pub_;
+  ros::Publisher body_pitch_pub_;
+  ros::Publisher body_pitch_rate_pub_;
+
   enum SecondaryAxisType
   {
     SECONDARY_AXIS_INVALID = 0,
