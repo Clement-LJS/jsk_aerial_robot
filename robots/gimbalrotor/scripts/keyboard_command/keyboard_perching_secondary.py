@@ -34,7 +34,10 @@ CTRL-C  : quit (leaves the current robot/perching state unchanged)
 
 Notes:
   - This script is for GimbalrotorMultilinkPerchingNavigator.
+  - Starting this keyboard does not adopt an externally enabled lock.
+  - e requests a fresh navigator lock, even when perching is already enabled.
   - Physically perch, press e, then z; wait for ready, press r, then cut.
+  - A confirmation timeout blocks keyboard motion without disabling perching.
   - On rezero failure, disable with d and retry safely. CTRL-C leaves the hold.
   - Calibrate the passive hinge offset/axis in MultilinkPerching.yaml.
   - The secondary joint can be either yaw or roll. Its actual configured
@@ -160,11 +163,11 @@ class PerchingKeyboard(object):
                 "perching/multilink/secondary_joint_target"))
 
         self.pitch_step = math.radians(
-            float(rospy.get_param("~pitch_step_deg", 0.2)))
+            float(rospy.get_param("~pitch_step_deg", 1.0)))
         self.pitch_delta_limit = math.radians(
             abs(float(rospy.get_param("~pitch_delta_limit_deg", 20.0))))
         self.secondary_step = math.radians(
-            float(rospy.get_param("~secondary_step_deg", 0.2)))
+            float(rospy.get_param("~secondary_step_deg", 1.0)))
         self.secondary_lower = math.radians(
             float(rospy.get_param("~secondary_lower_limit_deg", -90.0)))
         self.secondary_upper = math.radians(
@@ -205,9 +208,11 @@ class PerchingKeyboard(object):
         self.perching_requested = False
         self.lock_confirmed = False
         self.enable_request_stamp = None
+        self.previous_lock_stamp = None
         self.rezero_pending = False
         self.rezero_request_stamp = None
         self.confirmed_lock_stamp = None
+        self.confirmed_lock_receive_stamp = None
 
         self.pitch_delta = 0.0
         self.pitch_lock = None
@@ -257,10 +262,11 @@ class PerchingKeyboard(object):
             Bool,
             self.feedback.model_valid_callback,
             queue_size=1))
+        self.locked_pose_topic = rospy.get_param(
+            "~locked_pose_topic",
+            topic_under(robot_namespace, "perching/locked_pose"))
         self.subscribers.append(rospy.Subscriber(
-            rospy.get_param(
-                "~locked_pose_topic",
-                topic_under(robot_namespace, "perching/locked_pose")),
+            self.locked_pose_topic,
             PoseStamped,
             self.feedback.locked_pose_callback,
             queue_size=1))
@@ -363,23 +369,42 @@ class PerchingKeyboard(object):
 
         return True
 
+    def begin_lock_request(self):
+        # Capture a pre-existing latched lock before sending a request. This
+        # prevents a late initial latch from being accepted as a new lock.
+        if self.feedback.lock_stamp is None:
+            try:
+                previous = rospy.wait_for_message(
+                    self.locked_pose_topic, PoseStamped,
+                    timeout=min(0.25, self.lock_timeout))
+            except rospy.ROSException:
+                # Before the first lock there may be no latched pose yet.
+                pass
+            else:
+                self.feedback.locked_pose_callback(previous)
+        # Source stamps identify sessions only. Keyboard receive/request times
+        # share this process's ROS clock; never compare these two clocks.
+        self.previous_lock_stamp = self.feedback.lock_stamp
+        self.enable_request_stamp = rospy.Time.now()
+
     def fresh_lock_received(self):
         if self.enable_request_stamp is None:
             return False
-        if self.feedback.lock_stamp is None:
+        if self.feedback.lock_stamp is None or self.feedback.lock_stamp.is_zero():
             return False
-        if self.feedback.lock_stamp.is_zero():
+        if self.feedback.lock_stamp == self.previous_lock_stamp:
             return False
-        if self.feedback.lock_stamp <= self.enable_request_stamp:
+        received = self.feedback.lock_receive_stamp
+        if received is None or received < self.enable_request_stamp:
             return False
 
         if self.feedback.pitch_nominal_receive_stamp is None:
             return False
         if self.feedback.secondary_nominal_receive_stamp is None:
             return False
-        if self.feedback.pitch_nominal_receive_stamp < self.feedback.lock_stamp:
+        if self.feedback.pitch_nominal_receive_stamp < received:
             return False
-        if self.feedback.secondary_nominal_receive_stamp < self.feedback.lock_stamp:
+        if self.feedback.secondary_nominal_receive_stamp < received:
             return False
 
         return (
@@ -397,12 +422,6 @@ class PerchingKeyboard(object):
         return False
 
     def ready_to_move(self, allow_rezero=False):
-        if not allow_rezero and (self.rezero_pending or
-                not self.rezero_status_fresh(self.confirmed_lock_stamp) or
-                any(self.feedback.rezero.get(name) is not False for name in
-                    ("pitch_rezero_active", "pitch_rezero_ready", "pitch_rezero_failed"))):
-            print("Rejected: rezero ACTIVE/HOLD/pending or stale status; wait ready and final relock.")
-            return False
         if self.feedback.flight_state != HOVER_STATE:
             self.lock_confirmed = False
             self.perching_requested = False
@@ -432,6 +451,12 @@ class PerchingKeyboard(object):
                 not self.fresh(self.feedback.secondary_measured_receive_stamp)):
             print("Rejected: fresh mechanism measurements are required.")
             return False
+        if not allow_rezero and (self.rezero_pending or
+                not self.rezero_status_fresh(self.confirmed_lock_receive_stamp) or
+                any(self.feedback.rezero.get(name) is not False for name in
+                    ("pitch_rezero_active", "pitch_rezero_ready", "pitch_rezero_failed"))):
+            print("Rejected: rezero ACTIVE/HOLD/pending or stale status; wait ready and final relock.")
+            return False
         return True
 
     def enable_perching(self):
@@ -450,7 +475,7 @@ class PerchingKeyboard(object):
         self.secondary_target = None
         self.lock_confirmed = False
 
-        self.enable_request_stamp = rospy.Time.now()
+        self.begin_lock_request()
 
         self.perching_enable_pub.publish(Bool(data=True))
         self.perching_requested = True
@@ -458,15 +483,16 @@ class PerchingKeyboard(object):
         print("Multilink perching enable requested; waiting for fresh lock...")
 
         if not self.wait_for_fresh_lock():
-            # Cancel the request so a failed/ambiguous enable does not leave
-            # the navigator active while the keyboard believes it is inactive.
-            self.perching_enable_pub.publish(Bool(data=False))
+            # Missing confirmation is not evidence that the navigator failed.
+            # Do not change robot mode on a keyboard-only acknowledgement error.
             self.perching_requested = False
             self.lock_confirmed = False
             print(
-                "Lock was not confirmed within {:.2f} s. Perching was disabled. "
-                "Check HOVER state, model_valid, joint_states, URDF chain, "
-                "and navigator logs.".format(self.lock_timeout))
+                "Keyboard lock confirmation timed out after {:.2f} s. "
+                "Navigator perching state is unconfirmed; no disable was sent. "
+                "Motion keys remain blocked. Use s to inspect feedback, "
+                "e to request another fresh lock, or d to disable explicitly."
+                .format(self.lock_timeout))
             return
 
         self.pitch_lock = self.feedback.pitch_nominal
@@ -474,6 +500,7 @@ class PerchingKeyboard(object):
         self.secondary_target = self.secondary_lock
         self.lock_confirmed = True
         self.confirmed_lock_stamp = self.feedback.lock_stamp
+        self.confirmed_lock_receive_stamp = self.feedback.lock_receive_stamp
         self.rezero_pending = False
 
         print(
@@ -507,10 +534,11 @@ class PerchingKeyboard(object):
             return
         self.rezero_pending = True
         self.lock_confirmed = False
-        self.enable_request_stamp = rospy.Time.now()
+        self.begin_lock_request()
         self.relock_pub.publish(Empty())
         if not self.wait_for_fresh_lock():
-            print("Final lock not confirmed; cutting remains blocked. Disable/retry safely.")
+            self.perching_requested = False
+            print("Final lock unconfirmed; cutting remains blocked and no disable was sent. Use s for feedback; e requests a new lock.")
             return
         self.pitch_lock = self.feedback.pitch_nominal
         self.secondary_lock = self.feedback.secondary_nominal
@@ -518,6 +546,7 @@ class PerchingKeyboard(object):
         self.pitch_delta = 0.0
         self.lock_confirmed = True
         self.confirmed_lock_stamp = self.feedback.lock_stamp
+        self.confirmed_lock_receive_stamp = self.feedback.lock_receive_stamp
         self.rezero_pending = False
         print("Fresh final lock confirmed. Cutting keys available once IDLE status arrives.")
 
@@ -530,6 +559,8 @@ class PerchingKeyboard(object):
         self.rezero_pending = False
         self.rezero_request_stamp = None
         self.confirmed_lock_stamp = None
+        self.confirmed_lock_receive_stamp = None
+        self.previous_lock_stamp = None
 
         self.pitch_delta = 0.0
         self.pitch_lock = None
@@ -626,12 +657,13 @@ class PerchingKeyboard(object):
 
     def print_status(self):
         print("")
-        print("Multilink perching status")
+        print("Multilink perching feedback / keyboard session")
+        print("Keyboard confirmation is not physical contact detection.")
         print("-------------------------")
         print("flight_state       : {}".format(self.feedback.flight_state))
         print("model_valid        : {}".format(self.feedback.model_valid))
-        print("perching_requested : {}".format(self.perching_requested))
-        print("lock_confirmed     : {}".format(self.lock_confirmed))
+        print("keyboard_requested : {}".format(self.perching_requested))
+        print("keyboard_lock_ok   : {}".format(self.lock_confirmed))
         print("")
         print("rezero pending     : {}".format(self.rezero_pending))
         for name in ("pitch_rezero_active", "pitch_rezero_ready", "pitch_rezero_failed",
@@ -729,3 +761,4 @@ if __name__ == "__main__":
         main()
     except rospy.ROSInterruptException:
         pass
+
