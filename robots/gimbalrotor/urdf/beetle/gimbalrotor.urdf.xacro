@@ -391,9 +391,9 @@
     </geometry>
         </visual>
         <collision>
-    <origin xyz="0.236 0.024 0" rpy="0 0 0"/>
+    <origin xyz="0.132000 0.023037 0.000000" rpy="0 0 0"/>
     <geometry>
-      <box size="0.253 0.09 0.038"/>
+      <box size="0.264001 0.108076 0.046968"/>
     </geometry>
         </collision>
       </link>
@@ -418,9 +418,9 @@
     </geometry>
         </visual>
         <collision>
-    <origin xyz="0.236 0.024 0" rpy="0 0 0"/>
+    <origin xyz="0.030000 0.003525 -0.030994" rpy="0 0 0"/>
     <geometry>
-      <box size="0.253 0.09 0.138"/>
+      <box size="0.112001 0.071551 0.117989"/>
     </geometry>
         </collision>
       </link>
@@ -445,9 +445,9 @@
     </geometry>
         </visual>
         <collision>
-    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <origin xyz="0.139742 -0.000605 0.009999" rpy="0 0 0"/>
     <geometry>
-      <box size="0.253 0.09 0.038"/>
+      <box size="0.279486 0.140791 0.111999"/>
     </geometry>
         </collision>
       </link>
@@ -644,7 +644,7 @@
       <child link="roll_hand_link"/>
       <origin rpy="0 0 0" xyz="-0.001 0 -0.068"/>
       <axis xyz="1 0 0"/>
-      <dynamics damping="0.9" friction="0.05"/>
+      <dynamics damping="0.02" friction="0.0"/>
     </joint>
   </xacro:if> 
 
