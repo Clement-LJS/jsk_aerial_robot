@@ -1,8 +1,8 @@
 navigation:
   multilink_perching:
     pitch_joint_name: "joint_pitch"
-    secondary_joint_name: "joint_yaw"
-    contact_link_name: "yaw_hand_link"
+    secondary_joint_name: "joint_roll"
+    contact_link_name: "roll_hand_link"
 
     joint_command_topic: joints_ctrl
     joint_state_topic: joint_states

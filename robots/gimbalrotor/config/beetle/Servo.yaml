@@ -64,6 +64,6 @@ servo_controller:
 
    controller2:
      id: 7
-     name: joint_yaw
+     name: joint_roll
      simulation:
        init_value: 0
