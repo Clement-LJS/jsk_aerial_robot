@@ -27,9 +27,17 @@ navigation:
 
     # Physical hinge center in contact_link_name [m]. Calibrate from CAD or
     # measurement if yaw_hand_link origin is not the actual hinge center.
-    pitch_rezero_pivot_offset_x: 0.18999
+
+    # # yaw joint config 
+    # pitch_rezero_pivot_offset_x: 0.18999
+    # pitch_rezero_pivot_offset_y: 0.0
+    # pitch_rezero_pivot_offset_z: 0.0205
+
+    # roll joint config 
+    pitch_rezero_pivot_offset_x: 0.21049
     pitch_rezero_pivot_offset_y: 0.0
     pitch_rezero_pivot_offset_z: 0.0205
+
     # Physical hinge axis in contact_link_name; normalized by the navigator.
     pitch_rezero_axis_x: 0.0
     pitch_rezero_axis_y: 1.0
