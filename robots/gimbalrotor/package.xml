@@ -21,6 +21,8 @@
   <build_depend>sensor_msgs</build_depend>
   <build_depend>geometry_msgs</build_depend>
   <build_depend>tf</build_depend>
+  <build_depend>nav_msgs</build_depend>
+  <build_depend>tf_conversions</build_depend>
 
   <run_depend>aerial_robot_control</run_depend>
   <run_depend>aerial_robot_estimation</run_depend>
@@ -30,11 +32,20 @@
   <run_depend>aerial_robot_base</run_depend>
   <run_depend>spinal</run_depend>
   <run_depend>roscpp</run_depend>
+  <run_depend>rospy</run_depend>
+  <run_depend>visualization_msgs</run_depend>
+  <run_depend>robot_state_publisher</run_depend>
+  <run_depend>rviz</run_depend>
+  <run_depend>xacro</run_depend>
+  <run_depend>python3-numpy</run_depend>
+  <run_depend>python3-yaml</run_depend>
   <run_depend>pluginlib</run_depend>
   <run_depend>std_msgs</run_depend>
   <run_depend>sensor_msgs</run_depend>
   <run_depend>geometry_msgs</run_depend>
   <run_depend>tf</run_depend>
+  <run_depend>nav_msgs</run_depend>
+  <run_depend>tf_conversions</run_depend>
   
   <test_depend>rostest</test_depend>
 

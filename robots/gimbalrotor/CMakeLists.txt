@@ -9,6 +9,8 @@ find_package(catkin REQUIRED COMPONENTS
   aerial_robot_model
   aerial_robot_msgs
   geometry_msgs
+  nav_msgs
+  tf_conversions
   spinal
   pluginlib
   roscpp
@@ -26,6 +28,8 @@ catkin_package(
     aerial_robot_model
     aerial_robot_msgs
     geometry_msgs
+    nav_msgs
+    tf_conversions
     pluginlib
     roscpp
     sensor_msgs
@@ -52,8 +56,10 @@ target_link_libraries(gimbalrotor_robot_model ${catkin_LIBRARIES})
 add_library(gimbalrotor_navigation
   src/gimbalrotor_navigation.cpp
   src/gimbalrotor_perching_navigation.cpp
-  src/gimbalrotor_multilink_perching_navigation.cpp)
+  src/gimbalrotor_multilink_perching_navigation.cpp
+  src/gimbalrotor_pitch_only_perching_navigation.cpp)
 target_link_libraries(gimbalrotor_navigation ${catkin_LIBRARIES})
+add_dependencies(gimbalrotor_navigation ${catkin_EXPORTED_TARGETS})
 
 install(DIRECTORY config plugins launch
   DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}

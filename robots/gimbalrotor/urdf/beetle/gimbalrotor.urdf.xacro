@@ -4,7 +4,9 @@
   <xacro:arg name="use_saw" default="true"/>
   <xacro:arg name="use_hand" default="false"/>
   <xacro:arg name="use_yaw_joint" default="false"/>
-  <xacro:arg name="use_roll_joint" default="true"/>
+  <xacro:arg name="use_roll_joint" default="false"/>
+  <xacro:arg name="use_pitch_joint_only" default="true"/>
+
 
   
   <xacro:macro name="gimbalrotor_center_link" params="child1 child2 child3 child4">
@@ -463,6 +465,72 @@
 
 
 
+  <xacro:if value="$(arg use_pitch_joint_only)">
+      ## passive hand link
+      <link name="pitch_pipe_link">
+        <inertial>
+    <origin xyz="0.17942 0.02463 -0.00001"/>
+    <mass value="0.21857"/>
+    <inertia
+        ixx="0.0002180" ixy="0.0001083" ixz="-0.0000018"
+        iyy="0.0008801" iyz="0.0000001"
+        izz="0.0010463"/>
+        </inertial>
+        <visual>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+        <mesh filename="package://gimbalrotor/urdf/beetle/mesh/pitchjoint_asm.STL" scale="0.001 0.001 0.001"/>
+    </geometry>
+        </visual>
+        <collision>
+    <origin xyz="0.132000 0.023037 0.000000" rpy="0 0 0"/>
+    <geometry>
+      <box size="0.264001 0.108076 0.046968"/>
+    </geometry>
+        </collision>
+      </link>
+    </xacro:if>
+
+
+    <xacro:if value="$(arg use_pitch_joint_only)">
+      ## passive hand link
+      <link name="pitch_joint_only_hand_link">
+        <inertial>
+    <origin xyz="0.01389 0.00134 -0.03377"/>
+    <mass value="0.27126"/>
+    <inertia
+        ixx="0.0002973" ixy="-0.0000149" ixz="-0.0000158"
+        iyy="0.0004041" iyz="0.0000123"
+        izz="0.0002392"/>
+        </inertial>
+        <visual>
+    <origin xyz="0.0270 0 0" rpy="0 0 0"/>
+    <geometry>
+        <mesh filename="package://gimbalrotor/urdf/beetle/mesh/perching_hand_pitch_asm.STL" scale="0.001 0.001 0.001"/>
+    </geometry>
+        </visual>
+        <collision>
+    <origin xyz="0.030000 0.003525 -0.030994" rpy="0 0 0"/>
+    <geometry>
+      <box size="0.112001 0.071551 0.117989"/>
+    </geometry>
+        </collision>
+      </link>
+    </xacro:if>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
   <!-- ## beetle hand joint
@@ -601,7 +669,7 @@
 
 
 
-  <xacro:if value="$(arg use_roll_joint)">
+  <!-- <xacro:if value="$(arg use_roll_joint)">
     <joint name="pitchpipe_joint" type="fixed">
       <child link="pitch_pipe_link"/>
       <parent link="base_link"/>
@@ -657,12 +725,54 @@
       <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
       <mechanicalReduction>1</mechanicalReduction>
     </actuator>
+  </transmission> -->
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  <xacro:if value="$(arg use_pitch_joint_only)">
+    <joint name="pitchpipe_joint" type="fixed">
+      <child link="pitch_pipe_link"/>
+      <parent link="base_link"/>
+      <origin xyz="-0.05918 0 0.01700" rpy="0 0 3.142"/>
+      <axis xyz="0 0 0"/>
+    </joint>
+  </xacro:if>
+
+  <xacro:if value="$(arg use_pitch_joint_only)">
+    <joint name="joint_pitch_only" type="revolute">
+      <limit effort="10.0" lower="${-pi/2}" upper="${pi/2}" velocity="0.1"/>
+      <parent link="pitch_pipe_link"/>
+      <child link="pitch_joint_only_hand_link"/>
+      <origin rpy="0 0 0" xyz="0.2405 0 0"/>
+      <axis xyz="0 1 0"/>
+      <dynamics damping="0.9" friction="0.05"/>
+    </joint>
+  </xacro:if>
+
+
+
+  <transmission name="joint_pitch_tran">
+    <type>transmission_interface/SimpleTransmission</type>
+    <joint name="joint_pitch_only">
+      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+    </joint>
+    <actuator name="joint_servo_pitch">
+      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+      <mechanicalReduction>1</mechanicalReduction>
+    </actuator>
   </transmission>
-
-
-
-
-
 
 
 

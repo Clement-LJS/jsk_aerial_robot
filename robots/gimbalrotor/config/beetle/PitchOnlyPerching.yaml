@@ -1,0 +1,57 @@
+navigation:
+  pitch_only_perching:
+    # Same model-radian convention as MultilinkPerching.yaml. Do not duplicate
+    # Servo.yaml's motor angle_sgn/angle_scale/zero_point_offset here.
+    pitch_joint_name: joint_pitch_only
+    contact_link_name: pitch_joint_only_hand_link
+    pitch_command_sign: 1.0
+    pitch_axis_alignment_threshold: 0.90
+    joint_command_topic: joints_ctrl
+    joint_state_topic: joint_states
+    world_frame: world
+    topic_prefix: perching/pitch_only
+
+    # Default position and velocity limits come from joint_pitch_only in URDF:
+    # currently [-pi/2, +pi/2] rad and 0.1 rad/s.
+    # Uncomment to narrow the operating range/rate (URDF caps still apply).
+    # For a continuous joint, explicit finite position limits are required.
+    # pitch_lower_limit: -1.57079632679
+    # pitch_upper_limit: 1.57079632679
+    # pitch_rate_limit: 0.1
+
+    # Absolute world pitch of the robot BASELINK, independent of servo/passive
+    # angles. Limits all perching pose targets (servo adjustment and passive
+    # motion, including rezero). Values are radians within [-pi/2, +pi/2].
+    body_pitch_lower_limit: -0.5235988   # -30 deg
+    body_pitch_upper_limit: 0.5235988    # +30 deg
+
+    # Joint feedback/settling, using the multilink convention and defaults.
+    joint_state_timeout: 0.15
+    joint_state_future_tolerance: 0.02
+    pitch_position_tolerance: 0.02       # rad; frozen-joint hold error
+    pitch_velocity_tolerance: 0.05      # rad/s
+    pitch_zero_tolerance: 0.02          # rad; optional keyboard 'a' only
+
+    # External passive perch pivot, in pitch_joint_only_hand_link coordinates.
+    # 210.49 mm, -14 mm, 20.5 mm. No extra mesh visual offset is added.
+    pivot_offset: [0.21049, -0.014, 0.0205]
+    hinge_axis: [0.0, 1.0, 0.0]          # normalized at initialization
+
+    # Body-pitch rezero: same values/sign as the Beetle multilink configuration.
+    # The active pitch servo holds its measured angle captured at enable.
+    pitch_rezero_target_pitch: 0.0       # world BASELINK pitch [rad]
+    pitch_rezero_command_sign: -1.0      # passive rotation -> body pitch sign
+    pitch_rezero_kp: 1.0
+    pitch_rezero_rate_limit: 0.1745329    # rad/s (10 deg/s)
+    pitch_rezero_max_delta: 0.5235988     # rad (30 deg from rezero trigger)
+    pitch_rezero_pitch_tolerance: 0.0349066 # rad (2 deg)
+    pitch_rezero_rate_tolerance: 0.05    # rad/s; Euler pitch rate from estimator angular velocity
+    pitch_rezero_stable_duration: 0.30   # s
+    pitch_rezero_timeout: 5.0            # s; timeout holds last target
+
+    # Passive command relative to the zero established by successful rezero.
+    # Rezero travel is discarded; freeze/unfreeze preserve this coordinate.
+    # These bounds stay fixed. The separate BASELINK pitch limits also apply.
+    passive_lower_limit: -1.745329 #-100deg   #-0.872665 #-50deg    #-0.5235988 # rad (-30 deg)
+    passive_upper_limit: 1.745329  #100deg    #0.872665  #+50deg    #0.5235988 # rad (+30 deg)
+    passive_rate_limit: 0.1745329         # rad/s (10 deg/s)

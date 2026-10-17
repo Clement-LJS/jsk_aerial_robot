@@ -54,6 +54,12 @@ protected:
   virtual bool applyPerchingConstraint(aerial_robot_msgs::FlightNav& nav_msg);
   virtual void applyManualPitchDelta(double delta);
 
+  // Transactional adapters can guard these operations before any parent reset.
+  // Default dispatch and semantics of existing plugins remain unchanged.
+  virtual void selectPerchingMode(perching_geometry::Mode mode, bool enable);
+  virtual void relockCallback(const std_msgs::EmptyConstPtr& msg);
+  virtual void resetCallback(const std_msgs::EmptyConstPtr& msg);
+
   // Derived FK navigators share session serialization without exposing geometry state.
   std::recursive_mutex& perchingStateMutex() const { return perching_state_mutex_; }
   void commitFixedContactLock(const tf::Vector3& cog_position,
@@ -67,11 +73,11 @@ private:
 
   void perchingEnableCallback(const std_msgs::BoolConstPtr& msg);
   void perchingSlantedEnableCallback(const std_msgs::BoolConstPtr& msg);
-  void selectPerchingMode(perching_geometry::Mode mode, bool enable);
+
   void branchPoseCallback(const geometry_msgs::PoseStampedConstPtr& msg);
   void perchingPointCallback(const geometry_msgs::PointStampedConstPtr& msg);
-  void relockCallback(const std_msgs::EmptyConstPtr& msg);
-  void resetCallback(const std_msgs::EmptyConstPtr& msg);
+
+
   void manualPitchDeltaCallback(const std_msgs::Float64ConstPtr& msg);
 
   aerial_robot_msgs::FlightNav buildActivePerchingNavCommand();
