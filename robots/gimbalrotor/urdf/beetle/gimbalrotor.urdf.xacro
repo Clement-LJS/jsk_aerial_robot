@@ -496,12 +496,12 @@
       ## passive hand link
       <link name="pitch_joint_only_hand_link">
         <inertial>
-    <origin xyz="0.01389 0.00134 -0.03377"/>
-    <mass value="0.27126"/>
+    <origin xyz="0.11044 -0.01072 0.00568"/>
+    <mass value="0.44939"/>
     <inertia
-        ixx="0.0002973" ixy="-0.0000149" ixz="-0.0000158"
-        iyy="0.0004041" iyz="0.0000123"
-        izz="0.0002392"/>
+        ixx="0.0005461" ixy="-0.0001070" ixz="-0.0000464"
+        iyy="0.0030970" iyz="-0.0001004"
+        izz="0.0031924"/>
         </inertial>
         <visual>
     <origin xyz="0.0270 0 0" rpy="0 0 0"/>
