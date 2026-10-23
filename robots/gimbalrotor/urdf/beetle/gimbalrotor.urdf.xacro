@@ -5,7 +5,9 @@
   <xacro:arg name="use_hand" default="false"/>
   <xacro:arg name="use_yaw_joint" default="false"/>
   <xacro:arg name="use_roll_joint" default="false"/>
-  <xacro:arg name="use_pitch_joint_only" default="true"/>
+  <xacro:arg name="use_pitch_joint_only" default="false"/>
+  <xacro:arg name="use_roll_yaw_joint" default="true"/>
+
 
 
   
@@ -526,6 +528,91 @@
 
 
 
+  <xacro:if value="$(arg use_roll_yaw_joint)">
+      ## passive hand link
+      <link name="yaw_pipe_link">
+        <inertial>
+    <origin xyz="0.17942 0.02463 -0.00001"/>
+    <mass value="0.21857"/>
+    <inertia
+        ixx="0.0002180" ixy="0.0001083" ixz="-0.0000018"
+        iyy="0.0008801" iyz="0.0000001"
+        izz="0.0010463"/>
+        </inertial>
+        <visual>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+        <mesh filename="package://gimbalrotor/urdf/beetle/mesh/yawjoint_asm.STL" scale="0.001 0.001 0.001"/>
+    </geometry>
+        </visual>
+        <collision>
+    <origin xyz="0.132000 0.023037 0.000000" rpy="0 0 0"/>
+    <geometry>
+      <box size="0.264001 0.108076 0.046968"/>
+    </geometry>
+        </collision>
+      </link>
+    </xacro:if>
+
+
+    <xacro:if value="$(arg use_roll_yaw_joint)">
+      ## passive hand link
+      <link name="roll_joint_asm_link">
+        <inertial>
+    <origin xyz="0.01389 0.00134 -0.03377"/>
+    <mass value="0.27126"/>
+    <inertia
+        ixx="0.0002973" ixy="-0.0000149" ixz="-0.0000158"
+        iyy="0.0004041" iyz="0.0000123"
+        izz="0.0002392"/>
+        </inertial>
+        <visual>
+    <origin xyz="0.0270 0 0" rpy="0 0 0"/>
+    <geometry>
+        <mesh filename="package://gimbalrotor/urdf/beetle/mesh/roll_joint_asm_roll_yaw.STL" scale="0.001 0.001 0.001"/>
+    </geometry>
+        </visual>
+        <collision>
+    <origin xyz="0.030000 0.003525 -0.030994" rpy="0 0 0"/>
+    <geometry>
+      <box size="0.112001 0.071551 0.117989"/>
+    </geometry>
+        </collision>
+      </link>
+    </xacro:if>
+
+
+    <xacro:if value="$(arg use_roll_yaw_joint)">
+      ## passive hand link
+      <link name="roll_hand_link">
+        <inertial>
+    <origin xyz="0.17702 -0.02352 0.00828"/>
+    <mass value="0.30806"/>
+    <inertia
+        ixx="0.0004461" ixy="0.0001357" ixz="-0.0001474"
+        iyy="0.0013111" iyz="-0.0000856"
+        izz="0.0013577"/>
+        </inertial>
+        <visual>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+        <mesh filename="package://gimbalrotor/urdf/beetle/mesh/perching_hand_roll_asm.STL" scale="0.001 0.001 0.001"/>
+    </geometry>
+        </visual>
+        <collision>
+    <origin xyz="0.139742 -0.000605 0.009999" rpy="0 0 0"/>
+    <geometry>
+      <box size="0.279486 0.140791 0.111999"/>
+    </geometry>
+        </collision>
+      </link>
+    </xacro:if>
+
+
+
+
+
+
 
 
 
@@ -740,7 +827,7 @@
 
 
 
-
+<!-- 
   <xacro:if value="$(arg use_pitch_joint_only)">
     <joint name="pitchpipe_joint" type="fixed">
       <child link="pitch_pipe_link"/>
@@ -772,11 +859,73 @@
       <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
       <mechanicalReduction>1</mechanicalReduction>
     </actuator>
+  </transmission> -->
+
+
+
+
+
+
+
+
+
+  <xacro:if value="$(arg use_roll_yaw_joint)">
+    <joint name="pitchpipe_joint" type="fixed">
+      <child link="yaw_pipe_link"/>
+      <parent link="base_link"/>
+      <origin xyz="-0.05918 0 0.01700" rpy="0 0 3.142"/>
+      <axis xyz="0 0 0"/>
+    </joint>
+  </xacro:if>
+
+  <xacro:if value="$(arg use_roll_yaw_joint)">
+    <joint name="joint_yaw" type="revolute">
+      <limit effort="10.0" lower="${-pi/2}" upper="${pi/2}" velocity="0.1"/>
+      <parent link="yaw_pipe_link"/>
+      <child link="roll_joint_asm_link"/>
+      <origin rpy="0 0 0" xyz="0.2405 0 0"/>
+      <axis xyz="0 0 1"/>
+      <dynamics damping="0.9" friction="0.05"/>
+    </joint>
+  </xacro:if>
+
+
+
+  <transmission name="joint_yaw_tran">
+    <type>transmission_interface/SimpleTransmission</type>
+    <joint name="joint_yaw">
+      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+    </joint>
+    <actuator name="joint_servo_pitch">
+      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+      <mechanicalReduction>1</mechanicalReduction>
+    </actuator>
   </transmission>
 
 
 
 
+  <xacro:if value="$(arg use_roll_yaw_joint)">
+    <joint name="joint_roll" type="revolute">
+      <limit effort="10.0" lower="${-pi/2}" upper="${pi/2}" velocity="0.1"/>
+      <parent link="roll_joint_asm_link"/>
+      <child link="roll_hand_link"/>
+      <origin rpy="0 0 0" xyz="0.008 0 -0.068"/>
+      <axis xyz="1 0 0"/>
+      <dynamics damping="0.02" friction="0.0"/>
+    </joint>
+  </xacro:if> 
+
+  <transmission name="joint_roll_tran">
+    <type>transmission_interface/SimpleTransmission</type>
+    <joint name="joint_roll">
+      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+    </joint>
+    <actuator name="joint_servo_roll">
+      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+      <mechanicalReduction>1</mechanicalReduction>
+    </actuator>
+  </transmission>
 
 
 
