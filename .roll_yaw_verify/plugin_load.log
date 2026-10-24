@@ -1,0 +1,5 @@
+Loaded: libgimbalrotor_robot_model.so
+Loaded: libflight_navigation.so
+Loaded: libflight_control_pluginlib.so
+Loaded: libgimbalrotor_navigation.so
+Loaded: libgimbalrotor_controller.so

@@ -1,0 +1,15 @@
+\subsubsection parameters ROS parameters
+
+Reads and maintains the following parameters on the ROS server
+
+- \b "~lqi_flag" : \b [bool] LQI Control Weight Flag min: False, default: False, max: True
+- \b "~roll_pitch_p" : \b [double] LQI Roll and Pitch P Control Weight min: 0.0, default: 200.0, max: 2000.0
+- \b "~roll_pitch_i" : \b [double] LQI Roll and Pitch I Control Weight min: 0.0, default: 10.0, max: 50.0
+- \b "~roll_pitch_d" : \b [double] LQI Roll and Pitch D Control Weight min: 0.0, default: 20.0, max: 300.0
+- \b "~yaw_p" : \b [double] LQI Yaw P Control Weight min: 0.0, default: 1.0, max: 1000.0
+- \b "~yaw_i" : \b [double] LQI Yaw I Control Weight min: 0.0, default: 1.0, max: 20.0
+- \b "~yaw_d" : \b [double] LQI Yaw D Control Weight min: 0.0, default: 10.0, max: 1000.0
+- \b "~z_p" : \b [double] LQI Z P Control Weight min: -100.0, default: 1.0, max: 100.0
+- \b "~z_i" : \b [double] LQI Z I Control Weight min: 0.0, default: 1.0, max: 20.0
+- \b "~z_d" : \b [double] LQI Z D Control Weight min: -200.0, default: 10.0, max: 200.0
+

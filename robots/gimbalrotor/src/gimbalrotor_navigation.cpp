@@ -49,6 +49,8 @@ void GimbalrotorNavigator::reset()
 
 void GimbalrotorNavigator::targetBaselinkRotCallback(const geometry_msgs::QuaternionStampedConstPtr & msg)
 {
+  auto target_lock = lockNavigationTargets();
+  if(!acceptNavigationTarget("final_target_baselink_rot")) return;
   tf::quaternionMsgToTF(msg->quaternion, final_target_baselink_rot_);
   target_omega_.setValue(0,0,0); // for sure to reset the target angular velocity
 
@@ -62,6 +64,8 @@ void GimbalrotorNavigator::targetBaselinkRotCallback(const geometry_msgs::Quater
 
 void GimbalrotorNavigator::targetBaselinkRPYCallback(const geometry_msgs::Vector3StampedConstPtr & msg)
 {
+  auto target_lock = lockNavigationTargets();
+  if(!acceptNavigationTarget("final_target_baselink_rpy")) return;
   final_target_baselink_rot_.setRPY(msg->vector.x, msg->vector.y, msg->vector.z);
   target_omega_.setValue(0,0,0); // for sure to reset the target angular velocity
 }
@@ -76,6 +80,21 @@ void GimbalrotorNavigator::setBaselinkRotationTargetRelativeToCog(
   target_omega_.setValue(0, 0, 0);
 }
 
+void GimbalrotorNavigator::setSynchronizedBaselinkRotationRelativeToCog(const tf::Quaternion& target)
+{
+  curr_target_baselink_rot_ = final_target_baselink_rot_ = target.normalized();
+  eq_cog_world_ = false;
+  KDL::Rotation r;
+  tf::quaternionTFToKDL(curr_target_baselink_rot_, r);
+  robot_model_->setCogDesireOrientation(r);
+  spinal::DesireCoord msg;
+  double roll, pitch, yaw;
+  tf::Matrix3x3(curr_target_baselink_rot_).getRPY(roll, pitch, yaw);
+  msg.roll=roll; msg.pitch=pitch; msg.yaw=yaw;
+  target_baselink_rpy_pub_.publish(msg);
+  prev_rotation_stamp_=ros::Time::now().toSec();
+}
+
 tf::Quaternion GimbalrotorNavigator::getCommandedBaselinkRotationRelativeToCog() const
 {
   return curr_target_baselink_rot_;
@@ -83,6 +102,7 @@ tf::Quaternion GimbalrotorNavigator::getCommandedBaselinkRotationRelativeToCog()
 
 void GimbalrotorNavigator::naviCallback(const aerial_robot_msgs::FlightNavConstPtr & msg)
 {
+  if(!acceptNavigationTarget("uav/nav")) return;
   BaseNavigator::naviCallback(msg);
   if(msg->roll_nav_mode == 2) setTargetRoll(msg->target_roll);
   if(msg->pitch_nav_mode == 2) setTargetPitch(msg->target_pitch);
@@ -90,6 +110,7 @@ void GimbalrotorNavigator::naviCallback(const aerial_robot_msgs::FlightNavConstP
 
 void GimbalrotorNavigator::baselinkRotationProcess()
 {
+  if(ownsNavigationTargets()) return;
   if(curr_target_baselink_rot_ == final_target_baselink_rot_) return;
 
   if(ros::Time::now().toSec() - prev_rotation_stamp_ > baselink_rot_pub_interval_)

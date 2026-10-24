@@ -1,0 +1,69 @@
+# Trajectory planning only. All angles are radians; lengths metres; times seconds.
+# No hardware motion is enabled until an operator supplies calibrated geometry.
+controller:
+  # Use the existing host allocation path so PoseLinearController's nonzero
+  # desired rates/accelerations enter full thrust and gimbal references. The
+  # FC allocation path transmits roll/pitch angles, not these rate references.
+  gimbal_calc_in_fc: false
+navigation:
+  perching_enable: false
+  roll_yaw_perching:
+    roll_joint: joint_roll
+    yaw_joint: joint_yaw
+    contact_link: roll_hand_link
+    joint_state_topic: joint_states
+    joint_command_topic: joints_ctrl
+    body_state_topic: uav/baselink/odom
+    world_frame: world
+    body_frame: gimbalrotor/base_link # override for a robot_id / different tf_prefix
+    debug_prefix: perching/roll_yaw
+
+    calibration_confirmed: false
+    # REQUIRED: measured T_CP, in roll_hand_link coordinates. No guessed offset.
+    # pivot_offset: [x, y, z]
+    # pivot_rpy: [roll, pitch, yaw] # ZYX rotation of P relative to C
+    # hinge_axis: [x, y, z]       # signed UNIT axis expressed in P
+
+    # Coordinate order: [passive alpha, active roll, active yaw].
+    # Active limits are intersected with URDF limits/rates; never widened.
+    position_lower: [-1.2, -1.57079632679, -1.57079632679]
+    position_upper: [1.2, 1.57079632679, 1.57079632679]
+    velocity_caps: [0.15, 0.1, 0.1]
+    acceleration_caps: [0.1, 0.1, 0.1]
+    # Enforced min(this, navigation/max_target_tilt_angle), WORLD body-Z tilt.
+    # Default rejects 30/45 deg roll AND a full 20 deg pitch stroke. Expanding
+    # either limit requires an independently validated operating envelope.
+    body_max_tilt: 0.2
+    planning_dt: 0.02
+    orientation_tolerance: 0.003
+    rate_tolerance: 0.01
+    alignment_rate: 0.04
+    alignment_acceleration: 0.02
+    max_phase_duration: 180.0
+    scaling_attempts: 5
+    cog_speed_limit: 0.1
+    cog_acceleration_limit: 0.2
+    qp_weights: [1.0, 1.0, 1.0]
+    qp_regularization: 0.00000001
+    qp_smoothing: 0.000001
+    orientation_gain: 2.0
+    min_singular_value: 0.05
+    feedback_timeout: 0.15
+    future_tolerance: 0.02
+    feedback_sync_tolerance: 0.05
+    pivot_tolerance: 0.01
+    hinge_residual_tolerance: 0.03
+    tracking_tolerance: 0.04
+    body_tracking_tolerance: 0.04
+    cog_model_tolerance: 0.005
+    settle_rate: 0.01
+    settle_time: 0.5
+    settle_timeout: 10.0
+    request:
+      # Relative to N = measured body orientation at this contact lock.
+      body_yaw: 0.523598775598
+      body_roll: 0.0
+      pitch_start: 0.0
+      pitch_end: 0.349065850399
+      pitch_rate: 0.03          # positive magnitude; direction from end-start
+      pitch_acceleration: 0.02

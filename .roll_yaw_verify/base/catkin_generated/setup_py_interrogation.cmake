@@ -1,0 +1,7 @@
+set(aerial_robot_base_SETUP_PY_SETUP_MODULE "distutils.core")
+set(aerial_robot_base_SETUP_PY_VERSION "1.3.6")
+set(aerial_robot_base_SETUP_PY_SCRIPTS "")
+set(aerial_robot_base_SETUP_PY_PACKAGES "aerial_robot_base")
+set(aerial_robot_base_SETUP_PY_PACKAGE_DIRS "src/aerial_robot_base")
+set(aerial_robot_base_SETUP_PY_MODULES "")
+set(aerial_robot_base_SETUP_PY_MODULE_DIRS "")

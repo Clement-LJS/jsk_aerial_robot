@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites tests="13" failures="0" disabled="0" errors="0" time="0.854" timestamp="2026-10-24T16:16:23.840" name="AllTests">
+  <testsuite name="RollYawKinematics" tests="3" failures="0" disabled="0" skipped="0" errors="0" time="0.002" timestamp="2026-10-24T16:16:23.840">
+    <testcase name="ExpandedRepositoryUrdf" status="run" result="completed" time="0.001" timestamp="2026-10-24T16:16:23.840" classname="RollYawKinematics" />
+    <testcase name="FixedPivotAndJacobian" status="run" result="completed" time="0" timestamp="2026-10-24T16:16:23.842" classname="RollYawKinematics" />
+    <testcase name="InvalidAndHingeResidual" status="run" result="completed" time="0" timestamp="2026-10-24T16:16:23.842" classname="RollYawKinematics" />
+  </testsuite>
+  <testsuite name="RollYawQp" tests="2" failures="0" disabled="0" skipped="0" errors="0" time="0" timestamp="2026-10-24T16:16:23.842">
+    <testcase name="ExactBoxesAndKkt" status="run" result="completed" time="0" timestamp="2026-10-24T16:16:23.842" classname="RollYawQp" />
+    <testcase name="LimitsSingularityAndFrames" status="run" result="completed" time="0" timestamp="2026-10-24T16:16:23.843" classname="RollYawQp" />
+  </testsuite>
+  <testsuite name="RollYawTrajectory" tests="4" failures="0" disabled="0" skipped="0" errors="0" time="0.75" timestamp="2026-10-24T16:16:23.843">
+    <testcase name="IdealLocalPitchNormalAndRate" status="run" result="completed" time="0" timestamp="2026-10-24T16:16:23.843" classname="RollYawTrajectory" />
+    <testcase name="CasesABCAndReverse" status="run" result="completed" time="0.311" timestamp="2026-10-24T16:16:23.843" classname="RollYawTrajectory" />
+    <testcase name="ArticulatedCogFrameDerivative" status="run" result="completed" time="0.043" timestamp="2026-10-24T16:16:24.154" classname="RollYawTrajectory" />
+    <testcase name="UnsafeInvalidAndScaling" status="run" result="completed" time="0.395" timestamp="2026-10-24T16:16:24.197" classname="RollYawTrajectory" />
+  </testsuite>
+  <testsuite name="RollYawExecutor" tests="3" failures="0" disabled="0" skipped="0" errors="0" time="0.101" timestamp="2026-10-24T16:16:24.593">
+    <testcase name="LifecyclePauseCancelStaleSessionAndFaults" status="run" result="completed" time="0.042" timestamp="2026-10-24T16:16:24.593" classname="RollYawExecutor" />
+    <testcase name="HoverPivotAndInvalidState" status="run" result="completed" time="0" timestamp="2026-10-24T16:16:24.636" classname="RollYawExecutor" />
+    <testcase name="CancelAndDelayedPlanCannotRestart" status="run" result="completed" time="0.058" timestamp="2026-10-24T16:16:24.636" classname="RollYawExecutor" />
+  </testsuite>
+  <testsuite name="RollYawConfiguration" tests="1" failures="0" disabled="0" skipped="0" errors="0" time="0" timestamp="2026-10-24T16:16:24.694">
+    <testcase name="InvalidParametersFailClosed" status="run" result="completed" time="0" timestamp="2026-10-24T16:16:24.694" classname="RollYawConfiguration" />
+  </testsuite>
+</testsuites>

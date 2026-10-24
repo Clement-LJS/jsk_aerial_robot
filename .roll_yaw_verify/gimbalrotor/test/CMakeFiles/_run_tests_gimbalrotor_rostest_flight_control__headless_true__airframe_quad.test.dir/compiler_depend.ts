@@ -1,0 +1,2 @@
+# CMAKE generated file: DO NOT EDIT!
+# Timestamp file for custom commands dependencies management for _run_tests_gimbalrotor_rostest_flight_control__headless_true__airframe_quad.test.

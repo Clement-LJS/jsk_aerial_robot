@@ -1,0 +1,4 @@
+Consolidate compiler generated dependencies of target flight_navigation
+[ 33%] Building CXX object CMakeFiles/flight_navigation.dir/src/flight_navigation.cpp.o
+[ 66%] Linking CXX shared library /home/clement/ros/jsk_aerial_robot_ws/src/jsk_aerial_robot/.roll_yaw_verify/devel/lib/libflight_navigation.so
+[100%] Built target flight_navigation

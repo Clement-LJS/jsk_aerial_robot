@@ -1,0 +1,47 @@
+[==========] Running 13 tests from 5 test suites.
+[----------] Global test environment set-up.
+[----------] 3 tests from RollYawKinematics
+[ RUN      ] RollYawKinematics.ExpandedRepositoryUrdf
+[WARN] [1792826183.841996473]: The root link root has an inertia specified in the URDF, but KDL does not support a root link with an inertia.  As a workaround, you can add an extra dummy link to your URDF.
+[       OK ] RollYawKinematics.ExpandedRepositoryUrdf (1 ms)
+[ RUN      ] RollYawKinematics.FixedPivotAndJacobian
+[       OK ] RollYawKinematics.FixedPivotAndJacobian (0 ms)
+[ RUN      ] RollYawKinematics.InvalidAndHingeResidual
+[       OK ] RollYawKinematics.InvalidAndHingeResidual (0 ms)
+[----------] 3 tests from RollYawKinematics (2 ms total)
+
+[----------] 2 tests from RollYawQp
+[ RUN      ] RollYawQp.ExactBoxesAndKkt
+[       OK ] RollYawQp.ExactBoxesAndKkt (0 ms)
+[ RUN      ] RollYawQp.LimitsSingularityAndFrames
+[       OK ] RollYawQp.LimitsSingularityAndFrames (0 ms)
+[----------] 2 tests from RollYawQp (0 ms total)
+
+[----------] 4 tests from RollYawTrajectory
+[ RUN      ] RollYawTrajectory.IdealLocalPitchNormalAndRate
+[       OK ] RollYawTrajectory.IdealLocalPitchNormalAndRate (0 ms)
+[ RUN      ] RollYawTrajectory.CasesABCAndReverse
+[       OK ] RollYawTrajectory.CasesABCAndReverse (311 ms)
+[ RUN      ] RollYawTrajectory.ArticulatedCogFrameDerivative
+[       OK ] RollYawTrajectory.ArticulatedCogFrameDerivative (43 ms)
+[ RUN      ] RollYawTrajectory.UnsafeInvalidAndScaling
+[       OK ] RollYawTrajectory.UnsafeInvalidAndScaling (395 ms)
+[----------] 4 tests from RollYawTrajectory (750 ms total)
+
+[----------] 3 tests from RollYawExecutor
+[ RUN      ] RollYawExecutor.LifecyclePauseCancelStaleSessionAndFaults
+[       OK ] RollYawExecutor.LifecyclePauseCancelStaleSessionAndFaults (42 ms)
+[ RUN      ] RollYawExecutor.HoverPivotAndInvalidState
+[       OK ] RollYawExecutor.HoverPivotAndInvalidState (0 ms)
+[ RUN      ] RollYawExecutor.CancelAndDelayedPlanCannotRestart
+[       OK ] RollYawExecutor.CancelAndDelayedPlanCannotRestart (58 ms)
+[----------] 3 tests from RollYawExecutor (101 ms total)
+
+[----------] 1 test from RollYawConfiguration
+[ RUN      ] RollYawConfiguration.InvalidParametersFailClosed
+[       OK ] RollYawConfiguration.InvalidParametersFailClosed (0 ms)
+[----------] 1 test from RollYawConfiguration (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 13 tests from 5 test suites ran. (854 ms total)
+[  PASSED  ] 13 tests.

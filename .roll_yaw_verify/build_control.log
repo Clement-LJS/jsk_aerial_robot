@@ -1,0 +1,19 @@
+Consolidate compiler generated dependencies of target control_utils
+[  7%] Built target aerial_robot_control_gencfg
+[ 14%] Built target control_utils
+Consolidate compiler generated dependencies of target flight_navigation
+Consolidate compiler generated dependencies of target trajectory_generation
+[ 18%] Building CXX object CMakeFiles/flight_navigation.dir/src/flight_navigation.cpp.o
+[ 62%] Built target trajectory_generation
+Consolidate compiler generated dependencies of target flight_control_pluginlib
+[ 66%] Building CXX object CMakeFiles/flight_control_pluginlib.dir/src/control/base/pose_linear_controller.cpp.o
+[ 70%] Linking CXX shared library /home/clement/ros/jsk_aerial_robot_ws/src/jsk_aerial_robot/.roll_yaw_verify/devel/lib/libflight_navigation.so
+[ 74%] Building CXX object CMakeFiles/flight_control_pluginlib.dir/src/control/fully_actuated_controller.cpp.o
+[ 77%] Built target flight_navigation
+Consolidate compiler generated dependencies of target trajectory_generation_node
+[ 85%] Built target trajectory_generation_node
+[ 88%] Building CXX object CMakeFiles/flight_control_pluginlib.dir/src/control/under_actuated_controller.cpp.o
+[ 92%] Building CXX object CMakeFiles/flight_control_pluginlib.dir/src/control/under_actuated_lqi_controller.cpp.o
+[ 96%] Building CXX object CMakeFiles/flight_control_pluginlib.dir/src/control/under_actuated_tilted_lqi_controller.cpp.o
+[100%] Linking CXX shared library /home/clement/ros/jsk_aerial_robot_ws/src/jsk_aerial_robot/.roll_yaw_verify/devel/lib/libflight_control_pluginlib.so
+[100%] Built target flight_control_pluginlib

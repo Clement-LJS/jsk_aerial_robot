@@ -30,6 +30,9 @@ namespace aerial_robot_navigation
     // Baselink orientation relative to the commanded CoG attitude.
     void setBaselinkRotationTargetRelativeToCog(const tf::Quaternion& target);
     tf::Quaternion getCommandedBaselinkRotationRelativeToCog() const;
+    // For already validated synchronized trajectories: no interpolation and no
+    // angular-rate reset. The caller writes CoG attitude/rate in the same update.
+    void setSynchronizedBaselinkRotationRelativeToCog(const tf::Quaternion& target);
 
   private:
     ros::Publisher target_baselink_rpy_pub_;

@@ -1,0 +1,8 @@
+prefix=/home/clement/ros/jsk_aerial_robot_ws/src/jsk_aerial_robot/.roll_yaw_verify/devel
+
+Name: aerial_robot_control
+Description: Description of aerial_robot_control
+Version: 1.3.6
+Cflags: -I/home/clement/ros/jsk_aerial_robot_ws/src/jsk_aerial_robot/.roll_yaw_verify/devel/include -I/home/clement/ros/jsk_aerial_robot_ws/src/jsk_aerial_robot/aerial_robot_control/include
+Libs: -L${prefix}/lib -lcontrol_utils -lflight_control_pluginlib -lflight_navigation -ltrajectory_generation
+Requires: aerial_robot_estimation aerial_robot_model aerial_robot_msgs dynamic_reconfigure pluginlib roscpp spinal tf

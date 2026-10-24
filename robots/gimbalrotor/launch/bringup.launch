@@ -23,9 +23,12 @@
   <arg name="airframe" default="quad" />
   <arg name="multilink_perching" default="false" />
   <arg name="pitch_only_perching" default="false" />
+  <arg name="roll_yaw_perching" default="false" />
+  <!-- For yaw, supply matching existing MultilinkPerching.yaml calibration via config_dir. -->
+  <arg name="multilink_secondary" default="roll" />
   <arg name="pitch_only_model_options" default="" />
   <!-- Invalid combinations fail while parsing, before any node starts. -->
-  <arg name="perching_mode_guard" value="$(eval 1 / (not (arg('pitch_only_perching') and arg('multilink_perching')) and (not arg('pitch_only_perching') or arg('airframe') == 'beetle')))" />
+  <arg name="perching_mode_guard" value="$(eval 1 / ((int(arg('pitch_only_perching')) + int(arg('multilink_perching')) + int(arg('roll_yaw_perching')) &lt;= 1) and (not (arg('pitch_only_perching') or arg('roll_yaw_perching') or arg('multilink_perching')) or arg('airframe') == 'beetle') and arg('multilink_secondary') in ['roll', 'yaw']))" />
 
   ###########  Parameters  ###########
   <group ns="$(arg robot_ns)">
@@ -58,8 +61,14 @@
    <rosparam file="$(arg config_dir)/Simulation.yaml" command="load" if="$(eval arg('simulation') and not arg('real_machine'))"/>
 
    ###########  Navigation  ###########
-   <param name="flight_navigation_plugin_name" value="aerial_robot_navigation/gimbalrotor_perching_navigation" if="$(eval not arg('multilink_perching') and not arg('pitch_only_perching'))" />
+   <param name="flight_navigation_plugin_name" value="aerial_robot_navigation/gimbalrotor_perching_navigation" if="$(eval not arg('multilink_perching') and not arg('pitch_only_perching') and not arg('roll_yaw_perching'))" />
    <rosparam file="$(arg config_dir)/NavigationConfig.yaml" command="load" />
+   <group if="$(arg roll_yaw_perching)">
+     <rosparam file="$(arg config_dir)/beetle/RollYawPerching.yaml" command="load"/>
+     <param name="flight_navigation_plugin_name" value="aerial_robot_navigation/gimbalrotor_roll_yaw_perching_navigation"/>
+     <param name="aerial_robot_control_name" value="aerial_robot_control/gimbalrotor_controller"/>
+     <param name="navigation/roll_yaw_perching/body_frame" value="$(arg robot_ns)/base_link"/>
+   </group>
    <group if="$(arg pitch_only_perching)">
      <rosparam file="$(arg config_dir)/beetle/PitchOnlyPerching.yaml" command="load"/>
      <param name="flight_navigation_plugin_name" value="aerial_robot_navigation/gimbalrotor_pitch_only_perching_navigation"/>
@@ -85,7 +94,9 @@
   <arg name="description_mode" value="urdf" unless="$(arg simulation)" />
   <arg name="description_mode" value="gazebo" if="$(arg simulation)" />
   <include file="$(find aerial_robot_model)/launch/aerial_robot_model.launch" >
-    <arg name="model_options" value="use_pitch_joint_only:=true use_roll_joint:=false use_yaw_joint:=false use_hand:=false $(arg pitch_only_model_options)" if="$(arg pitch_only_perching)"/>
+    <arg name="model_options" value="$(arg pitch_only_model_options) use_pitch_joint_only:=true use_roll_yaw_joint:=false use_roll_joint:=false use_yaw_joint:=false use_hand:=false" if="$(arg pitch_only_perching)"/>
+    <arg name="model_options" value="use_roll_yaw_joint:=true use_pitch_joint_only:=false use_roll_joint:=false use_yaw_joint:=false use_hand:=false" if="$(arg roll_yaw_perching)"/>
+    <arg name="model_options" value="$(eval 'use_roll_yaw_joint:=false use_pitch_joint_only:=false use_hand:=false use_roll_joint:=' + str(arg('multilink_secondary') == 'roll').lower() + ' use_yaw_joint:=' + str(arg('multilink_secondary') == 'yaw').lower())" if="$(arg multilink_perching)"/>
     <arg name="headless" value="$(arg headless)" />
     <arg name="robot_model" value="$(find gimbalrotor)/robots/$(arg airframe)/gimbalrotor.$(arg description_mode).xacro"/>
     <arg name="robot_ns" value="$(arg robot_ns)" />

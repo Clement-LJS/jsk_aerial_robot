@@ -1,0 +1,2 @@
+- setup-file:
+    local-name: /home/clement/ros/jsk_aerial_robot_ws/src/jsk_aerial_robot/.roll_yaw_verify/install/setup.sh

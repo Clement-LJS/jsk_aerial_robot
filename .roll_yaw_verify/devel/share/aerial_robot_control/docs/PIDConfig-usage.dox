@@ -1,0 +1,10 @@
+\subsubsection usage Usage
+\verbatim
+<node name="aerial_robot_control" pkg="aerial_robot_control" type="aerial_robot_control">
+  <param name="pid_control_flag" type="bool" value="False" />
+  <param name="p_gain" type="double" value="0.01" />
+  <param name="i_gain" type="double" value="0.01" />
+  <param name="d_gain" type="double" value="0.15" />
+</node>
+\endverbatim
+

@@ -1,0 +1,5 @@
+Consolidate compiler generated dependencies of target aerial_robot_base
+[ 50%] Built target aerial_robot_base
+[ 75%] Building CXX object CMakeFiles/aerial_robot_base_node.dir/src/aerial_robot_base_node.cpp.o
+[100%] Linking CXX executable /home/clement/ros/jsk_aerial_robot_ws/src/jsk_aerial_robot/.roll_yaw_verify/devel/lib/aerial_robot_base/aerial_robot_base_node
+[100%] Built target aerial_robot_base_node

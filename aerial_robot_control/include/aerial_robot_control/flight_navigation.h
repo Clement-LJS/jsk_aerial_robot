@@ -1,4 +1,5 @@
 #pragma once
+#include <mutex>
 
 #include <aerial_robot_estimation/sensor/base_plugin.h>
 #include <aerial_robot_estimation/sensor/gps.h>
@@ -231,6 +232,17 @@ namespace aerial_robot_navigation
     static const sensor_msgs::Joy ps4joyToPs3joyConvert(const sensor_msgs::Joy& ps4_joy_msg);
 
   protected:
+    // Opt-in ownership for articulated executors. Emergency flight-state
+    // handling remains active; ordinary navigators retain their old behavior.
+    virtual bool ownsNavigationTargets() const { return false; }
+    virtual std::unique_lock<std::recursive_mutex> lockNavigationTargets() { return {}; }
+    virtual void navigationTargetConflict(const char*) {}
+    bool acceptNavigationTarget(const char* source)
+    {
+      if(!ownsNavigationTargets()) return true;
+      navigationTargetConflict(source);
+      return false;
+    }
     ros::NodeHandle nh_;
     ros::NodeHandle nhp_;
 
@@ -521,6 +533,8 @@ namespace aerial_robot_navigation
 
     void xyControlModeCallback(const std_msgs::Int8ConstPtr & msg)
     {
+      auto target_lock = lockNavigationTargets();
+      if(!acceptNavigationTarget("xy control mode")) return;
       if(getNaviState() > START_STATE)
         {
           if(msg->data == 0)

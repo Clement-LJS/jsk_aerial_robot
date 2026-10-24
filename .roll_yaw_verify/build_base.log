@@ -1,0 +1,12 @@
+[ 25%] Building CXX object CMakeFiles/aerial_robot_base.dir/src/aerial_robot_base.cpp.o
+[rospack] Unable to create temporary cache file /home/clement/.ros/.rospack_cache.XKBSiU: Read-only file system
+ln: failed to create symbolic link '/home/clement/.local/share/icons/launch.png': Read-only file system
+ln: failed to create symbolic link '/home/clement/.local/share/icons/record.png': Read-only file system
+ln: failed to create symbolic link '/home/clement/.local/share/icons/shutdown.png': Read-only file system
+ln: failed to create symbolic link '/home/clement/.local/share/icons/stop.png': Read-only file system
+gmake[2]: *** [CMakeFiles/aerial_robot_base_install_icons.dir/build.make:70: CMakeFiles/aerial_robot_base_install_icons] Error 1
+gmake[1]: *** [CMakeFiles/Makefile2:3406: CMakeFiles/aerial_robot_base_install_icons.dir/all] Error 2
+gmake[1]: *** Waiting for unfinished jobs....
+[ 50%] Linking CXX shared library /home/clement/ros/jsk_aerial_robot_ws/src/jsk_aerial_robot/.roll_yaw_verify/devel/lib/libaerial_robot_base.so
+[ 50%] Built target aerial_robot_base
+gmake: *** [Makefile:136: all] Error 2

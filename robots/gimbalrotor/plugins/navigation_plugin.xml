@@ -11,4 +11,7 @@
   <class name="aerial_robot_navigation/gimbalrotor_pitch_only_perching_navigation" type="aerial_robot_navigation::GimbalrotorPitchOnlyPerchingNavigator" base_class_type="aerial_robot_navigation::BaseNavigator">
     <description>NORMAL-only single-pitch perching with active servo adjustment and passive-pivot navigation</description>
   </class>
+  <class name="aerial_robot_navigation/gimbalrotor_roll_yaw_perching_navigation" type="aerial_robot_navigation::GimbalrotorRollYawPerchingNavigator" base_class_type="aerial_robot_navigation::BaseNavigator">
+    <description>Fixed passive-pitch / active-roll-yaw synchronized body-orientation trajectory planner</description>
+  </class>
 </library>

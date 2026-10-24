@@ -1,0 +1,9 @@
+\subsubsection parameters ROS parameters
+
+Reads and maintains the following parameters on the ROS server
+
+- \b "~pid_control_flag" : \b [bool] XY PID Control Flag min: False, default: False, max: True
+- \b "~p_gain" : \b [double] p gain min: 0.0, default: 0.01, max: 50.0
+- \b "~i_gain" : \b [double] i gain min: 0.0, default: 0.01, max: 20.0
+- \b "~d_gain" : \b [double] d gain min: 0.0, default: 0.15, max: 50.0
+
