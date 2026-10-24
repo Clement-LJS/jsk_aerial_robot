@@ -39,6 +39,7 @@
 
 #include <aerial_robot_simulation/simulation_attitude_controller.h>
 #include <angles/angles.h>
+#include <cmath>
 #include <pluginlib/class_list_macros.h>
 
 namespace flight_controllers {
@@ -57,8 +58,9 @@ bool SimulationAttitudeController::init(hardware_interface::SpinalInterface *rob
   // we have to extract the robot namesace from the ros::controller nodehandle
   int index = n.getNamespace().rfind('/');
   std::string robot_ns = n.getNamespace().substr(0, index);
-  ros::NodeHandle n_robot = ros::NodeHandle(robot_ns);
-  controller_core_->init(&n_robot, robot->getEstimatorPtr());
+  controller_nh_.reset(new ros::NodeHandle(robot_ns));
+  controller_nh_->setCallbackQueue(&controller_queue_);
+  controller_core_->init(controller_nh_.get(), robot->getEstimatorPtr());
 
   std::string full_param;
   if (n.searchParam("estimation/mode", full_param))
@@ -76,7 +78,9 @@ bool SimulationAttitudeController::init(hardware_interface::SpinalInterface *rob
       spinal_interface_->useGroundTruth(true);
     }
 
-  debug_sub_ = n.subscribe("debug_force", 1, &SimulationAttitudeController::debugCallback, this);
+  ros::NodeHandle debug_nh(n);
+  debug_nh.setCallbackQueue(&controller_queue_);
+  debug_sub_ = debug_nh.subscribe("debug_force", 1, &SimulationAttitudeController::debugCallback, this);
 
   return true;
 }
@@ -87,6 +91,11 @@ void SimulationAttitudeController::starting(const ros::Time& time)
 
 void SimulationAttitudeController::update(const ros::Time& time, const ros::Duration& period)
 {
+  // Spinal callbacks share gain tables, yaw indices and thrust buffers with
+  // update(). The firmware mutex is absent in SIMULATION: process callbacks
+  // only on this physics thread, never on Gazebo's concurrent ROS spinner.
+  controller_queue_.callAvailable(ros::WallDuration(0));
+
   /* freeze the attitude estimator while touching the ground, since the bad contact simulation performance in gazebo */
   spinal_interface_->onGround(!controller_core_->getAttController().getIntegrateFlag());
 
@@ -99,7 +108,7 @@ void SimulationAttitudeController::update(const ros::Time& time, const ros::Dura
               std::stringstream joint_no;
               joint_no << i + 1;
               hardware_interface::RotorHandle rotor = spinal_interface_->getHandle(std::string("rotor") + joint_no.str());
-              rotor.setForce(debug_force_);
+              rotor.setForce(std::isfinite(debug_force_) ? debug_force_ : 0.0);
             }
         }
       return;
@@ -108,12 +117,18 @@ void SimulationAttitudeController::update(const ros::Time& time, const ros::Dura
   /* update the controller */
   controller_core_->update();
 
+  bool finite_forces = true;
+  for(int i = 0; i < motor_num_; ++i)
+    finite_forces = finite_forces && std::isfinite(controller_core_->getAttController().getForce(i));
+  if(!finite_forces)
+    ROS_ERROR_THROTTLE(1.0, "Non-finite simulated FC thrust: inhibiting rotor forces");
+
   for(int i = 0; i < motor_num_; i++)
     {
       std::stringstream joint_no;
       joint_no << i + 1;
       hardware_interface::RotorHandle rotor = spinal_interface_->getHandle(std::string("rotor") + joint_no.str());
-      rotor.setForce(controller_core_->getAttController().getForce(i));
+      rotor.setForce(finite_forces ? controller_core_->getAttController().getForce(i) : 0.0);
     }
 }
 

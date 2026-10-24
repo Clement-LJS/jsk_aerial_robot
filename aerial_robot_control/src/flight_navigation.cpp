@@ -187,6 +187,7 @@ void BaseNavigator::simpleMoveBaseGoalCallback(const geometry_msgs::PoseStampedC
 
 void BaseNavigator::naviCallback(const aerial_robot_msgs::FlightNavConstPtr & msg)
 {
+  if(!acceptNavigationTarget("uav/nav")) return;
   if(getNaviState() != HOVER_STATE) return;
 
   gps_waypoint_ = false;
@@ -346,6 +347,7 @@ void BaseNavigator::naviCallback(const aerial_robot_msgs::FlightNavConstPtr & ms
 
 void BaseNavigator::joyStickControl(const sensor_msgs::JoyConstPtr & joy_msg)
 {
+  auto target_lock = lockNavigationTargets();
   sensor_msgs::Joy joy_cmd = joyParse(*joy_msg);
   if (joy_cmd.axes.size() == 0 || joy_cmd.buttons.size() == 0)
     {
@@ -415,6 +417,8 @@ void BaseNavigator::joyStickControl(const sensor_msgs::JoyConstPtr & joy_msg)
       return;
     }
 
+  // Keep stop/land buttons above operational while suppressing pose ownership.
+  if(ownsNavigationTargets()) return;
   teleop_reset_time_ = teleop_reset_duration_ + ros::Time::now().toSec();
 
   double raw_x_cmd = joy_cmd.axes[JOY_AXIS_STICK_LEFT_UPWARDS];
@@ -647,7 +651,13 @@ void BaseNavigator::update()
     }
 
   /* update the target pos and velocity */
-  if (trajectory_mode_)
+  if(ownsNavigationTargets())
+    {
+      if(trajectory_mode_) navigationTargetConflict("legacy trajectory active");
+      trajectory_mode_ = false;
+      traj_generator_ptr_.reset();
+    }
+  else if (trajectory_mode_)
     {
       updatePoseFromTrajectory();
     }
@@ -764,7 +774,7 @@ void BaseNavigator::update()
       }
     case HOVER_STATE:
       {
-        if(force_att_control_flag_) break;
+        if(force_att_control_flag_ || ownsNavigationTargets()) break;
 
         if(gps_waypoint_)
           {
@@ -880,6 +890,8 @@ void BaseNavigator::updateLandCommand()
 
 void BaseNavigator::generateNewTrajectory(std::vector<geometry_msgs::PoseStamped> path)
 {
+  auto target_lock = lockNavigationTargets();
+  if(!acceptNavigationTarget("target_pose/target_path")) return;
   if (traj_generator_ptr_.get() != nullptr)
     {
       ROS_WARN("[Nav] force to finish the last trajectory following");
@@ -1004,6 +1016,7 @@ void BaseNavigator::generateNewTrajectory(std::vector<geometry_msgs::PoseStamped
 
 void BaseNavigator::updatePoseFromTrajectory()
 {
+  if(!acceptNavigationTarget("updatePoseFromTrajectory")) return;
   if(getNaviState() != HOVER_STATE) return;
 
   if (traj_generator_ptr_.get() == nullptr)

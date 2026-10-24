@@ -46,6 +46,7 @@
 #include <controller_interface/controller.h>
 #include <flight_control/flight_control.h>
 #include <ros/node_handle.h>
+#include <ros/callback_queue.h>
 #include <spinal/DesireCoord.h>
 #include <std_msgs/Float64.h>
 #include <tf/LinearMath/Transform.h>
@@ -77,6 +78,9 @@ public:
   double getPosition();
 
 private:
+  // These must outlive the subscriptions owned by controller_core_.
+  ros::CallbackQueue controller_queue_;
+  boost::shared_ptr<ros::NodeHandle> controller_nh_;
   ros::Subscriber debug_sub_;
   int loop_count_;
 

@@ -1,0 +1,12 @@
+# Gazebo-only overrides, loaded after RollYawPerching.yaml and Servo.yaml.
+navigation:
+  roll_yaw_perching:
+    # Stationary simulated IMU rate noise exceeds the hardware 0.01 rad/s gate.
+    settle_rate: 0.08
+servo_controller:
+  joints:
+    simulation:
+      # The attached body loads these joints. The free-hand P=5 controller
+      # exceeds the 0.04 rad tracking limit during combined yaw/roll alignment.
+      # Preserve URDF effort/rate limits and all hardware servo settings.
+      pid: {p: 20.0, i: 0.0, d: 0.5}

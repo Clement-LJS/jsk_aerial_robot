@@ -20,6 +20,7 @@ find_package(catkin REQUIRED COMPONENTS
   )
 
 find_package(Eigen3 REQUIRED)
+find_package(gazebo QUIET)
 
 catkin_package(
   CATKIN_DEPENDS
@@ -41,6 +42,7 @@ catkin_package(
 include_directories(
   include
   ${catkin_INCLUDE_DIRS}
+  ${EIGEN3_INCLUDE_DIRS}
   )
 
 add_library(gimbalrotor_controller
@@ -53,13 +55,27 @@ add_library(gimbalrotor_robot_model
   src/model/gimbalrotor_robot_model.cpp)
 target_link_libraries(gimbalrotor_robot_model ${catkin_LIBRARIES})
 
+add_library(roll_yaw_perching_core
+  src/roll_yaw_perching_kinematics.cpp
+  src/roll_yaw_orientation_qp.cpp
+  src/roll_yaw_cutting_trajectory.cpp)
+target_link_libraries(roll_yaw_perching_core ${catkin_LIBRARIES})
+
 add_library(gimbalrotor_navigation
   src/gimbalrotor_navigation.cpp
   src/gimbalrotor_perching_navigation.cpp
   src/gimbalrotor_multilink_perching_navigation.cpp
-  src/gimbalrotor_pitch_only_perching_navigation.cpp)
-target_link_libraries(gimbalrotor_navigation ${catkin_LIBRARIES})
+  src/gimbalrotor_pitch_only_perching_navigation.cpp
+  src/gimbalrotor_roll_yaw_perching_navigation.cpp)
+target_link_libraries(gimbalrotor_navigation roll_yaw_perching_core ${catkin_LIBRARIES})
 add_dependencies(gimbalrotor_navigation ${catkin_EXPORTED_TARGETS})
+
+if(gazebo_FOUND)
+  add_library(roll_yaw_perching_gazebo src/roll_yaw_perching_gazebo.cpp)
+  target_include_directories(roll_yaw_perching_gazebo PRIVATE ${GAZEBO_INCLUDE_DIRS})
+  target_link_libraries(roll_yaw_perching_gazebo ${GAZEBO_LIBRARIES} ${catkin_LIBRARIES})
+  install(TARGETS roll_yaw_perching_gazebo LIBRARY DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION})
+endif()
 
 install(DIRECTORY config plugins launch
   DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}
