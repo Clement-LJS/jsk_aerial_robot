@@ -3,6 +3,7 @@
 #include <gimbalrotor/roll_yaw_cutting_trajectory.h>
 #include <sensor_msgs/JointState.h>
 #include <nav_msgs/Odometry.h>
+#include <geometry_msgs/Vector3Stamped.h>
 #include <std_msgs/UInt64.h>
 #include <std_msgs/String.h>
 #include <future>
@@ -50,6 +51,6 @@ private:
   std::future<roll_yaw::Plan> pending_;
   ros::Time lock_stamp_;
   std::vector<ros::Subscriber> subscriptions_;
-  ros::Publisher joints_pub_,state_pub_,session_pub_,reference_pub_,measured_pub_,cog_pub_,details_pub_;
+  ros::Publisher joints_pub_,state_pub_,session_pub_,reference_pub_,measured_pub_,cog_pub_,details_pub_,angles_pub_;
 };
 }

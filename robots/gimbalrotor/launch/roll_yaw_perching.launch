@@ -1,0 +1,15 @@
+<launch>
+  <!-- Default: Gazebo with an ideal passive hinge. Hardware: simulation:=false. -->
+  <arg name="simulation" default="true"/>
+  <arg name="headless" default="false"/>
+  <arg name="simulate_contact" default="$(arg simulation)"/>
+  <include file="$(find gimbalrotor)/launch/bringup.launch">
+    <arg name="simulation" value="$(arg simulation)"/>
+    <arg name="real_machine" value="$(eval not arg('simulation'))"/>
+    <arg name="airframe" value="beetle"/>
+    <arg name="roll_yaw_perching" value="true"/>
+    <arg name="simulate_roll_yaw_contact" value="$(eval arg('simulation') and arg('simulate_contact'))"/>
+    <arg name="headless" value="$(arg headless)"/>
+    <arg name="direct_model_name" value="unused"/>
+  </include>
+</launch>

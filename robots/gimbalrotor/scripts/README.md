@@ -3,6 +3,67 @@
 
 ## Keyboard command
 
+### `keyboard_roll_yaw_perching.py`
+
+Start Gazebo in one terminal:
+
+```bash
+source ~/ros/jsk_aerial_robot_ws/devel/setup.bash
+roslaunch gimbalrotor roll_yaw_perching.launch
+```
+
+For hardware, use `roslaunch gimbalrotor roll_yaw_perching.launch simulation:=false`
+instead. Hardware uses the configured Spinal serial bridge and OptiTrack; physical
+contact must already exist before enabling perching. Gazebo creates an ideal
+passive hinge when perching is enabled.
+
+Start the keyboard in a second terminal:
+
+```bash
+source ~/ros/jsk_aerial_robot_ws/devel/setup.bash
+rosrun gimbalrotor keyboard_roll_yaw_perching.py
+```
+
+Press a motion key, type a number in **degrees**, then Enter. Wait for **Done**
+before the next move. Example: `r`, `t`, wait for HOVER, `e`, `y` → `30` → Enter,
+wait, `o` → `30` → Enter, wait, `u` → `10` → Enter, wait, `c` → `20` → Enter.
+
+| Key | Action |
+| --- | --- |
+| `r`, `t`, `e` | Arm, take off, enable perching |
+| `y` | Enter desired body yaw relative to the contact lock |
+| `o` | Enter desired body roll relative to the contact lock |
+| `u` | Enter a positive amount to raise local pitch |
+| `c` | Enter a positive amount for the downward local pitch stroke |
+| `v` | Set pitch speed in degrees/second (default 1.72) |
+| Space | Pause/resume the current motion |
+| `x` | Cancel the motion and hold contact |
+| `s`, `?` | Status, help |
+| `d` | Disable perching while holding; releases the Gazebo fixture |
+| `l` | Land after perching has been disabled and physical contact released |
+| `h` | Halt motors |
+| `q`, Ctrl+C | Quit; request cancellation of this keyboard's unfinished move |
+
+Yaw/roll are body targets, not direct joint positions. Pitch-up decreases local
+pitch; downward cutting increases it. Thus `u 10` followed by `c 20` moves from
+0° to −10°, then to +10°. Pitch is about the aligned body-local Y axis, with the
+same fixed contact maintained through coordinated active joints, passive hinge,
+body orientation and CoG position. It is not a world-vertical translation.
+
+The script handles session identities, preparation, alignment and execution.
+It can reconnect to an existing settled lock using the navigator's current
+target angles. It never publishes direct servo or free-flight pose commands.
+The navigator retains all feasibility/tracking checks. No saw motor is actuated.
+
+Verified through the actual keyboard process in headless Gazebo: arm/takeoff,
+contact lock, yaw 30°, roll 30°, pitch up 10°, then downward pitch 20° with
+pause/resume. A restarted keyboard adopted the held pose, moved to roll 45°,
+and passed pitch-up, cancellation and quit-during-planning checks. The upward
+stroke changed both active joint angles, estimated passive angle, body attitude
+and body position. Peak sampled pivot/body tracking errors were 5.5 mm / 0.88°.
+The rebuilt planner passed 15 checks and the keyboard state handling passed seven.
+Hardware launch parameters were checked without starting hardware nodes.
+
 ### `keyboard_changerpy.py`
 
 Change robot's rpy using keyboard. 

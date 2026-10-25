@@ -9,6 +9,7 @@ namespace roll_yaw
 struct Request
 {
   double yaw=0, roll=0, pitch_start=0, pitch_end=0, rate=.03, acceleration=.02;
+  bool align_only=false;
   bool valid() const;
 };
 struct PlanningConfig

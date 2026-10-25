@@ -9,7 +9,8 @@ bool Request::valid() const
 {
   for(double x:{yaw,roll,pitch_start,pitch_end,rate,acceleration}) if(!std::isfinite(x)) return false;
   return rate>0 && acceleration>0 && std::abs(yaw)<=M_PI && std::abs(roll)<M_PI/2 &&
-    std::abs(pitch_start)<M_PI && std::abs(pitch_end)<M_PI && std::abs(pitch_end-pitch_start)>1e-8;
+    std::abs(pitch_start)<M_PI && std::abs(pitch_end)<M_PI &&
+    (align_only || std::abs(pitch_end-pitch_start)>1e-8);
 }
 bool PlanningConfig::valid() const
 {
@@ -183,6 +184,9 @@ Plan prepare(const Kinematics& model,const Vec& initial,const Mat& neutral,const
       return Desired{start*expSO3(delta*a),delta*v,delta*acc};
     };
     if(!buildPath(model,initial,time,align,c,out.align,out.reason)) continue;
+    if(request.align_only) {
+      out.ok=true; out.reason="validated alignment only"; return out;
+    }
     Stroke stroke(request.pitch_end-request.pitch_start,request.rate/scale,request.acceleration/(scale*scale));
     auto cut=[neutral,request,stroke](double t) {
       double theta,v,a; stroke.sample(t,theta,v,a);
@@ -239,6 +243,7 @@ bool Executor::command(const std::string& cmd,std::uint64_t id)
     stage=Stage::PRE_ALIGN; progress=0; speed_=1; stable_since_=ready_since_=0; return true;
   }
   if(cmd=="start"&&stage==Stage::READY) {
+    if(plan.cut.knots.empty()) { reason="alignment-only plan; prepare a pitch stroke to start"; return false; }
     stage=Stage::EXECUTING; progress=0; speed_=1; stable_since_=ready_since_=0; return true;
   }
   if((cmd=="pause"||cmd=="cancel")&&(stage==Stage::PRE_ALIGN||stage==Stage::EXECUTING))

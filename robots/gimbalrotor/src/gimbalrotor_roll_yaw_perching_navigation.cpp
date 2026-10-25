@@ -78,6 +78,7 @@ void GimbalrotorRollYawPerchingNavigator::initialize(ros::NodeHandle nh,ros::Nod
   state_pub_=nh.advertise<std_msgs::String>(prefix_+"/state",1,true);
   session_pub_=nh.advertise<std_msgs::UInt64>(prefix_+"/session",1,true);
   details_pub_=nh.advertise<std_msgs::String>(prefix_+"/diagnostics",1);
+  angles_pub_=nh.advertise<geometry_msgs::Vector3Stamped>(prefix_+"/target_angles",1);
   reference_pub_=nh.advertise<nav_msgs::Odometry>(prefix_+"/body_reference",1);
   measured_pub_=nh.advertise<nav_msgs::Odometry>(prefix_+"/body_measured",1);
   cog_pub_=nh.advertise<nav_msgs::Odometry>(prefix_+"/cog_reference",1);
@@ -230,6 +231,7 @@ void GimbalrotorRollYawPerchingNavigator::request(const std::string& action,std:
   if(!core_.command(action,session)) return;
   if(action=="prepare") {
     ros::NodeHandle pn(nh_,"navigation/roll_yaw_perching/request"); Request r;
+    pn.param("align_only",r.align_only,false);
     bool valid=pn.getParam("body_yaw",r.yaw)&&pn.getParam("body_roll",r.roll)&&pn.getParam("pitch_start",r.pitch_start)&&
       pn.getParam("pitch_end",r.pitch_end)&&pn.getParam("pitch_rate",r.rate)&&pn.getParam("pitch_acceleration",r.acceleration);
     if(!valid||!r.valid()) { core_.stage=Stage::CONTACT_LOCKED; core_.reason="invalid/incomplete request parameters (radians, seconds)"; return; }
@@ -288,6 +290,16 @@ void GimbalrotorRollYawPerchingNavigator::diagnostics()
   std_msgs::String state; state.data=std::string(stageName(core_.stage))+": "+core_.reason; state_pub_.publish(state);
   if(!core_.owns()) return;
   const auto& r=core_.target; const auto f=feedback();
+  // Intrinsic Z-X-Y coordinates relative to the frozen contact orientation N.
+  // These are body targets, not motor positions or world-frame Euler angles.
+  const Mat relative=neutral_.transpose()*r.body.linear();
+  geometry_msgs::Vector3Stamped angles;
+  angles.header.stamp=ros::Time::now();
+  angles.header.frame_id="perching_lock_"+std::to_string(core_.session);
+  angles.vector.x=std::asin(std::max(-1.0,std::min(1.0,relative(2,1))));
+  angles.vector.y=std::atan2(-relative(2,0),relative(2,2));
+  angles.vector.z=std::atan2(-relative(0,1),relative(1,1));
+  angles_pub_.publish(angles);
   nav_msgs::Odometry body; body.header.stamp=ros::Time::now(); body.header.frame_id=world_; body.child_frame_id=body_frame_;
   body.pose.pose=poseMsg(r.body); tf::vector3TFToMsg(tfVector(r.body_omega),body.twist.twist.angular); reference_pub_.publish(body);
   body.header.stamp.fromSec(f.body_stamp); body.pose.pose=poseMsg(f.body);
