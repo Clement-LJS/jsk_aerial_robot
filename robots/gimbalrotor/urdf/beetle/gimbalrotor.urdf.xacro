@@ -532,12 +532,12 @@
       ## passive hand link
       <link name="yaw_pipe_link">
         <inertial>
-    <origin xyz="0.17942 0.02463 -0.00001"/>
+    <origin xyz="0.17942 0.00006 0.02467"/>
     <mass value="0.21857"/>
     <inertia
-        ixx="0.0002180" ixy="0.0001083" ixz="-0.0000018"
-        iyy="0.0008801" iyz="0.0000001"
-        izz="0.0010463"/>
+        ixx="0.0002174" ixy="0.0000003" ixz="0.0001068"
+        iyy="0.0010456" iyz="-0.0000004"
+        izz="0.0008804"/>
         </inertial>
         <visual>
     <origin xyz="0 0 0" rpy="0 0 0"/>
@@ -559,12 +559,12 @@
       ## passive hand link
       <link name="roll_joint_asm_link">
         <inertial>
-    <origin xyz="0.01389 0.00134 -0.03377"/>
-    <mass value="0.27126"/>
+    <origin xyz="0.02057 0.00000 -0.03110"/>
+    <mass value="0.28288"/>
     <inertia
-        ixx="0.0002973" ixy="-0.0000149" ixz="-0.0000158"
-        iyy="0.0004041" iyz="0.0000123"
-        izz="0.0002392"/>
+        ixx="0.0003391" ixy="0.000000011" ixz="-0.0000543"
+        iyy="0.0004986" iyz="-0.00000003"
+        izz="0.0002507"/>
         </inertial>
         <visual>
     <origin xyz="0.0270 0 0" rpy="0 0 0"/>
