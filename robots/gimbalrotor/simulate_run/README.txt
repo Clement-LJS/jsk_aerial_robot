@@ -1,172 +1,209 @@
-PROPELLER-OFF ROSSERIAL BENCH CAPTURE
+PASSIVE CAPTURE FOR NORMAL GIMBALROTOR BRINGUP (LAPTOP OR ONBOARD PC)
 
-Purpose
-Exercise the existing navigation, allocation, MCU attitude control, gimbal
-servos and IMU feedback while capturing the suspected serialization race.
-Firmware equivalence to local source is ASSUMED at the user's request; the
-ST-Link comparison did not establish it. No firmware fix is included.
+Use your normal bringup and keyboard. This recorder never commands the robot,
+changes parameters, blocks arming/takeoff, or halts on an error. You control
+start, takeoff and stop. The existing controller performs allocation and
+servo/motor control in response to your real IMU and hand movement.
 
-Remove ALL propellers. Motors and servos remain real moving hardware. Keep
-hands clear of motors, gimbals and linkages; move only the body gently, and
-keep the physical power disconnect accessible. This profile is NOT for flight.
+ONBOARD PC OVER SSH
+USB capture must run on the computer physically connected to the flight
+controller USB adapter. SSH is only the terminal connection; it does not make
+the remote USB device available to a capture running on your laptop.
+For automatic run-folder matching, run BOTH recorders on that onboard computer,
+in two SSH terminals, from the SAME recording directory. Both filesets will be
+stored on the onboard disk. Keep both SSH sessions open throughout the capture.
 
-Why the launch command changes
-The ordinary launch argument is roll_yaw_perching:=true, with airframe:=beetle.
-There is no rollyawperching argument. For THIS test, use bench.launch below.
-It includes that bringup, applies max_pwm=0.55 (1100 PWM-equivalent),
-min_pwm=0.5 (1000), and min_thrust=0 BEFORE the existing controller starts.
-It also gates keyboard arm/takeoff through the capture program. A Python
-process started after ordinary bringup cannot reliably replace the limits
-already cached by the controller. Do not run ordinary bringup simultaneously.
+First transfer/update this complete simulate_run directory onto the onboard
+workspace yourself. Staging files locally does NOT transfer them to the robot.
+Use the onboard ROS environment that runs bringup: rospack must find gimbalrotor,
+rosbag must be on PATH, and python3 must import rospy and rosbag. USB capture
+uses only Python's standard library, tcpdump and kernel usbmon support.
+The onboard prerequisites/USB device have not been checked by these instructions.
 
-Sequence (use your existing ROS environment; no catkin build needed)
-Run from this repository's robots/gimbalrotor directory. Each numbered step
-can use a separate terminal. Start with the robot disarmed.
+SSH terminal 1 (ROS capture):
 
-1. Start the bench version of bringup:
+  CAPTURE_CODE="$(rospack find gimbalrotor)/simulate_run"
+  mkdir -p "$HOME/rosbag/year2026/11Nov/261101/inspection"
+  cd "$HOME/rosbag/year2026/11Nov/261101/inspection"
+  python3 "$CAPTURE_CODE/bench_capture.py"
 
-   roslaunch simulate_run/bench.launch
+Leave it running. SSH terminal 2 (USB capture):
 
-2. Set the two mechanism joints to zero, as you proposed:
+  CAPTURE_CODE="$(rospack find gimbalrotor)/simulate_run"
+  cd "$HOME/rosbag/year2026/11Nov/261101/inspection"
+  sudo modprobe usbmon
+  sudo python3 "$CAPTURE_CODE/capture_usb.py"
 
-   rostopic pub -1 /gimbalrotor/joints_ctrl sensor_msgs/JointState "{name: ['joint_roll', 'joint_yaw'], position: [0.0, 0.0]}"
+These commands use the SSH user's home directory, not /home/clement. For a
+different recording location, change the directory in both terminals equally.
+The default adapter serial AU0JZM07 identifies the FTDI adapter used on the
+laptop. If you use a different adapter onboard, read its identity with
+ls -l /dev/serial/by-id/ and pass its actual serial with capture_usb.py --serial.
+Do not launch a second serial bridge or open the tty with another reader.
+The USB script discovers the bus/device address; it does not require ttyUSB0.
+If the onboard FC connection is not USB through a supported FTDI adapter,
+this USB capture setup will need adapting; ROS topic recording remains usable.
 
-3. Start capture and wait for READY (at least five seconds of baseline):
+CURRENT LOCAL CONNECTION (verified 2026-10-30)
+Bridge: /gimbalrotor/rosserial_server, /dev/ttyUSB0, 921600 baud.
+USB: FTDI FT232R, serial AU0JZM07, currently bus 3 / device 7.
+The device number can change on replug; capture_usb.py discovers it each run.
+Live messages were successfully received through ROS. No second tty reader
+was opened. Your existing sensors.launch.xml serial-port edit was preserved.
+Normal bringup currently has max_pwm=0.85 (1700 PWM-equivalent), min_thrust=2.
+The recorder DOES NOT apply the old 1100 limit. --pwm-ceiling is reporting only.
+The optional bench.launch is still available for low-output startup settings;
+using it includes normal bringup, and its current version has no command remaps.
+No existing flight/controller logic is edited by these capture tools.
 
-   python3 simulate_run/bench_capture.py --props-removed
+ROSBAG + USB: COPY THESE COMMANDS, RUN BEFORE ARMING
+Keep your normal bringup running. In a second terminal with your ROS environment:
 
-4. Open your normal keyboard controller, with an explicit namespace:
+  cd /home/clement/rosbag/year2026/11Nov/261101
+  python3 /home/clement/ros/jsk_aerial_robot_ws/src/jsk_aerial_robot/robots/gimbalrotor/simulate_run/bench_capture.py
 
-   rosrun aerial_robot_base keyboard_command.py _robot_ns:=/gimbalrotor
+Leave that terminal running. In a third terminal:
 
-   Press r yourself. Wait for flight_state value 2 (ARM_ON) and
-   capped_motor_info_observed in the capture terminal. Then press t yourself.
-   If takeoff is rejected because initialized PWM feedback has not arrived,
-   wait briefly and press t again. Requests are not queued for later execution.
-   The script never arms, takes off, or rearms on its own.
+  cd /home/clement/rosbag/year2026/11Nov/261101
+  sudo modprobe usbmon
+  sudo python3 /home/clement/ros/jsk_aerial_robot_ws/src/jsk_aerial_robot/robots/gimbalrotor/simulate_run/capture_usb.py
 
-5. Follow the capture terminal's four 20-second phases after your takeoff:
-   steady; gentle roll/pitch body movement; gentle yaw body movement; steady.
-   Hand movement changes the real IMU/estimator input. The repository's real
-   controller computes the response and commands its gimbals and motors.
-   There are no synthetic IMU messages, duplicate allocation algorithm,
-   independent servo sweeps, or PWM-test commands from this Python program.
-   It does not initiate a perching maneuver or move the roll/yaw mechanism.
-   TAKEOFF need not reach HOVER when the propellers are absent.
+No paths or filenames need substituting for this example. On another day, change
+only the cd directory in BOTH terminals to your desired existing recording folder.
+Do not cd to the source folder: the absolute script path finds the code while
+your current working directory determines where recordings are saved.
 
-6. At 80 seconds, or an anomaly/timeout, the program requests halt and records
-   five more seconds. It closes the bag and automatically runs offline analysis.
-   Keyboard h remains available throughout; Ctrl-C in capture also requests halt.
-   A stop request/observed disarmed state is not physical proof of stopped motors.
-   If stop is not confirmed, use h and the physical power disconnect.
+bench_capture.py creates one timestamped subfolder in the directory where you
+run it. There is NO hard-coded October destination. USB automatically finds the
+active ROS run in that same parent directory and writes into that run folder.
+A process-held file lock distinguishes active runs from old/crashed recordings.
+No active run or multiple active runs produces an explanatory error rather than
+silently selecting an old folder. Both recorders continue until separately stopped.
 
-An early checksum/deserialization error stops this run intentionally: the
-evidence is already captured. There is no automatic repeated arm/takeoff loop.
-Restart capture manually, while disarmed, for another independent trial.
-Do not increase the ceiling automatically if the motors do not spin.
+Optional overrides: bench_capture.py --output selects a PARENT folder;
+capture_usb.py --output selects an existing exact RUN folder. Normally omit both.
+Wait until recorder.log says Recording to and the terminal shows streams_received.
+This is an observation, not an arm/takeoff gate; your keyboard always works.
 
-Where files go
-No filename needs to be supplied. Every run creates a timestamped subfolder in:
-  $HOME/rosbag/year2026/10Oct/261030/inspection/
-It contains automatically named .bag files, events.jsonl, recorder.log and
-analysis.json. Send the COMPLETE run subfolder, including all split bags.
-Optional destination: --output /your/inspection/folder
-The path is on the computer where you run the Python program. All files added
-by Codex are local; nothing has been copied to the onboard computer. If bringup
-runs onboard, this bench launch must be used there, with the same startup
-parameters/remaps. Running only the capture Python beside ordinary bringup
-does not impose the motor limit and will fail its checks.
+Then use your normal keyboard, e.g.:
+  rosrun aerial_robot_base keyboard_command.py _robot_ns:=/gimbalrotor
 
-The recorder uses a 64 MiB message buffer, a 128 MiB free-space floor and
-five-minute splitting, with explicit topics (never record -a). Python's
-256 MiB startup free-space check leaves some headroom. 64 MiB is not a bound
-on total process memory. Startup waiting is limited to 180 seconds, armed
-waiting for takeoff to 30 seconds, and the active sequence to 80 seconds.
-Selected topics include IMU, servo states/targets/torque, PWM telemetry,
-motor configuration, flight state/configuration/ack, allocation matrix,
-four-axis commands, RPY terms, gimbal/mechanism commands, joint states,
-body odometry, battery status, manual/gated commands, /rosout and events.
-No video, lidar, point clouds or all-topic recording.
+Arm and request takeoff yourself. With all propellers removed, move only the
+body gently and keep clear of motors, moving gimbals and linkages. Without
+propellers the controller cannot achieve its expected climb and can request
+increased thrust. Hand movement also causes corrective servo movement; this
+is a control/communication workload test, not physical hovering.
+Stop/disarm with your keyboard when done, then Ctrl-C the recorder.
+Stopping/crashing this recorder DOES NOT stop/disarm the robot.
+Errors are evidence and do not stop recording. Optional --duration 120 stops
+only recording after 120 wall-clock seconds. No automatic arming or rearming.
 
-Recorded diagnostics
-- Raw AnyMsg payloads are examined BEFORE typed array deserialization.
-- Servo count/length checking never allocates from the embedded array count.
-- IMU checks include 60-byte length, finite values, stamp validity and quaternion
-  norm. Hand-motion magnitudes are not automatically called corruption.
-- Backwards source timestamps are counted separately; arrival/source time are
-  not treated as synchronized clocks or used to claim one-way latency.
-- PWM telemetry must remain at/below 1100, allowing one unit for conversion
-  rounding. Empty pre-arming motor arrays are valid; takeoff requires feedback
-  from at least four initialized motors after arming.
-- A servo anomaly is compared with recent actual IMU and PWM payload prefixes.
-  Offline analysis also searches the following one second of recorded messages.
-- ROS checksum/deserialization errors, phase changes and stop reasons are saved.
-- Prefix matches are evidence of overlapping bytes, not independent proof of
-  which task caused an overwrite. No match does not exclude a race.
-- The bags contain serialized ROS payload bytes AFTER the rosserial bridge.
-  They do not contain complete physical UART frames or checksum-rejected frames.
-  No second reader opens the serial port, and ST-Link is not used during capture.
+WHAT THE TOPICS AND EXTRA FILES TELL US
+- IMU + servo states: raw lengths/counts, timestamps, exact mixed-message bytes,
+  and whether the body was stationary or moving near the failure.
+- PWM + ESC telemetry + battery: output/electrical context and candidate PWM
+  payloads which might have overwritten servo bytes. ESC telemetry may be silent
+  when not enabled; no driver/configuration change is made to enable it.
+- flight state, arm/takeoff/halt, configuration and ACK: which command/state
+  transition preceded the error. 16=LOW_BATTERY and 17=FORCE_LANDING are valid
+  status overrides; the underlying navigation state is not separately encoded.
+- four-axis commands, allocation matrix, RPY terms/gains, target forces, pose PID:
+  whether control/allocation was active and its traffic around an error.
+- pwm_test: direct PWM tests, including tests performed outside normal arming.
+- actual servo target/current/torque commands and target feedback: command versus
+  feedback traffic, not just a host-side joint-state reconstruction.
+- mocap/body odometry and perching status: estimator/mode context.
+- /rosout: checksum rejections, deserialization errors, serial reconnects and
+  other node logs. A rejected serial packet never appears as an IMU/servo topic.
 
-Limits of the low-output configuration
-1100 is a PWM-equivalent command, NOT an RPM guarantee. The firmware's normal
-conversion path clamps to max_duty after allocation; min_thrust=0 prevents its
-voltage update from recalculating a minimum above the ceiling. This changes
-the bench motor profile, including the previously observed arming behavior.
-The existing control/allocation/servo code remains unchanged.
-The cap depends on the assumed firmware, the normal control path, and successful
-delivery of the motor configuration. Observing motor_info on ROS is NOT an MCU
-acknowledgement. Python's feedback checks/stop requests are additional host-side
-checks, not a hard real-time interlock or a guarantee under communication failure.
-The program rejects visible PWM-test/alternate gated-command publishers, but
-cannot prove the absence of previously enabled firmware test modes or arbitrary
-external command sources. Start from the normal disarmed controller setup.
-Unexpected loss of Python, ROS or communication can prevent a halt request.
-No flight-controller logic, firmware, gains or message rates are changed.
+The explicit topic list is TOPICS in bench_capture.py. There is no record -a,
+video, lidar or point-cloud recording. The message buffer is 64 MiB, with
+five-minute bag splitting and a free-disk check. 64 MiB is not total process RAM.
+Some topics publish only during arming/control. motor_info being not-yet-observed
+before arming is normal, and will not block or stop anything.
 
-Root-cause assessment motivating this experiment
-Strongest explanation: concurrent publishing through the same rosserial
-NodeHandle overwrites its shared message_out buffer before UART enqueue.
-Earlier Oct26 bag evidence contained exact contemporaneous IMU prefixes in
-malformed servo packets. In 22_yes.bag, the corrupt 68-byte packet claims
-65,537,000 servo entries (458,759,012 bytes required), and its first 20 bytes
-match the FORMAT of an eight-entry PWM payload with four values of 1000 and
-four zeros. That bag did not record the matching PWM topic, so the PWM-origin
-inference is not yet independently verified. This capture adds that topic.
-The user confirmed that 22_yes was disarmed while being moved by hand, so
-takeoff/motor operation is not necessary for the fault. No error in one run
-does not exclude an intermittent race. This experiment is not a guaranteed
-reproducer and does not establish that physical movement causes the failure.
+Files in each run folder:
+- Automatically named .bag files: serialized topic payloads, including malformed
+  servo payloads because capture uses raw/AnyMsg rather than typed array decode.
+- events.jsonl: errors, state changes, manual commands, rates, bounded raw samples,
+  PWM/IMU prefix overlap and one-second pre-error motion/traffic context.
+- analysis.json: final offline analysis; for each retained error/anomaly it adds
+  one-second before/after topic counts, gyro/acceleration ranges, recent manual
+  commands, flight state and PWM. Matching also searches later recorded samples.
+- metadata_start.json / metadata_end.json: selected ROS parameters, selected graph
+  connections/types, node PIDs/URIs, local git revision/status, USB identity and a
+  bounded excerpt of relevant existing local bridge logs. No all-parameter dump.
+- connections.json: actual publisher caller IDs, message types and MD5s observed.
+- recorder.log: recorder startup, disk/buffer/drop errors and finalization output.
+- .ros_capture.lock: run discovery only; an unlocked file does not mean active.
 
-Relevant local source references (relative to repository root)
-- aerial_robot_nerve/spinal/mcu_project/boards/stm32H7_v2/ros_lib/ros/node_handle.h:
-  publish serializes into shared message_out before hardware_.write.
-- aerial_robot_nerve/spinal/src/ros_lib/STM32Hardware.cpp:
-  UART queue locking occurs inside write, after serialization.
-- aerial_robot_control/include/aerial_robot_control/control/base/base.h:82-85,
-  137-153: cached startup motor limits, published during START.
-- aerial_robot_nerve/spinal/mcu_project/lib/Jsk_Lib/flight_control/attitude/attitude_control.cpp:
-  592-605 receives limits; 1044 recalculates minimum only when min_thrust>0;
-  1224-1229 clamps normal output and converts to PWM telemetry units.
-  PWM test mode bypasses this normal conversion path; this tool never enables it.
-- aerial_robot_control/include/aerial_robot_control/flight_navigation.h:
-  enums ARM_OFF=0, START=1, ARM_ON=2, TAKEOFF=3, LAND=4, HOVER=5, STOP=6.
+Source timestamps, local monotonic arrivals and bag receipt times remain separate.
+Do not infer one-way latency between unsynchronized computers. Detailed live logs
+are capped at 100 per category; counters and ordinary bag recording continue.
+History/diagnostic queues are bounded; any diagnostic queue drops are counted.
 
-Files added
-bench.launch: separate launch with bench parameters and manual-command remaps.
-bench_capture.py: user-run recorder, bounded monitor, request gates, phases/stop.
-payload_checks.py: bounded raw-payload inspection shared by live/offline tools.
-summarize_capture.py: two-pass offline audit including later prefix matches.
-test_offline.py: parser and manual-command-gate tests with fake publishers.
-README.txt: instructions, rationale and limitations.
+OPTIONAL USB BYTES: NEEDED TO SEE CHECKSUM-REJECTED FRAMES
+Topics alone cannot expose the bytes the bridge rejects. A passive USB trace
+captures host USB transfer data in both directions without opening ttyUSB0 or
+interfering with ownership of the serial port. It is not an electrical UART
+waveform or a trace of MCU task execution. The November 1 laptop capture was
+validated offline: 186,342 USB records, zero reported kernel drops, and valid
+reconstructed serial frames. This does not verify onboard kernel/adapter support.
 
-Validation performed locally
-13 offline tests passed; no ROS node or hardware publisher was run.
-The offline analyzer was run against historical 22_yes.bag: it found one
-malformed servo payload, the same 65,537,000 count, two relevant ROS log errors,
-one backwards IMU stamp and one backwards servo stamp (the corrupt packet).
-For historical 50_ins.bag: no malformed servo payload or matching ROS error;
-four backwards IMU stamps. Its normal-flight PWM samples exceeding this new
-bench ceiling are classified as ceiling violations, not message corruption.
-Hardware startup/remapping, low motor output, servos, actual stop behavior and
-reproduction rate remain untested. No production files modified; no firmware
-build/flash, live ROS execution, commit, push or deployment by Codex.
+Use the third-terminal commands above, after starting the ROS recorder. No run
+path needs copying. The script creates its own timestamped filenames in the
+automatically discovered run folder. It uses installed tcpdump, selects the
+FTDI device by serial AU0JZM07, and filters bulk transfers to that device only.
+It does not capture the camera, Bluetooth or other USB devices. It does not
+open the serial port, change its baud rate, reset/reflash the FC, load modules
+itself, or change existing node log levels. The separate modprobe command loads
+Linux's passive tracing facility; it is not a firmware operation.
+
+Look in the printed USB .log for tcpdump's listening line. Run the same manual
+trial. Stop/disarm the robot yourself, then Ctrl-C both capture terminals.
+Send the full run folder, including USB .pcap/.json/.log and ROS files. The USB
+log's final capture/drop counters matter. A replug/disconnect stops USB tracing;
+restart it to rediscover the new device address. There can be a short detection
+interval after replug; do not reuse the old trace across USB reconnections.
+
+The PCAP includes FTDI USB status bytes as well as serial data. Later analysis
+must remove FTDI packet status headers before reconstructing rosserial frames.
+Do not treat all USB payload bytes as serial bytes or infer MCU causality solely
+from the PCAP. It can show whether bad checksums/payload bytes were already
+present when the USB driver received them and whether transfer errors occurred.
+
+References for the USB method/filter (device address is header byte 11):
+https://docs.kernel.org/usb/usbmon.html
+https://www.tcpdump.org/linktypes/LINKTYPE_USB_LINUX_MMAPPED.html
+
+REPRODUCTION PLAN: VARY ONE CONDITION AT A TIME
+Start recording before manual commands and, if using USB, before arming.
+Try short independent phases with steady intervals between them:
+1. Disarmed and stationary.
+2. Disarmed with gentle hand movement.
+3. Armed and stationary (if you choose to arm).
+4. Takeoff requested, body steady, then gentle hand movement.
+5. Manual stop/disarm, then a final steady recording interval.
+Repeat to measure frequency; do not increase PWM or command/message rates just
+to force an error. Existing disarmed/stationary captures already contain errors,
+so actual flight is not a prerequisite. No deterministic trigger has been proven.
+The event context will distinguish motion/state transitions from background
+occurrences. Exact RTOS interleaving would still require firmware instrumentation
+or a verified matching debug image; the tools do not claim to provide that.
+
+WHY THE EARLIER RUN FAILED / CURRENT FINDINGS
+Run 19-06-36 recorded two checksum rejections before your arm/takeoff. The old
+script then issued 50 halt commands during cleanup, preventing your test. That
+control behavior has been removed entirely. The later passive live verification
+also uncovered a monitor bug: state 17 was incorrectly considered malformed.
+It is the valid FORCE_LANDING override; this is now recognized and tested.
+During the local verification the bridge's recent log contained checksum errors,
+and the controller reported FORCE_LANDING. These are observations; the recorder
+did not command that state. A clean 15-second sample does not exclude a rare race.
+
+The leading corruption hypothesis remains shared rosserial message_out writes
+from concurrent MCU publishers. Previous exact IMU prefixes inside corrupted
+servo packets support it. Checksum errors alone can also have other causes;
+USB bytes and configuration/state context help narrow the possibilities.
+No firmware/source equivalence was established by ST-Link; it remains assumed
+at your request. No firmware fix, flashing, control changes, commit or push.

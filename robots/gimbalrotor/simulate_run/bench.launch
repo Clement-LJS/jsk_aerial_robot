@@ -1,18 +1,13 @@
 <launch>
   <!-- PROP-OFF BENCH ONLY. Do not use this launch for flight. -->
-  <group>
-    <!-- Only the user-run bench Python forwards manual arm/takeoff requests. -->
-    <remap from="/gimbalrotor/teleop_command/start" to="/gimbalrotor/simulate_run/gated_start"/>
-    <remap from="/gimbalrotor/teleop_command/takeoff" to="/gimbalrotor/simulate_run/gated_takeoff"/>
-    <remap from="/gimbalrotor/joy" to="/gimbalrotor/simulate_run/disabled_joy"/>
-    <include file="$(find gimbalrotor)/launch/bringup.launch">
-      <arg name="real_machine" value="true"/>
-      <arg name="simulation" value="false"/>
-      <arg name="airframe" value="beetle"/>
-      <arg name="roll_yaw_perching" value="true"/>
-      <arg name="direct_model_name" value="unused"/>
-    </include>
-  </group>
+  <!-- Ordinary bringup command paths: the recorder never intercepts commands. -->
+  <include file="$(find gimbalrotor)/launch/bringup.launch">
+    <arg name="real_machine" value="true"/>
+    <arg name="simulation" value="false"/>
+    <arg name="airframe" value="beetle"/>
+    <arg name="roll_yaw_perching" value="true"/>
+    <arg name="direct_model_name" value="unused"/>
+  </include>
   <!-- roslaunch uploads all parameters before starting nodes. These override
        the included MotorInfo.yaml before the controller caches its settings.
        min_thrust=0 prevents the voltage update raising min_duty above the cap.
@@ -20,5 +15,5 @@
   <param name="/gimbalrotor/motor_info/min_pwm" value="0.5" type="double"/>
   <param name="/gimbalrotor/motor_info/max_pwm" value="0.55" type="double"/>
   <param name="/gimbalrotor/motor_info/min_thrust" value="0.0" type="double"/>
-  <param name="/gimbalrotor/simulate_run/bench_profile" value="prop_off_1100_v1"/>
+  <param name="/gimbalrotor/simulate_run/bench_profile" value="passive_prop_off_1100_v2"/>
 </launch>

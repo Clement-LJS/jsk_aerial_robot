@@ -2,10 +2,7 @@
 import math
 import struct
 
-CAP = 1100
-
-
-def inspect_payload(kind, data):
+def inspect_payload(kind, data, pwm_ceiling=None):
     result = {'length': len(data), 'issues': []}
     issues = result['issues']
     if kind in ('imu', 'servo/states'):
@@ -47,18 +44,19 @@ def inspect_payload(kind, data):
                 values = struct.unpack_from('<' + str(count) + 'H', data, 4)
                 result['values'] = values
                 # Current beetle has four motors; zero remaining entries are normal.
-                if any(x > CAP + 1 for x in values):
-                    issues.append('pwm_above_bench_cap')
+                if pwm_ceiling is not None and any(x > pwm_ceiling + 1 for x in values):
+                    issues.append('pwm_above_observation_threshold')
     return result
 
 
-def motor_info_is_capped(data):
+def read_motor_limits(data):
     if len(data) < 21:
-        return False
+        return None
     minimum, maximum, thrust, landing = struct.unpack_from('<4f', data)
-    return (all(math.isfinite(x) for x in (minimum, maximum, thrust, landing))
-            and abs(minimum - 0.5) < 1e-6
-            and abs(maximum - 0.55) < 1e-6 and thrust == 0)
+    if not all(math.isfinite(x) for x in (minimum, maximum, thrust, landing)):
+        return None
+    return dict(min_pwm=minimum, max_pwm=maximum, min_thrust=thrust,
+                force_landing_thrust=landing, max_pwm_equivalent=maximum * 2000)
 
 
 def prefix_overlap(sample, candidate):

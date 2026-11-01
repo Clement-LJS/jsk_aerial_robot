@@ -8,7 +8,7 @@ from pathlib import Path
 from payload_checks import inspect_payload, prefix_overlap
 
 
-def summarize(paths):
+def summarize(paths, pwm_ceiling=None):
     import rosbag
     prefix = '/gimbalrotor/'
     raw_topics = [prefix + k for k in ('imu', 'servo/states', 'motor_pwms')]
@@ -36,7 +36,7 @@ def summarize(paths):
                                                node=message.name, text=text))
                     continue
                 kind = topic[len(prefix):]
-                parsed = inspect_payload(kind, data)
+                parsed = inspect_payload(kind, data, pwm_ceiling=pwm_ceiling)
                 stamp = parsed.get('stamp_ns')
                 if stamp is not None:
                     if kind in previous and stamp < previous[kind]:
@@ -73,7 +73,10 @@ def summarize(paths):
         nearest = min(errors, key=lambda e: abs(e['bag_time_ns']-sample['bag_time_ns']), default=None)
         if nearest and abs(nearest['bag_time_ns']-sample['bag_time_ns']) <= 1_000_000_000:
             sample['nearby_rosout_error'] = nearest
+    from event_context import annotate
+    annotate(paths, retained + errors)
     return dict(bags=[str(p) for p in paths], counts=dict(counts), issues=dict(issues),
+                pwm_observation_threshold=pwm_ceiling,
                 backwards_stamps=dict(backwards), anomaly_total=anomaly_total,
                 samples_retained=len(retained), anomalies=retained, rosout_errors=errors,
                 interpretation='PWM ceiling violations and IMU norm outliers are observations, '
@@ -85,8 +88,10 @@ def summarize(paths):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('bags', nargs='+', type=Path)
+    parser.add_argument('--pwm-ceiling', type=float, default=None,
+                        help='Optional reporting threshold; not an enforced motor limit')
     args = parser.parse_args()
-    print(json.dumps(summarize(args.bags), indent=2, allow_nan=False))
+    print(json.dumps(summarize(args.bags, pwm_ceiling=args.pwm_ceiling), indent=2, allow_nan=False))
 
 
 if __name__ == '__main__':
