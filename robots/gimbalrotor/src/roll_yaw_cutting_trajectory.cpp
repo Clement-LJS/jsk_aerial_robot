@@ -2,6 +2,7 @@
 #include <Eigen/SVD>
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace roll_yaw
 {
@@ -12,11 +13,18 @@ bool Request::valid() const
     std::abs(pitch_start)<M_PI && std::abs(pitch_end)<M_PI &&
     (align_only || std::abs(pitch_end-pitch_start)>1e-8);
 }
+bool PlanningConfig::mechanismValid() const
+{
+  return limits.valid()&&limits.lower[0]>-M_PI&&limits.upper[0]<M_PI&&
+    limits.lower[0]<=0&&limits.upper[0]>=0&&std::isfinite(max_tilt)&&max_tilt>0&&max_tilt<M_PI/2&&
+    std::isfinite(cog_speed_limit)&&cog_speed_limit>0&&
+    std::isfinite(cog_acceleration_limit)&&cog_acceleration_limit>0;
+}
 bool PlanningConfig::valid() const
 {
   for(double x:{dt,max_tilt,orientation_tolerance,rate_tolerance,alignment_rate,alignment_acceleration,
                 max_duration,cog_speed_limit,cog_acceleration_limit}) if(!std::isfinite(x)||x<=0) return false;
-  return limits.valid()&&limits.lower[0]>-M_PI&&limits.upper[0]<M_PI&&
+  return mechanismValid()&&limits.lower[0]>-M_PI&&limits.upper[0]<M_PI&&
     limits.lower[0]<=0&&limits.upper[0]>=0&&qp.valid()&&dt>=.001&&dt<=.1&&max_tilt<M_PI/2&&
     scaling_attempts>=1&&scaling_attempts<=10&&max_duration/dt<200000;
 }
@@ -59,8 +67,8 @@ using Controls=std::array<Vec,6>;
 Controls controls(const Knot& a,const Knot& b)
 {
   const double dt=b.t-a.t;
-  return {{a.eta,a.eta+a.velocity*dt/5,a.eta+2*a.velocity*dt/5,
-           b.eta-2*b.velocity*dt/5,b.eta-b.velocity*dt/5,b.eta}};
+  return {{a.eta,a.eta+a.velocity*dt/5,a.eta+2*a.velocity*dt/5+a.acceleration*dt*dt/20,
+           b.eta-2*b.velocity*dt/5+b.acceleration*dt*dt/20,b.eta-b.velocity*dt/5,b.eta}};
 }
 template<std::size_t N> Vec bezier(std::array<Vec,N> p,double s)
 {
@@ -144,11 +152,21 @@ bool buildPath(const Kinematics& m,const Vec& initial,double duration,const std:
   return true;
 }
 }
-bool samplePath(const Kinematics& m,const Path& p,double t,Reference& r)
+bool mechanismAllowed(const Kinematics& m,const Vec& q,const PlanningConfig& c,std::string& error)
 {
-  if(!coordinates(p,t,r.eta,r.velocity,r.acceleration)||!p.desired||!m.evaluate(r.eta,r.body,r.cog)) return false;
-  r.t=std::max(0.0,std::min(t,p.duration())); r.desired=p.desired(r.t);
-  r.orientation_error=logSO3(r.body.linear().transpose()*r.desired.rotation).norm();
+  Pose b,g;
+  if(!c.mechanismValid()||!q.allFinite()||!m.evaluate(q,b,g)) { error="invalid mechanism configuration/FK"; return false; }
+  if((q.array()<c.limits.lower.array()-1e-9).any()||(q.array()>c.limits.upper.array()+1e-9).any())
+    { error="mechanism position limit"; return false; }
+  if(b.linear()(2,2)<std::cos(c.max_tilt)||!fcAttitudeAllowed(g.linear()))
+    { error="body/CoG attitude limit"; return false; }
+  return true;
+}
+bool mechanismReference(const Kinematics& m,const Vec& q,const Vec& v,const Vec& a,Reference& r)
+{
+  r=Reference(); r.eta=q; r.velocity=v; r.acceleration=a;
+  if(!q.allFinite()||!v.allFinite()||!a.allFinite()||!m.evaluate(q,r.body,r.cog)) return false;
+  r.desired.rotation=r.body.linear();
   // Differentiate FK along the interpolated configuration, including articulated
   // CoG translation and any configuration-dependent CoG orientation callback.
   const double h=1e-4;
@@ -165,6 +183,76 @@ bool samplePath(const Kinematics& m,const Path& p,double t,Reference& r)
   r.cog_acceleration=(gp.translation()+gm.translation()-2*r.cog.translation())/(h*h);
   return r.body_omega.allFinite()&&r.body_acceleration.allFinite()&&r.cog_velocity.allFinite()&&
     r.cog_acceleration.allFinite()&&r.cog_omega.allFinite()&&r.cog_angular_acceleration.allFinite();
+}
+
+bool samplePath(const Kinematics& m,const Path& p,double t,Reference& r)
+{
+  Vec q,v,a;
+  if(!coordinates(p,t,q,v,a)||!p.desired||!mechanismReference(m,q,v,a,r)) return false;
+  r.t=std::max(0.0,std::min(t,p.duration())); r.desired=p.desired(r.t);
+  r.orientation_error=logSO3(r.body.linear().transpose()*r.desired.rotation).norm();
+  return true;
+}
+bool interpolateMechanism(const Reference& from,const Vec& to,const PlanningConfig& c,Path& p,std::string& why)
+{
+  if(!c.mechanismValid()||!to.allFinite()||!from.eta.allFinite()||
+     !from.velocity.allFinite()||!from.acceleration.allFinite())
+    { why="invalid interpolation reference/target/limits"; return false; }
+  // Closed-form time bound, then Bernstein hull certification. No search or IK.
+  const Vec distance=(to-from.eta).cwiseAbs();
+  double duration=.1;
+  for(int i=0;i<3;++i) duration=std::max(duration,std::max(
+    5*distance[i]/c.limits.velocity[i],std::sqrt(20*distance[i]/c.limits.acceleration[i])));
+  for(int i=0;i<3;++i) duration=std::max(duration,4*std::abs(from.velocity[i])/c.limits.acceleration[i]);
+  Path next; next.knots={{0,from.eta,from.velocity,from.acceleration},{duration,to,Vec::Zero(),Vec::Zero()}};
+  const auto points=controls(next.knots.front(),next.knots.back());
+  std::array<Vec,5> rates;
+  for(const auto& q:points)
+    if((q.array()<c.limits.lower.array()).any()||(q.array()>c.limits.upper.array()).any())
+      { why="interpolation would cross a joint limit; hold first"; return false; }
+  for(int i=0;i<5;++i) {
+    rates[i]=5*(points[i+1]-points[i])/duration;
+    if((rates[i].cwiseAbs().array()>c.limits.velocity.array()+1e-9).any())
+      { why="interpolation velocity bound; hold first"; return false; }
+  }
+  for(int i=0;i<4;++i)
+    if(((4*(rates[i+1]-rates[i])/duration).cwiseAbs().array()>c.limits.acceleration.array()+1e-9).any())
+      { why="interpolation acceleration bound; hold first"; return false; }
+  // desired is used only by samplePath; direct navigation replaces it with FK.
+  next.desired=[rotation=Mat(from.body.linear())](double){return Desired{rotation,Vec::Zero(),Vec::Zero()};};
+  p=std::move(next); return true;
+}
+bool passivePitchTarget(const Kinematics& m,const Vec& q,double pitch,double travel,
+                        const PlanningConfig& c,double& alpha,std::string& why)
+{
+  if(!c.mechanismValid()||!q.allFinite()||!std::isfinite(pitch)||std::abs(pitch)>=M_PI/2||!std::isfinite(travel)||travel<=0)
+    { why="invalid passive pitch request"; return false; }
+  // With active joints fixed, R_WB(2,0) = A cos(alpha) + B sin(alpha) + C.
+  Pose b,g; Vec trial=q;
+  trial[0]=0; if(!m.evaluate(trial,b,g)) return false; const double f0=b.linear()(2,0);
+  trial[0]=M_PI; if(!m.evaluate(trial,b,g)) return false; const double fp=b.linear()(2,0);
+  trial[0]=M_PI/2; if(!m.evaluate(trial,b,g)) return false;
+  const double offset=(f0+fp)/2, a=(f0-fp)/2, sine=b.linear()(2,0)-offset;
+  const double radius=std::hypot(a,sine), wanted=-std::sin(pitch)-offset;
+  double best=std::numeric_limits<double>::infinity();
+  if(radius<1e-10) {
+    if(std::abs(wanted)<1e-8) best=q[0];
+  } else if(std::abs(wanted)<=radius+1e-10) {
+    const double phase=std::atan2(sine,a), angle=std::acos(std::clamp(wanted/radius,-1.0,1.0));
+    for(double sign:{-1.0,1.0}) for(int turn=-1;turn<=1;++turn) {
+      const double candidate=phase+sign*angle+turn*2*M_PI;
+      if(std::abs(candidate-q[0])>travel||candidate<c.limits.lower[0]||candidate>c.limits.upper[0]) continue;
+      // Check the passive arc as well as its endpoint; active joints stay fixed.
+      bool allowed=true; std::string error;
+      for(int i=0;i<=100&&allowed;++i) {
+        trial=q; trial[0]=q[0]+(candidate-q[0])*i/100.;
+        allowed=mechanismAllowed(m,trial,c,error);
+      }
+      if(allowed&&std::abs(candidate-q[0])<std::abs(best-q[0])) best=candidate;
+    }
+  }
+  if(!std::isfinite(best)) { why="pitch target unreachable with frozen roll/yaw within passive travel/tilt limits"; return false; }
+  alpha=best; return true;
 }
 Plan prepare(const Kinematics& model,const Vec& initial,const Mat& neutral,const Request& request,const PlanningConfig& c)
 {
@@ -199,18 +287,23 @@ Plan prepare(const Kinematics& model,const Vec& initial,const Mat& neutral,const
 }
 const char* stageName(Stage s)
 {
-  static const char* names[]={"FREE_FLIGHT","CONTACT_LOCKED","REZERO","PRE_ALIGN","READY","EXECUTING","PAUSED","COMPLETED_HOLD","FAULT_HOLD","MANUAL"};
+  static const char* names[]={"FREE_FLIGHT","CONTACT_LOCKED","PLANNING","PRE_ALIGN","READY","EXECUTING","PAUSED","COMPLETED_HOLD","FAULT_HOLD"};
   return names[static_cast<int>(s)];
 }
 bool ExecutionConfig::valid() const
 {
   for(double x:{timeout,pivot_tolerance,hinge_tolerance,tracking_tolerance,orientation_tolerance,
-                settle_rate,settle_time,settle_timeout}) if(!std::isfinite(x)||x<=0) return false;
-  return std::isfinite(future_tolerance)&&future_tolerance>=0&&future_tolerance<timeout&&settle_timeout>settle_time;
+                require_settled_on_enable?settle_rate:1.0}) if(!std::isfinite(x)||x<=0) return false;
+  return std::isfinite(future_tolerance)&&future_tolerance>=0&&future_tolerance<timeout;
+}
+bool ExecutionConfig::settlingValid() const
+{
+  for(double x:{settle_rate,settle_time,settle_timeout}) if(!std::isfinite(x)||x<=0) return false;
+  return settle_timeout>settle_time;
 }
 std::string Executor::feedbackRejection(const Feedback& s) const
 {
-  if(!config.valid()||!planning.valid()) return "invalid execution/planning configuration";
+  if(!config.valid()||!planning.mechanismValid()) return "invalid execution/mechanism configuration";
   if(!s.hover) return "contact control requires HOVER without forced landing";
   if(!s.valid) return s.invalid_reason.empty()?"invalid/incoherent feedback":s.invalid_reason;
   if(!std::isfinite(s.now)) return "invalid feedback clock";
@@ -235,7 +328,7 @@ bool Executor::capture(const Feedback& s,const Kinematics& m)
   Kinematics next=m; Vec q=s.eta; q[0]=0;
   if(!next.lock(s.body,q)) { reason="invalid fixed-pivot model"; return false; }
   std::string why;
-  if(!configurationAllowed(next,q,Desired{s.body.linear(),Vec::Zero(),Vec::Zero()},planning,why)) { reason=why; return false; }
+  if(!mechanismAllowed(next,q,planning,why)) { reason=why; return false; }
   Reference held; held.eta=q;
   if(!next.evaluate(q,held.body,held.cog)) { reason="invalid captured body/CoG FK"; return false; }
   held.desired.rotation=held.body.linear();
@@ -246,19 +339,21 @@ bool Executor::capture(const Feedback& s,const Kinematics& m)
 }
 bool Executor::accept(Plan p)
 {
-  if(stage!=Stage::REZERO||p.session!=session) return false;
+  if(!qp_planning||stage!=Stage::PLANNING||p.session!=session) return false;
   if(!p.ok) { stage=Stage::CONTACT_LOCKED; reason=p.reason; return false; }
   if(p.align.knots.size()<2||(p.align.knots.front().eta-target.eta).norm()>1e-9) { fault("plan start no longer matches held target"); return false; }
   plan=std::move(p); progress=0; speed_=1; stopping_=cancel_=false;
-  stage=plan.manual?Stage::MANUAL:Stage::CONTACT_LOCKED;
-  reason=plan.manual?plan.reason:"plan ready; align with current session ID";
+  stage=Stage::CONTACT_LOCKED;
+  reason="plan ready; align with current session ID";
   return true;
 }
 bool Executor::command(const std::string& cmd,std::uint64_t id)
 {
   if(id!=session||!owns()) { reason="stale or missing lock session"; return false; }
+  if(cmd=="prepare"&&(!qp_planning||!planning.valid()||!config.settlingValid()))
+  { reason=qp_planning?"invalid QP planning configuration":"body-orientation request requires qp_planning=true"; return false; }
   if(cmd=="prepare"&&(stage==Stage::CONTACT_LOCKED||stage==Stage::COMPLETED_HOLD))
-  { plan=Plan(); stage=Stage::REZERO; reason="preparing from held configuration"; return true; }
+  { plan=Plan(); stage=Stage::PLANNING; reason="preparing from held configuration"; return true; }
   if(cmd=="align"&&stage==Stage::CONTACT_LOCKED&&plan.ok) {
     stage=Stage::PRE_ALIGN; progress=0; speed_=1; stable_since_=ready_since_=0; return true;
   }
@@ -266,12 +361,12 @@ bool Executor::command(const std::string& cmd,std::uint64_t id)
     if(plan.cut.knots.empty()) { reason="alignment-only plan; prepare a pitch stroke to start"; return false; }
     stage=Stage::EXECUTING; progress=0; speed_=1; stable_since_=ready_since_=0; return true;
   }
-  if((cmd=="pause"||cmd=="cancel")&&(stage==Stage::PRE_ALIGN||stage==Stage::EXECUTING||stage==Stage::MANUAL))
-  { stopping_=true; cancel_=cmd=="cancel"||stage==Stage::MANUAL; reason="decelerating along validated path"; return true; }
+  if((cmd=="pause"||cmd=="cancel")&&(stage==Stage::PRE_ALIGN||stage==Stage::EXECUTING))
+  { stopping_=true; cancel_=cmd=="cancel"; reason="decelerating along validated path"; return true; }
   if(cmd=="resume"&&stage==Stage::PAUSED) {
     stage=paused_align_?Stage::PRE_ALIGN:Stage::EXECUTING; stopping_=false; return true;
   }
-  if(cmd=="cancel"&&(stage==Stage::PAUSED||stage==Stage::REZERO||stage==Stage::CONTACT_LOCKED||stage==Stage::READY||stage==Stage::COMPLETED_HOLD))
+  if(cmd=="cancel"&&(stage==Stage::PAUSED||stage==Stage::PLANNING||stage==Stage::CONTACT_LOCKED||stage==Stage::READY||stage==Stage::COMPLETED_HOLD))
   { plan=Plan(); stage=Stage::COMPLETED_HOLD; reason="cancelled; holding contact"; return true; }
   reason="command rejected in current trajectory state"; return false;
 }
@@ -287,6 +382,12 @@ void Executor::fault(const std::string& why)
   target.body_omega.setZero(); target.body_acceleration.setZero(); target.cog_velocity.setZero(); target.cog_acceleration.setZero();
   target.cog_omega.setZero(); target.cog_angular_acceleration.setZero();
   target.desired={target.body.linear(),Vec::Zero(),Vec::Zero()};
+}
+void Executor::hold(const std::string& why)
+{
+  if(!owns()||stage==Stage::FAULT_HOLD) return;
+  // Freeze at the applied reference, retaining the contact and lock identity.
+  fault(why); first_fault.clear(); stage=Stage::CONTACT_LOCKED;
 }
 void Executor::reset()
 { stage=Stage::FREE_FLIGHT; ++session; plan=Plan(); first_fault.clear(); reason="perching disabled"; last_time_=0; }
@@ -308,7 +409,7 @@ void Executor::tick(const Feedback& s)
   const double dt=s.now-last_time_; last_time_=s.now;
   if(!std::isfinite(dt)||dt<=0||dt>config.timeout) { fault("invalid execution clock step"); return; }
   if(stage==Stage::FAULT_HOLD) return;
-  if(stage!=Stage::PRE_ALIGN&&stage!=Stage::EXECUTING&&stage!=Stage::MANUAL) return;
+  if(stage!=Stage::PRE_ALIGN&&stage!=Stage::EXECUTING) return;
   const auto& path=stage==Stage::EXECUTING?plan.cut:plan.align;
   if(!plan.ok||plan.session!=session) { fault("trajectory ownership/session mismatch"); return; }
   const double speed_acc=std::min((planning.limits.acceleration.array()/planning.limits.velocity.array()).minCoeff(),
@@ -332,15 +433,15 @@ void Executor::tick(const Feedback& s)
   // a pending cancel/disable stranded there.
   if(stopping_&&(speed_==0||progress>=path.duration())) {
     paused_align_=stage==Stage::PRE_ALIGN; stage=cancel_?Stage::COMPLETED_HOLD:Stage::PAUSED;
+    // A hold must not retain the final deceleration feed-forward indefinitely.
+    target.velocity.setZero(); target.acceleration.setZero();
+    target.body_omega.setZero(); target.body_acceleration.setZero();
+    target.cog_velocity.setZero(); target.cog_acceleration.setZero();
+    target.cog_omega.setZero(); target.cog_angular_acceleration.setZero();
+    target.desired={target.body.linear(),Vec::Zero(),Vec::Zero()};
     if(cancel_) plan=Plan(); stopping_=cancel_=false; reason="stopped at contact-consistent reference"; return;
   }
   if(progress>=path.duration()) {
-    // A discrete manual move ends at rest, without the automatic READY settling
-    // gate. The next increment separately requires close measured tracking.
-    if(stage==Stage::MANUAL) {
-      stage=Stage::COMPLETED_HOLD; plan=Plan();
-      reason="manual increment complete; holding contact"; return;
-    }
     if(ready_since_==0) ready_since_=s.now;
     const bool settled=s.joint_rate.tail<2>().norm()<config.settle_rate&&s.body_omega.norm()<config.settle_rate;
     if(!settled) stable_since_=0; else if(stable_since_==0) stable_since_=s.now;

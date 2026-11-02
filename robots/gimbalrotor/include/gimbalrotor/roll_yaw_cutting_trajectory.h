@@ -20,6 +20,7 @@ struct PlanningConfig
   double alignment_rate=.04, alignment_acceleration=.02, max_duration=180;
   double cog_speed_limit=.1, cog_acceleration_limit=.2;
   int scaling_attempts=5;
+  bool mechanismValid() const;
   bool valid() const;
 };
 struct Desired { Mat rotation=Mat::Identity(); Vec omega=Vec::Zero(), acceleration=Vec::Zero(); };
@@ -34,7 +35,7 @@ private:
   double distance_,sign_,speed_,ramp_,feed_;
 };
 Desired cuttingOrientation(const Mat& neutral,const Request&,double theta,double rate,double acceleration);
-struct Knot { double t=0; Vec eta=Vec::Zero(), velocity=Vec::Zero(); };
+struct Knot { double t=0; Vec eta=Vec::Zero(), velocity=Vec::Zero(), acceleration=Vec::Zero(); };
 struct Reference
 {
   double t=0, orientation_error=0;
@@ -54,7 +55,6 @@ struct Path
 struct Plan
 {
   bool ok=false;
-  bool manual=false;
   std::uint64_t session=0;
   int scale_attempt=0;
   std::string reason;
@@ -62,10 +62,17 @@ struct Plan
   Path align,cut;
 };
 bool samplePath(const Kinematics&,const Path&,double time,Reference&);
+// Solver-free FK and short, bounded interpolation used by manual navigation.
+bool mechanismAllowed(const Kinematics&,const Vec&,const PlanningConfig&,std::string&);
+bool mechanismReference(const Kinematics&,const Vec&,const Vec&,const Vec&,Reference&);
+bool interpolateMechanism(const Reference&,const Vec&,const PlanningConfig&,Path&,std::string&);
+// Analytic one-axis pitch reachability; never changes active joints or invokes IK/QP.
+bool passivePitchTarget(const Kinematics&,const Vec&,double pitch,double travel,
+                        const PlanningConfig&,double& alpha,std::string&);
 Plan prepare(const Kinematics&,const Vec& initial,const Mat& neutral,const Request&,const PlanningConfig&);
 
-enum class Stage { FREE_FLIGHT, CONTACT_LOCKED, REZERO, PRE_ALIGN, READY, EXECUTING,
-                   PAUSED, COMPLETED_HOLD, FAULT_HOLD, MANUAL };
+enum class Stage { FREE_FLIGHT, CONTACT_LOCKED, PLANNING, PRE_ALIGN, READY, EXECUTING,
+                   PAUSED, COMPLETED_HOLD, FAULT_HOLD };
 const char* stageName(Stage);
 struct Feedback
 {
@@ -79,6 +86,7 @@ struct ExecutionConfig
   double timeout=.15, future_tolerance=.02, pivot_tolerance=.01, hinge_tolerance=.03;
   double tracking_tolerance=.04, orientation_tolerance=.04, settle_rate=.01, settle_time=.5, settle_timeout=10;
   bool require_settled_on_enable=false;
+  bool settlingValid() const;
   bool valid() const;
 };
 class Executor
@@ -90,6 +98,7 @@ public:
   std::string first_fault;
   ExecutionConfig config;
   PlanningConfig planning;
+  bool qp_planning=false;
   Kinematics model;
   Reference target;
   Estimate measured;
@@ -104,6 +113,7 @@ public:
   void tick(const Feedback&);
   void fault(const std::string&);
   void reset();
+  void hold(const std::string&);
 private:
   double last_time_=0, stable_since_=0, ready_since_=0, speed_=1;
   bool stopping_=false, cancel_=false, paused_align_=false;

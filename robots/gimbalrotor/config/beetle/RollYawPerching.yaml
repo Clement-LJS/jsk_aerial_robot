@@ -7,6 +7,19 @@ controller:
 navigation:
   perching_enable: false
   roll_yaw_perching:
+    # Common base lifecycle: enable/capture -> nominal target -> update/FK -> controller.
+    # Manual targets always mean [passive alpha, active roll, active yaw].
+    qp_planning: false
+    # Explicit setup: keyboard e -> z -> measured ready-HOLD -> b -> navigate.
+    # Rezero uses only the configured passive hinge, with measured active joints frozen.
+    pitch_rezero_target_pitch: 0.0
+    pitch_rezero_rate_limit: 0.1745329
+    pitch_rezero_max_delta: 0.5235988
+    pitch_rezero_pitch_tolerance: 0.0349066
+    pitch_rezero_rate_tolerance: 0.05
+    pitch_rezero_stable_duration: 0.3
+    pitch_rezero_timeout: 10.0
+    pitch_rezero_joint_hold_tolerance: 0.02
     roll_joint: joint_roll
     yaw_joint: joint_yaw
     contact_link: roll_hand_link
@@ -58,18 +71,16 @@ navigation:
     settle_rate: 0.01
     settle_time: 0.5
     settle_timeout: 10.0
-    # manual_delta: Vector3Stamped, x=roll/y=local pitch/z=yaw increments [rad].
-    # frame_id=perching_lock_<session>, strictly increasing fresh ROS stamp;
-    # exactly one nonzero axis; all-zero vector cancels/decelerates and holds.
-    manual_max_step: 0.00872664626 # 0.5 degrees; hard implementation ceiling 1 degree
-    manual_command_timeout: 0.25
-    # Manual tracking bound, not an endpoint settling requirement. Checked for
-    # both the held target and the proposed endpoint against fresh measurements.
-    # 0.03 rad (1.72 deg) accommodates the recorded hold error while remaining
-    # below BOTH execution tracking limits (0.04 rad). One increment at a time.
+    # target: Vector3Stamped absolute x=active roll/y=passive alpha/z=active yaw.
+    # frame_id=perching_lock_<base lock timestamp ns>; stamps are informational.
+    # Feedback/commands use local receipt freshness, never laptop/onboard clock age.
+    # cancel: UInt64 current lock identity; holds the applied reference (no zeroing).
+    # manual_pitch_delta and pitch-only uav/nav retain absolute lock-relative alpha.
+    manual_max_step: 0.00872664626 # max lookahead from applied reference, 0.5 deg
+    # Proposed and applied references must remain within this measured bound.
     manual_tracking_tolerance: 0.03
     request:
-      # Only explicit prepare/align/start use this automatic request.
+      # Only qp_planning=true and explicit prepare/align/start use this body request.
       # Relative to N = measured body orientation at this contact lock.
       body_yaw: 0.523598775598
       body_roll: 0.0

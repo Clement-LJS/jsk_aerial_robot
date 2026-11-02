@@ -1,4 +1,5 @@
-**Last updated:** 2026-08-17  
+**Last updated:** 2026-11-02
+
 **Documented branch:** `develop/pochitab_passiveperching/main`  
 
 ## Keyboard command
@@ -24,45 +25,72 @@ source ~/ros/jsk_aerial_robot_ws/devel/setup.bash
 rosrun gimbalrotor keyboard_roll_yaw_perching.py
 ```
 
-Press a motion key, type a number in **degrees**, then Enter. Wait for **Done**
-before the next move. Example: `r`, `t`, wait for HOVER, `e`, `y` → `30` → Enter,
-wait, `o` → `30` → Enter, wait, `u` → `10` → Enter, wait, `c` → `20` → Enter.
+Tap a paired motion key for a small step (default 0.2 degrees); there are no
+numeric destination prompts or per-key planning transactions.
 
 | Key | Action |
 | --- | --- |
-| `r`, `t`, `e` | Arm, take off, enable perching |
-| `y` | Enter desired body yaw relative to the contact lock |
-| `o` | Enter desired body roll relative to the contact lock |
-| `u` | Enter a positive amount to raise local pitch |
-| `c` | Enter a positive amount for the downward local pitch stroke |
-| `v` | Set pitch speed in degrees/second (default 1.72) |
-| Space | Pause/resume the current motion |
-| `x` | Cancel the motion and hold contact |
+| `r`, `t` | Arm, take off |
+| `e`, `d` | Enable/capture, disable perching |
+| `j`, `l` | Active yaw joint − / + |
+| `a`, `f` | Active roll joint − / + |
+| `i`, `k` | Passive-hinge alpha + / −, relative to the current lock |
+| `z` | Explicit body pitch rezero with measured roll/yaw joints frozen |
+| `b` | Explicit relock while remaining perched |
+| Space | Stop advancement and hold; QP motion decelerates first |
+| `g`, `h` | Land, HALT motors |
 | `s`, `?` | Status, help |
-| `d` | Disable perching while holding; releases the Gazebo fixture |
-| `l` | Land after perching has been disabled and physical contact released |
-| `h` | Halt motors |
-| `q`, Ctrl+C | Quit; request cancellation of this keyboard's unfinished move |
+| `q`, Ctrl+C | Request stop, retain contact hold, restore terminal and quit |
 
-Yaw/roll are body targets, not direct joint positions. Pitch-up decreases local
-pitch; downward cutting increases it. Thus `u 10` followed by `c 20` moves from
-0° to −10°, then to +10°. Pitch is about the aligned body-local Y axis, with the
-same fixed contact maintained through coordinated active joints, passive hinge,
-body orientation and CoG position. It is not a world-vertical translation.
+Supported setup: **physically perch → e → z → wait PITCH_REZERO_HOLD → b → navigate**.
+Enable only captures measured contact; it does not start rezero. Manual motion is
+available immediately after a valid lock if no setup operation is pending. Rezero
+uses the calibrated passive axis, joint/tilt/travel/rate limits, and an analytic
+reachability check with the active joints fixed. Readiness requires measured
+pitch error and pitch rate to remain within tolerance for the configured duration.
+ACTIVE and ready-HOLD block manual input until deliberate relock. A failed setup
+holds and requires cause resolution and disable/retry; relock cannot clear it.
+Relock acknowledges a fresh base lock identity and measured target baseline.
 
-The script handles session identities, preparation, alignment and execution.
-It can reconnect to an existing settled lock using the navigator's current
-target angles. It never publishes direct servo or free-flight pose commands.
-The navigator retains all feasibility/tracking checks. No saw motor is actuated.
+```yaml
+navigation:
+  roll_yaw_perching:
+    qp_planning: false
+```
 
-Verified through the actual keyboard process in headless Gazebo: arm/takeoff,
-contact lock, yaw 30°, roll 30°, pitch up 10°, then downward pitch 20° with
-pause/resume. A restarted keyboard adopted the held pose, moved to roll 45°,
-and passed pitch-up, cancellation and quit-during-planning checks. The upward
-stroke changed both active joint angles, estimated passive angle, body attitude
-and body position. Peak sampled pivot/body tracking errors were 5.5 mm / 0.88°.
-The rebuilt planner passed 15 checks and the keyboard state handling passed seven.
-Hardware launch parameters were checked without starting hardware nodes.
+Missing/false selects direct FK. Roll/yaw are URDF joint angles and pitch is the
+passive hinge coordinate; positive joint motion can produce negative body rotation.
+The keyboard reads applied mechanism targets and sends small absolute targets to
+`perching/roll_yaw/target` (`Vector3Stamped`: x=roll, y=alpha, z=yaw). The frame ID
+is `perching_lock_<base lock timestamp in nanoseconds>`. Repeated absolute targets
+are idempotent, and nominal lookahead is bounded against the applied reference.
+Space uses `perching/roll_yaw/cancel` with the current `UInt64` lock identity; it
+never commands zero joints or a return to the old lock. Keyboard freshness uses
+local monotonic receipt time. The navigator does not compare laptop command stamps
+with its clock; onboard estimator/joint source-time checks remain in place.
+
+With `qp_planning: true`, explicit `prepare`, `align`, `start`, `pause`, `resume`,
+and `cancel` topics under `perching/roll_yaw` accept the current `UInt64` session.
+`navigation/roll_yaw_perching/request` specifies the existing lock-relative **body**
+orientation request in radians. This optional planner feeds the same FK/output
+path. Manual key meanings do not change; a manual key cancels the QP producer,
+decelerates along its validated path, then applies the latest small step from the
+stopped reference. Failed plans hold with a reason and never fall back to another
+motion. QP-only settings cannot invalidate ordinary FK capture/navigation.
+
+The common hooks are base enable/disable and measured lock identity, the shared
+recursive state lock, `applyManualPitchDelta`, and the base update's virtual
+`applyActivePerchingTarget`. Roll–yaw retains its own passive-hinge FK, articulated
+CoG conversion, named active-joint output, optional QP producer, and setup state.
+The legacy pitch topic and pitch-only `uav/nav` position command mean absolute
+lock-relative alpha; independent translations/body roll/yaw are rejected while
+perched. Normal, multilink and pitch-only implementations and key mappings are
+unchanged, including pitch-only servo set/freeze/unfreeze and unperch/release.
+No passive actuator or saw command is published.
+
+Validation for this revision: catkin package build and offline FK/QP/keyboard
+checks. These do not establish simulated or hardware flight performance; earlier
+large-destination keyboard flight results do not validate this revised workflow.
 
 ### `keyboard_changerpy.py`
 
