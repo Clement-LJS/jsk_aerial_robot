@@ -1,0 +1,84 @@
+ST-LINK FIRMWARE COMPARISON — 2026-10-30
+
+Conclusion
+The controller's flash was successfully read. It does not match either saved
+local H7/H7_v2 firmware artifact. Exact equivalence to CURRENT SOURCE is not
+established: saved binaries are not a fresh build of the current source.
+Different binaries alone do not prove different source (compiler, options,
+generated headers and build configuration can also cause differences).
+
+Local checkout
+Branch: develop/pochitab_passiveperching/main
+HEAD: e01f640d347a3e721e2a8a121945337da0047143
+No tracked changes were present before or after this inspection.
+
+Hardware/read method
+ST-Link serial: 380041001900004C4732504E
+STM32H7xx, device ID 0x450, revision V, Cortex-M7, flash 2 MiB.
+CubeProgrammer 2.9.0-RC01, SWD HOTPLUG, requested 1000 kHz (reported 950).
+Read 0x08000000–0x081FFFFF into flash.bin; tool reports successful completion.
+Command options: -c port=SWD sn=380041001900004C4732504E
+                 mode=HOTPLUG freq=1000 -u 0x08000000 0x200000 <flash.bin>
+Here -u means upload FROM target memory TO a local file. No write, erase,
+reset, halt, resume, option-byte modification or firmware execution command
+was issued. The log's 'Reset mode: Software reset' is a configuration field;
+the operation selected HOTPLUG and did not request a reset.
+No guarantee of zero timing perturbation from debugger reads is implied.
+
+Comparison
+The .bin bytes at flash base and every file-backed flash LOAD segment in each
+.elf were compared. The comparison does not include unrelated saved settings
+as executable bytes. The H7_v2 linker reserves 0x081E0000–0x081FFFFF for DATA.
+
+Saved H7 build: 238120 bytes; 214862 byte positions differ.
+Saved H7_v2 build: 270456 bytes; 259237 byte positions differ.
+Both first differ at 0x08000004, the reset-vector entry, inside executable image.
+Target reset vector: 0x0801CDF9.
+Saved H7 reset vector: 0x0801921D.
+Saved H7_v2 reset vector: 0x080207B9.
+Both ELF flash LOAD segments also differ for each board.
+Thus persistent settings alone cannot explain the mismatch. These ELF files
+must not be treated as matching target symbols for address-level debugging.
+Mismatch counts are positional byte comparisons, not counts of changed logic:
+relocation/layout changes can cause many differences.
+
+Relationship to current source
+Embedded LwIP source paths in target flash identify stm32H7_v2 build paths.
+This strongly supports the H7_v2 build variant; the CPU device ID by itself
+does not distinguish board variants.
+Target flash contains servo/target_states_debug and
+perching/servo_neutral_mode. Both occur in current source, but neither occurs
+in the saved H7_v2 binary. References relative to repository root:
+  aerial_robot_nerve/spinal/mcu_project/lib/Jsk_Lib/servo/servo.h:42
+  aerial_robot_nerve/spinal/mcu_project/lib/Jsk_Lib/flight_control/attitude/attitude_control.cpp:58
+The target also contains MD5 strings matching the local generated Imu,
+ServoStates, ServoState and Pwms headers (values in comparison.json).
+These are partial consistency checks, not a complete source or runtime proof.
+String presence cannot prove which code paths are active, nor verify that
+serialization or task synchronization implementation is identical.
+
+Effect on the rosserial investigation
+The findings do not prove a firmware-version mismatch caused corruption.
+The observed message MD5 strings are consistent with the local message types.
+The previously supported shared-serialization race remains a hypothesis for
+the installed firmware until its relevant implementation can be matched or
+traced. Do not blindly use addresses from the existing ELF files to probe it.
+
+Remaining verification
+A reproducible isolated build of current source with the correct compiler,
+options and generated headers, followed by comparison of flash load segments,
+or the exact ELF/build provenance used to flash this controller, is needed to
+establish a stronger source-to-device match. No firmware build was performed;
+the original task document excludes compilation and the present operation
+was limited to the requested read and inspection.
+
+Files created in this directory
+flash.bin: complete 2 MiB readback, SHA256
+  5d2d15ce0aa4f3b0cd6d2603bb59fc2dd5ef332b0401e0d37619df35d57e2e86
+read_flash.log: original CubeProgrammer output.
+compare_flash.py: offline comparison helper; executed successfully.
+comparison.json: hashes, binary/ELF differences and string checks.
+report.txt: this report.
+
+No production source, configuration or existing build artifact changed.
+No commit, push, flash, ROS launch, actuator command or simulation run.

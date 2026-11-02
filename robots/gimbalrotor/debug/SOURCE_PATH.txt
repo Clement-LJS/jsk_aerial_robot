@@ -1,0 +1,84 @@
+SOURCE CONNECTION TO NORMAL ROLL/YAW PERCHING BRINGUP
+
+Deployment context supplied by the user: local source is the source running on
+the onboard PC and FC; laptop is ROS master. No live node, master, device, firmware
+or remote checkout was queried for this reorganization. The source manifest is
+a reproducibility snapshot, not independent verification of a flashed binary.
+
+1. Launch selection
+robots/gimbalrotor/launch/bringup.launch declares roll_yaw_perching (with both
+underscores), not roll_yawperching. It requires airframe=beetle for this mode.
+It selects aerial_robot_navigation/gimbalrotor_roll_yaw_perching_navigation and
+aerial_robot_control/gimbalrotor_controller, loads beetle control configuration,
+and starts aerial_robot_base_node, the sensors include, and servo_bridge.
+Do not run a second bringup to use the offline reproduction.
+
+2. Onboard allocation/control
+config/beetle/GimbalrotorControl.yaml enables gimbal_calc_in_fc.
+src/control/gimbalrotor_controller.cpp: sendCmd() calls
+sendTorqueAllocationMatrixInv() and sendFourAxisCommand(). The matrix is derived
+from integrated_map_inv_rot_; rows are scaled into the wire representation.
+FourAxisCommand carries target roll/pitch and translational force components;
+angles[2] is candidate_yaw_term_, not simply a target yaw angle.
+These are existing production calculations, not replacements in the Python tool.
+
+3. Flight-controller response
+aerial_robot_nerve/spinal/mcu_project/lib/Jsk_Lib/flight_control/attitude/
+attitude_control.cpp receives these commands, combines attitude/rate feedback
+with force components, calculates gimbal angles (one-DOF atan2f(-f_i.x, f_i.z),
+including the existing low-pass update), converts thrust into bounded PWM and
+populates pwms_msg_. Periodic pwms_pub_.publish(&pwms_msg_) sends motor telemetry.
+That periodic publication also occurs disarmed. Do not confuse this outgoing
+PWM telemetry with an incoming motor command.
+
+4. Separate servo feedback task
+H7_v2 Src/main.cpp has one nh_, given to controller and servo objects. coreTask
+updates estimator/controller; the separately scheduled servo task calls
+servo_.update(). DirectServo::sendData() publishes servo_state_msg_ through nh_.
+H7 has the corresponding structure. F7's CAN path is different and must not be
+assumed equivalent. FreeRTOS preemption/time slicing permits switches between
+equal-priority realtime tasks; equal priority is not mutual exclusion.
+
+5. Shared outgoing construction
+boards/stm32H7_v2/ros_lib/ros/node_handle.h: NodeHandle_::publish(int, Msg*) uses
+one message_out buffer. It serializes at offset 7, writes the header, computes
+the checksum, then calls hardware_.write(). NodeHandleStm_ adds no protection
+around this whole operation. STM32Hardware::write() takes the TX queue mutex
+after serialization; it cannot protect earlier writes to message_out.
+
+6. Host reception and symptom
+rosserial validates framing/checksum and forwards topic payloads. A checksum
+calculated after mixing can be valid. servo_bridge subscribes to typed
+spinal/ServoStates and publishes joint_states. A corrupted count makes typed
+deserialization fail before the callback can handle the sample. Validation must
+therefore happen before typed deserialization, not merely inside that callback.
+
+HOW THE PYTHON REPRODUCTION CORRESPONDS
+The reviewed generated serializers use sequential little-endian scalar writes:
+ServoStates = time(8) + count(4) + 7 bytes per servo; Pwms = count(4) + 2 per motor.
+The Python port uses those exact widths, order and frame checksum algorithm.
+It forces a switch after 20 servo payload bytes, publishes an entire PWM frame,
+then resumes servo serialization. Resumption overwrites the PWM checksum that
+temporarily occupies servo payload byte 20. The completed servo header/checksum
+therefore surrounds a 20-byte PWM prefix and the remaining valid servo fields.
+The malformed count is 0x03e803e8 = 65537000.
+
+This byte boundary is a deliberately selected diagnostic schedule. Actual
+compiler instruction scheduling and RTOS preemption were not measured by a bag.
+The preceding valid servo sample is used for the modeled suffix; it is not known
+to be the exact values of the interrupted sample. The report explicitly states
+whole-payload equality and differing offsets rather than manufacturing equality.
+
+5_pidtuning establishes that four_axes/command and torque_allocation_matrix_inv
+were present during flight, but had stopped approximately 20 s before this error.
+The FC continued normal PWM and servo telemetry after disarm. Thus allocation is
+part of the real execution path but active allocation is not required at the
+instant of this corruption. Reimplementing allocation in a laptop Python node
+would not recreate the MCU task scheduler, nor prove this race.
+
+BOUNDARY OF THE CLAIM
+The script fails if any of the 15 reviewed sources changes. It is a source-pinned
+port and recorded-data replay, not execution of those C++ functions. It confirms
+the decoding failure and that a possible interleaving produces the same prefix,
+count and valid checksum. Proof of a naturally occurring MCU overlap, and proof
+that a production fix removes it, require the separate live procedure.

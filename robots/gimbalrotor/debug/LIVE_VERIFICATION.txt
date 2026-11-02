@@ -1,0 +1,102 @@
+FUTURE LIVE VERIFICATION -- NOT IMPLEMENTED OR RUN BY THIS CHANGE
+
+The current robot/recording stays untouched. No build, ROS environment setup,
+master calls, firmware patch, flashing, probe attachment or deployment is done.
+The following requires a later maintenance session. A Python node cannot force
+a specific MCU task switch through ordinary ROS subscriptions or control commands.
+
+Stage A: Establish deployment identity after shutdown
+Record actual FC board, compiler/build options (including SERVO_FLAG and RTOS),
+source revision plus uncommitted diff, and firmware image hash. Build the matching
+image in an isolated workspace and compare loadable flash segments with a saved
+readback, accounting for configuration/flash data regions. Record onboard bridge
+revision too. User-supplied source equivalence is the present working premise;
+this step adds independently reproducible binary provenance.
+
+Stage B: Observe a natural overlap without using rosserial to log rosserial
+Prepare an explicitly diagnostic firmware variant, preserving controller and
+allocation logic. Use a bounded RAM trace with per-task slots, task ID, monotonic
+tick/cycle counter, topic ID, publication sequence, serialize start/end, frame
+completion, queue-copy start/end and small bounded payload snapshots. Include
+trace-overflow counters and quantify instrumentation cost. Trace writes must be
+nonblocking and must not call nh.publish/log*, allocate memory, or wait for UART.
+Drain the trace only after the test/disarm using a separately reviewed method.
+Any ST-Link halt/readback must occur after motor power is disconnected, not live.
+
+Begin stationary and disarmed, with propellers removed. Keep ordinary bringup
+and selected-topic recording. The same periodic telemetry already reproduced
+the problem in 5_pidtuning; flight or extra ROS command traffic is unnecessary.
+Store raw RX bytes before host parsing/checksum rejection, with monotonic times
+and capture-overflow counters. The present VIM4 cannot run usbmon. A diagnostic
+bridge with bounded asynchronous binary capture is an alternative, but needs a
+separate build/restart and performance check. Do not open a second reader on tty.
+
+Positive causal evidence requires overlap of two publishers using the same
+buffer, a snapshot showing the foreign prefix before queue-copy, matching host
+RX payload and the resulting decoder failure. A trace that changes timing may
+hide the race; a clean run alone does not prove absence.
+
+Stage C: Force a controlled interleaving on a bench diagnostic build
+Use an explicit test-only hook at the generated servo serializer's payload offset
+20 and barriers between the real servo/core tasks. Pause the servo publisher,
+let the real PWM publisher complete, then resume servo serialization. Retain
+actual NodeHandle::publish, generated serializers and queue-copy implementation.
+Do not inject a fabricated array count or replace the payload with bad bytes:
+the observed corruption must arise from overlapping genuine publications.
+
+Gate injection to DISARMED with motor power disconnected and propellers removed;
+timeout must cancel the test rather than leave a core/servo task blocked. Give
+the hook a one-shot limit. Initially direct test frames to a bounded capture sink,
+not an ordinary live typed subscriber that may allocate hundreds of megabytes.
+Check expected prefix/count/checksum offline. Hooks change scheduling and must
+never be present in normal flight firmware. Their exact insertion and barrier
+design require review against the verified board/build; no generic drop-in hook
+is supplied because an incorrectly placed barrier can deadlock these tasks.
+
+Stage D: Verify the fix and its timing
+The intended firmware fix protects the entire serialize -> header/checksum ->
+enqueue-copy transaction for EVERY publisher sharing message_out. Review separate
+serialization and TX locks, initialization, lock ordering, all caller contexts,
+logging recursion/oversize handling and priority inheritance. Reusing the TX mutex
+around publish can deadlock when hardware.write takes it again. Do not block an
+ISR with a task mutex; identify such callers first. Measure control-loop deadline
+misses and lock contention before accepting the fix.
+
+Run the same attempted overlap after the fix: the PWM task must wait outside the
+protected transaction, allowing the servo task to finish. A test barrier must
+not wait inside the lock for a competing publisher to finish (that would create
+a test-induced deadlock). Verify both complete frames remain correct. Also test
+normal serialized operation, oversize/error paths and queue-full handling.
+
+Independently add host validation before typed servo decoding: require a complete
+header, count fitting remaining payload bytes, exact schema length and the
+configuration's allowed servo count. Use bounded warnings/counters; drop invalid
+packets and continue. Eight is this robot's count, not a universal rosserial rule.
+Validate against the existing corrupt bag without replaying it into a live graph.
+This protects the host but does not replace the firmware fix.
+
+Stage E: Exercise the unchanged allocation/control path
+After the stationary before/after test, use a separately scheduled propeller-off
+bench run of the same roll_yaw_perching navigation and gimbalrotor controller.
+The existing debug/simulate_run/bench.launch includes normal bringup with beetle
+and roll_yaw_perching=true and applies a startup-only 1100 PWM-equivalent cap.
+It replaces ordinary bringup for that bench session; do not run both. The cap
+changes achievable outputs, so this is workload validation, not flight dynamics
+validation. User controls arm/takeoff/stop; no automated actuator commands.
+Record allocation matrices, four-axis commands, IMU, PID terms, PWM, servo targets
+and feedback to confirm the path remains active and control deadlines are met.
+
+Acceptance evidence
+  - Original and diagnostic/fixed source/build/image identities saved.
+  - Recorded error reproduced offline; controlled original-code overlap produces
+    valid-checksum mixed content without fabricating a malformed payload.
+  - Natural trace evidence, if obtained, links the historical symptom to overlap.
+  - Fixed transaction prevents the forced overlap without task deadlock/delay.
+  - Host rejects existing malformed sample before large allocation, then accepts
+    subsequent valid samples without a joint-feedback interruption.
+  - Repeated stationary and control-workload runs report duration, message counts,
+    capture/trace drops, checksum failures, decoder failures and timing results.
+
+No arbitrary short clean duration establishes a rare fault is gone. Separate
+backward IMU timestamps from mixed-payload failures; time-sync behavior needs its
+own investigation and is not automatically fixed by a publication lock.

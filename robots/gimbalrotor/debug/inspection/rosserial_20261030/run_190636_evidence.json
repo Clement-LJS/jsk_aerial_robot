@@ -1,0 +1,100 @@
+{
+  "folder": "/home/clement/rosbag/year2026/10Oct/261030/inspection/2026-10-30-19-06-36-093306",
+  "bag_duration_s": 12.096302270889282,
+  "topic_counts": {
+    "/gimbalrotor/battery_voltage_status": 100,
+    "/gimbalrotor/flight_config_ack": 50,
+    "/gimbalrotor/flight_config_cmd": 50,
+    "/gimbalrotor/flight_state": 475,
+    "/gimbalrotor/imu": 2133,
+    "/gimbalrotor/joint_states": 592,
+    "/gimbalrotor/motor_pwms": 117,
+    "/gimbalrotor/rpy/pid": 117,
+    "/gimbalrotor/servo/states": 592,
+    "/gimbalrotor/servo/target_states_debug": 592,
+    "/gimbalrotor/servo/torque_states": 12,
+    "/gimbalrotor/simulate_run/events": 108,
+    "/gimbalrotor/teleop_command/halt": 50,
+    "/gimbalrotor/teleop_command/start": 1,
+    "/gimbalrotor/teleop_command/takeoff": 1,
+    "/gimbalrotor/uav/baselink/odom": 1183,
+    "/rosout": 103
+  },
+  "states": {
+    "0": 425,
+    "6": 50
+  },
+  "flight_config_cmd_hex_counts": {
+    "01": 50
+  },
+  "manual_requests": [
+    {
+      "topic": "/gimbalrotor/teleop_command/start",
+      "bag_time_jst": "2026-10-30T19:06:44.940+09:00"
+    },
+    {
+      "topic": "/gimbalrotor/teleop_command/takeoff",
+      "bag_time_jst": "2026-10-30T19:06:46.443+09:00"
+    }
+  ],
+  "imu_gyro_peak_rad_s": 0.004401402685916539,
+  "imu_acc_norm_range_m_s2": [
+    9.787897189046808,
+    9.81478726664084
+  ],
+  "analysis": {
+    "bags": [
+      "/home/clement/rosbag/year2026/10Oct/261030/inspection/2026-10-30-19-06-36-093306/2026-10-30-19-06-36_0.bag"
+    ],
+    "counts": {
+      "/rosout": 103,
+      "/gimbalrotor/imu": 2133,
+      "/gimbalrotor/servo/states": 592,
+      "/gimbalrotor/motor_pwms": 117
+    },
+    "issues": {
+      "rosout_error": 2
+    },
+    "pwm_observation_threshold": 1100,
+    "backwards_stamps": {},
+    "anomaly_total": 0,
+    "samples_retained": 0,
+    "anomalies": [],
+    "rosout_errors": [
+      {
+        "bag": "/home/clement/rosbag/year2026/10Oct/261030/inspection/2026-10-30-19-06-36-093306/2026-10-30-19-06-36_0.bag",
+        "bag_time_ns": 1793354803361594687,
+        "node": "/gimbalrotor/rosserial_server",
+        "text": "Rejecting message on topicId=153, length=61 with bad checksum."
+      },
+      {
+        "bag": "/home/clement/rosbag/year2026/10Oct/261030/inspection/2026-10-30-19-06-36-093306/2026-10-30-19-06-36_0.bag",
+        "bag_time_ns": 1793354803382383441,
+        "node": "/gimbalrotor/rosserial_server",
+        "text": "Rejecting message on topicId=157, length=69 with bad checksum."
+      }
+    ],
+    "interpretation": "PWM ceiling violations and IMU norm outliers are observations, not proof of serialization corruption. Exact prefix matches support mixing but do not by themselves prove the firmware mechanism. ROS bag bytes are payloads after the bridge, not raw UART framing. No anomalies does not exclude a rare race."
+  },
+  "passive_monitor_replay": {
+    "counts": {
+      "imu": 2133,
+      "flight_state": 475,
+      "servo/states": 592,
+      "motor_pwms": 117,
+      "rosout_error": 2,
+      "teleop_command/halt": 50,
+      "teleop_command/start": 1,
+      "teleop_command/takeoff": 1
+    },
+    "issues": {
+      "rosout_error": 2
+    },
+    "events": {
+      "flight_state": 100,
+      "rosout_error": 2,
+      "manual_command_observed": 52,
+      "detail_limit": 1
+    }
+  }
+}

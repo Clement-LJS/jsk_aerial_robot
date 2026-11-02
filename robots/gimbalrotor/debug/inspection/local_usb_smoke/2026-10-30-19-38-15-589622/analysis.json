@@ -1,0 +1,19 @@
+{
+  "bags": [
+    "inspection/local_usb_smoke/2026-10-30-19-38-15-589622/2026-10-30-19-38-15_0.bag"
+  ],
+  "counts": {
+    "/rosout": 1,
+    "/gimbalrotor/imu": 1725,
+    "/gimbalrotor/servo/states": 478,
+    "/gimbalrotor/motor_pwms": 95
+  },
+  "issues": {},
+  "pwm_observation_threshold": null,
+  "backwards_stamps": {},
+  "anomaly_total": 0,
+  "samples_retained": 0,
+  "anomalies": [],
+  "rosout_errors": [],
+  "interpretation": "PWM ceiling violations and IMU norm outliers are observations, not proof of serialization corruption. Exact prefix matches support mixing but do not by themselves prove the firmware mechanism. ROS bag bytes are payloads after the bridge, not raw UART framing. No anomalies does not exclude a rare race."
+}

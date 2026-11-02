@@ -1,0 +1,2652 @@
+{
+  "/home/clement/rosbag/year2026/11Nov/261101/1_realflight/2026-11-01-15-06-40_0.bag": {
+    "audit": {
+      "bags": [
+        "/home/clement/rosbag/year2026/11Nov/261101/1_realflight/2026-11-01-15-06-40_0.bag"
+      ],
+      "counts": {
+        "/rosout": 23,
+        "/gimbalrotor/imu": 12748,
+        "/gimbalrotor/servo/states": 3538,
+        "/gimbalrotor/motor_pwms": 699
+      },
+      "issues": {},
+      "pwm_observation_threshold": null,
+      "backwards_stamps": {},
+      "anomaly_total": 0,
+      "samples_retained": 0,
+      "anomalies": [],
+      "rosout_errors": [],
+      "interpretation": "PWM ceiling violations and IMU norm outliers are observations, not proof of serialization corruption. Exact prefix matches support mixing but do not by themselves prove the firmware mechanism. ROS bag bytes are payloads after the bridge, not raw UART framing. No anomalies does not exclude a rare race."
+    },
+    "timeline": [
+      {
+        "time": "2026-11-01T15:06:40.622107+09:00",
+        "state": 0
+      },
+      {
+        "time": "2026-11-01T15:06:49.953944+09:00",
+        "topic": "teleop_command/start",
+        "message": ""
+      },
+      {
+        "time": "2026-11-01T15:06:49.968841+09:00",
+        "topic": "flight_config_cmd",
+        "message": "cmd: 0"
+      },
+      {
+        "time": "2026-11-01T15:06:49.968849+09:00",
+        "state": 1
+      },
+      {
+        "time": "2026-11-01T15:06:49.971260+09:00",
+        "topic": "flight_config_ack",
+        "message": "data: 0"
+      },
+      {
+        "time": "2026-11-01T15:06:49.993966+09:00",
+        "state": 2
+      },
+      {
+        "time": "2026-11-01T15:06:51.786620+09:00",
+        "topic": "teleop_command/takeoff",
+        "message": ""
+      },
+      {
+        "time": "2026-11-01T15:06:51.793408+09:00",
+        "state": 3
+      },
+      {
+        "time": "2026-11-01T15:06:52.570712+09:00",
+        "topic": "flight_config_cmd",
+        "message": "cmd: 160"
+      },
+      {
+        "time": "2026-11-01T15:07:03.793840+09:00",
+        "state": 5
+      },
+      {
+        "time": "2026-11-01T15:07:44.985436+09:00",
+        "topic": "teleop_command/land",
+        "message": ""
+      },
+      {
+        "time": "2026-11-01T15:07:45.017657+09:00",
+        "state": 4
+      },
+      {
+        "time": "2026-11-01T15:07:47.190495+09:00",
+        "topic": "teleop_command/halt",
+        "message": ""
+      },
+      {
+        "time": "2026-11-01T15:07:47.215251+09:00",
+        "state": 6
+      },
+      {
+        "time": "2026-11-01T15:07:47.215422+09:00",
+        "topic": "flight_config_cmd",
+        "message": "cmd: 1"
+      },
+      {
+        "time": "2026-11-01T15:07:47.221245+09:00",
+        "topic": "flight_config_ack",
+        "message": "data: 1"
+      },
+      {
+        "time": "2026-11-01T15:07:47.243562+09:00",
+        "state": 0
+      }
+    ],
+    "nonfinite": [],
+    "decode_errors": [],
+    "stamp_backwards": [],
+    "logs": [
+      {
+        "time": "2026-11-01T15:06:40.398370+09:00",
+        "node": "/rosserial_capture_150640161578",
+        "level": 2,
+        "text": "Recording to '2026-11-01-15-06-40_0.bag'."
+      },
+      {
+        "time": "2026-11-01T15:06:49.963291+09:00",
+        "node": "/gimbalrotor/aerial_robot_base_node",
+        "level": 2,
+        "text": "init height for takeoff: 0.156583, target height: 0.7"
+      },
+      {
+        "time": "2026-11-01T15:06:49.964752+09:00",
+        "node": "/gimbalrotor/aerial_robot_base_node",
+        "level": 2,
+        "text": "target xy pos: [-0.0893362, 0.119572]"
+      },
+      {
+        "time": "2026-11-01T15:06:49.966232+09:00",
+        "node": "/gimbalrotor/aerial_robot_base_node",
+        "level": 2,
+        "text": "Start state"
+      },
+      {
+        "time": "2026-11-01T15:06:49.972935+09:00",
+        "node": "/gimbalrotor/aerial_robot_base_node",
+        "level": 2,
+        "text": "START RES From AERIAL ROBOT"
+      },
+      {
+        "time": "2026-11-01T15:06:51.792284+09:00",
+        "node": "/gimbalrotor/aerial_robot_base_node",
+        "level": 2,
+        "text": "Takeoff state"
+      },
+      {
+        "time": "2026-11-01T15:06:52.570706+09:00",
+        "node": "/gimbalrotor/aerial_robot_base_node",
+        "level": 4,
+        "text": "start roll/pitch I control"
+      },
+      {
+        "time": "2026-11-01T15:07:03.793846+09:00",
+        "node": "/gimbalrotor/aerial_robot_base_node",
+        "level": 2,
+        "text": "\n \n ======================  \n Hover!!! \n ====================== \n"
+      },
+      {
+        "time": "2026-11-01T15:07:44.997067+09:00",
+        "node": "/gimbalrotor/aerial_robot_base_node",
+        "level": 2,
+        "text": "Land state"
+      },
+      {
+        "time": "2026-11-01T15:07:45.017530+09:00",
+        "node": "/gimbalrotor/aerial_robot_base_node",
+        "level": 2,
+        "text": "expected land height: 0.000000 (current height: 0.747892), velocity: -0.033517 "
+      },
+      {
+        "time": "2026-11-01T15:07:45.542182+09:00",
+        "node": "/gimbalrotor/aerial_robot_base_node",
+        "level": 2,
+        "text": "expected land height: 0.747892 (current height: 0.638962), velocity: -0.531035 "
+      },
+      {
+        "time": "2026-11-01T15:07:46.066755+09:00",
+        "node": "/gimbalrotor/aerial_robot_base_node",
+        "level": 2,
+        "text": "expected land height: 0.638962 (current height: 0.443823), velocity: -0.479003 "
+      },
+      {
+        "time": "2026-11-01T15:07:46.592230+09:00",
+        "node": "/gimbalrotor/aerial_robot_base_node",
+        "level": 2,
+        "text": "expected land height: 0.443823 (current height: 0.291178), velocity: -0.223847 "
+      },
+      {
+        "time": "2026-11-01T15:07:47.122090+09:00",
+        "node": "/gimbalrotor/aerial_robot_base_node",
+        "level": 2,
+        "text": "expected land height: 0.291178 (current height: 0.196833), velocity: -0.111650 "
+      },
+      {
+        "time": "2026-11-01T15:07:47.197513+09:00",
+        "node": "/gimbalrotor/aerial_robot_base_node",
+        "level": 2,
+        "text": "Halt state"
+      },
+      {
+        "time": "2026-11-01T15:07:47.223439+09:00",
+        "node": "/gimbalrotor/aerial_robot_base_node",
+        "level": 2,
+        "text": "STOP RES From AERIAL ROBOT"
+      }
+    ],
+    "phase": {
+      "0": {
+        "gyro_norm": {
+          "count": 2439,
+          "minimum": 0.0002995054157350351,
+          "maximum": 0.6385921045847847,
+          "mean": 0.018178914064868948
+        },
+        "acc_norm": {
+          "count": 2439,
+          "minimum": 7.797322114869903,
+          "maximum": 14.35071474717016,
+          "mean": 9.818142002093458
+        },
+        "quaternion_norm": {
+          "count": 2439,
+          "minimum": 0.9999999476040553,
+          "maximum": 1.000000064253518,
+          "mean": 1.0000000044890842
+        },
+        "pwm0": {
+          "count": 134,
+          "minimum": 1000,
+          "maximum": 1000,
+          "mean": 1000.0
+        },
+        "pwm1": {
+          "count": 134,
+          "minimum": 1000,
+          "maximum": 1000,
+          "mean": 1000.0
+        },
+        "pwm2": {
+          "count": 134,
+          "minimum": 1000,
+          "maximum": 1000,
+          "mean": 1000.0
+        },
+        "pwm3": {
+          "count": 134,
+          "minimum": 1000,
+          "maximum": 1000,
+          "mean": 1000.0
+        },
+        "pwm4": {
+          "count": 134,
+          "minimum": 0,
+          "maximum": 0,
+          "mean": 0.0
+        },
+        "pwm5": {
+          "count": 134,
+          "minimum": 0,
+          "maximum": 0,
+          "mean": 0.0
+        },
+        "pwm6": {
+          "count": 134,
+          "minimum": 0,
+          "maximum": 0,
+          "mean": 0.0
+        },
+        "pwm7": {
+          "count": 134,
+          "minimum": 0,
+          "maximum": 0,
+          "mean": 0.0
+        }
+      },
+      "1": {
+        "gyro_norm": {
+          "count": 5,
+          "minimum": 0.00961686779755661,
+          "maximum": 0.018504698008097113,
+          "mean": 0.014534065364144675
+        },
+        "acc_norm": {
+          "count": 5,
+          "minimum": 9.77896984248027,
+          "maximum": 9.816654582364393,
+          "mean": 9.803646567838252
+        },
+        "quaternion_norm": {
+          "count": 5,
+          "minimum": 0.9999999793134183,
+          "maximum": 1.0000000254140018,
+          "mean": 1.000000005892061
+        }
+      },
+      "2": {
+        "gyro_norm": {
+          "count": 324,
+          "minimum": 0.0015948726057510296,
+          "maximum": 0.1340033732878653,
+          "mean": 0.023959601444349454
+        },
+        "acc_norm": {
+          "count": 324,
+          "minimum": 9.70913794313718,
+          "maximum": 9.870949027060279,
+          "mean": 9.766972912721561
+        },
+        "quaternion_norm": {
+          "count": 324,
+          "minimum": 0.9999999554842385,
+          "maximum": 1.0000000477596283,
+          "mean": 1.0000000062333683
+        },
+        "pwm0": {
+          "count": 18,
+          "minimum": 1000,
+          "maximum": 1172,
+          "mean": 1142.5
+        },
+        "pwm1": {
+          "count": 18,
+          "minimum": 1000,
+          "maximum": 1172,
+          "mean": 1142.5
+        },
+        "pwm2": {
+          "count": 18,
+          "minimum": 1000,
+          "maximum": 1172,
+          "mean": 1142.5
+        },
+        "pwm3": {
+          "count": 18,
+          "minimum": 1000,
+          "maximum": 1172,
+          "mean": 1142.5
+        },
+        "pwm4": {
+          "count": 18,
+          "minimum": 0,
+          "maximum": 0,
+          "mean": 0.0
+        },
+        "pwm5": {
+          "count": 18,
+          "minimum": 0,
+          "maximum": 0,
+          "mean": 0.0
+        },
+        "pwm6": {
+          "count": 18,
+          "minimum": 0,
+          "maximum": 0,
+          "mean": 0.0
+        },
+        "pwm7": {
+          "count": 18,
+          "minimum": 0,
+          "maximum": 0,
+          "mean": 0.0
+        }
+      },
+      "3": {
+        "gyro_norm": {
+          "count": 2160,
+          "minimum": 0.006115373853907005,
+          "maximum": 0.2346921711466544,
+          "mean": 0.064911159174038
+        },
+        "acc_norm": {
+          "count": 2160,
+          "minimum": 9.35657915402144,
+          "maximum": 9.993613977206518,
+          "mean": 9.715684301478603
+        },
+        "quaternion_norm": {
+          "count": 2160,
+          "minimum": 0.9999999429211002,
+          "maximum": 1.0000000761759322,
+          "mean": 1.0000000045960866
+        },
+        "pwm0": {
+          "count": 118,
+          "minimum": 1344,
+          "maximum": 1441,
+          "mean": 1407.7966101694915
+        },
+        "pwm1": {
+          "count": 118,
+          "minimum": 1476,
+          "maximum": 1595,
+          "mean": 1573.5254237288136
+        },
+        "pwm2": {
+          "count": 118,
+          "minimum": 1456,
+          "maximum": 1590,
+          "mean": 1568.5
+        },
+        "pwm3": {
+          "count": 118,
+          "minimum": 1314,
+          "maximum": 1417,
+          "mean": 1396.4406779661017
+        },
+        "pwm4": {
+          "count": 118,
+          "minimum": 0,
+          "maximum": 0,
+          "mean": 0.0
+        },
+        "pwm5": {
+          "count": 118,
+          "minimum": 0,
+          "maximum": 0,
+          "mean": 0.0
+        },
+        "pwm6": {
+          "count": 118,
+          "minimum": 0,
+          "maximum": 0,
+          "mean": 0.0
+        },
+        "pwm7": {
+          "count": 118,
+          "minimum": 0,
+          "maximum": 0,
+          "mean": 0.0
+        }
+      },
+      "5": {
+        "gyro_norm": {
+          "count": 7419,
+          "minimum": 0.002109562688094698,
+          "maximum": 0.6096898785696075,
+          "mean": 0.13260214466209902
+        },
+        "acc_norm": {
+          "count": 7419,
+          "minimum": 9.260260357541654,
+          "maximum": 10.390437363075717,
+          "mean": 9.761115549636765
+        },
+        "quaternion_norm": {
+          "count": 7419,
+          "minimum": 0.9999999407314066,
+          "maximum": 1.000000063056584,
+          "mean": 1.000000003664361
+        },
+        "pwm0": {
+          "count": 407,
+          "minimum": 1349,
+          "maximum": 1457,
+          "mean": 1399.7002457002457
+        },
+        "pwm1": {
+          "count": 407,
+          "minimum": 1561,
+          "maximum": 1641,
+          "mean": 1585.0515970515971
+        },
+        "pwm2": {
+          "count": 407,
+          "minimum": 1561,
+          "maximum": 1621,
+          "mean": 1587.071253071253
+        },
+        "pwm3": {
+          "count": 407,
+          "minimum": 1378,
+          "maximum": 1473,
+          "mean": 1402.990171990172
+        },
+        "pwm4": {
+          "count": 407,
+          "minimum": 0,
+          "maximum": 0,
+          "mean": 0.0
+        },
+        "pwm5": {
+          "count": 407,
+          "minimum": 0,
+          "maximum": 0,
+          "mean": 0.0
+        },
+        "pwm6": {
+          "count": 407,
+          "minimum": 0,
+          "maximum": 0,
+          "mean": 0.0
+        },
+        "pwm7": {
+          "count": 407,
+          "minimum": 0,
+          "maximum": 0,
+          "mean": 0.0
+        }
+      },
+      "4": {
+        "gyro_norm": {
+          "count": 398,
+          "minimum": 0.22737248949463743,
+          "maximum": 0.758249710191097,
+          "mean": 0.481698791527499
+        },
+        "acc_norm": {
+          "count": 398,
+          "minimum": 8.313543417725093,
+          "maximum": 10.923403141906931,
+          "mean": 9.811520255623059
+        },
+        "quaternion_norm": {
+          "count": 398,
+          "minimum": 0.9999999577126092,
+          "maximum": 1.0000000591219107,
+          "mean": 1.0000000050184694
+        },
+        "pwm0": {
+          "count": 22,
+          "minimum": 1271,
+          "maximum": 1463,
+          "mean": 1367.0
+        },
+        "pwm1": {
+          "count": 22,
+          "minimum": 1514,
+          "maximum": 1643,
+          "mean": 1580.0454545454545
+        },
+        "pwm2": {
+          "count": 22,
+          "minimum": 1475,
+          "maximum": 1612,
+          "mean": 1568.8181818181818
+        },
+        "pwm3": {
+          "count": 22,
+          "minimum": 1309,
+          "maximum": 1482,
+          "mean": 1430.090909090909
+        },
+        "pwm4": {
+          "count": 22,
+          "minimum": 0,
+          "maximum": 0,
+          "mean": 0.0
+        },
+        "pwm5": {
+          "count": 22,
+          "minimum": 0,
+          "maximum": 0,
+          "mean": 0.0
+        },
+        "pwm6": {
+          "count": 22,
+          "minimum": 0,
+          "maximum": 0,
+          "mean": 0.0
+        },
+        "pwm7": {
+          "count": 22,
+          "minimum": 0,
+          "maximum": 0,
+          "mean": 0.0
+        }
+      },
+      "6": {
+        "gyro_norm": {
+          "count": 3,
+          "minimum": 0.6033096083457508,
+          "maximum": 0.6155117566395106,
+          "mean": 0.6112357934856102
+        },
+        "acc_norm": {
+          "count": 3,
+          "minimum": 9.148750626639842,
+          "maximum": 9.294333413151886,
+          "mean": 9.21712835357331
+        },
+        "quaternion_norm": {
+          "count": 3,
+          "minimum": 1.0000000126858914,
+          "maximum": 1.000000017925673,
+          "mean": 1.0000000152240454
+        }
+      }
+    },
+    "servo": {},
+    "joints": {},
+    "topics": {
+      "/rosout": {
+        "count": 23,
+        "max_receipt_gap_s": 41.20322132110596,
+        "rate_hz": 0.3292177708296984
+      },
+      "/gimbalrotor/battery_voltage_status": {
+        "count": 631,
+        "max_receipt_gap_s": 0.2851541042327881,
+        "rate_hz": 8.897008095417155
+      },
+      "/gimbalrotor/flight_state": {
+        "count": 2834,
+        "max_receipt_gap_s": 0.2624399662017822,
+        "rate_hz": 40.00416493041208
+      },
+      "/gimbalrotor/perching/roll_yaw/state": {
+        "count": 2834,
+        "max_receipt_gap_s": 0.2579188346862793,
+        "rate_hz": 40.013287692081384
+      },
+      "/gimbalrotor/joint_states": {
+        "count": 3541,
+        "max_receipt_gap_s": 0.25507020950317383,
+        "rate_hz": 49.98384246384066
+      },
+      "/gimbalrotor/gimbal_dof": {
+        "count": 2833,
+        "max_receipt_gap_s": 0.2621338367462158,
+        "rate_hz": 40.011320838788336
+      },
+      "/gimbalrotor/uav/baselink/odom": {
+        "count": 7082,
+        "max_receipt_gap_s": 0.25296759605407715,
+        "rate_hz": 100.03804131681952
+      },
+      "/gimbalrotor/imu": {
+        "count": 12748,
+        "max_receipt_gap_s": 0.2559397220611572,
+        "rate_hz": 180.05796817383867
+      },
+      "/gimbalrotor/mocap/pose": {
+        "count": 7081,
+        "max_receipt_gap_s": 0.25843310356140137,
+        "rate_hz": 100.01381240478106
+      },
+      "/gimbalrotor/servo/target_states_debug": {
+        "count": 3539,
+        "max_receipt_gap_s": 0.2580122947692871,
+        "rate_hz": 49.991258285344685
+      },
+      "/gimbalrotor/servo/states": {
+        "count": 3538,
+        "max_receipt_gap_s": 0.25513529777526855,
+        "rate_hz": 49.98861872088213
+      },
+      "/gimbalrotor/motor_pwms": {
+        "count": 699,
+        "max_receipt_gap_s": 0.2861795425415039,
+        "rate_hz": 9.880721820387059
+      },
+      "/gimbalrotor/rpy/pid": {
+        "count": 699,
+        "max_receipt_gap_s": 0.28543806076049805,
+        "rate_hz": 9.880685571893007
+      },
+      "/gimbalrotor/servo/torque_states": {
+        "count": 71,
+        "max_receipt_gap_s": 1.0717933177947998,
+        "rate_hz": 1.0008673179741436
+      },
+      "/gimbalrotor/teleop_command/start": {
+        "count": 1,
+        "max_receipt_gap_s": null,
+        "rate_hz": null
+      },
+      "/gimbalrotor/uav_info": {
+        "count": 1,
+        "max_receipt_gap_s": null,
+        "rate_hz": null
+      },
+      "/gimbalrotor/flight_config_cmd": {
+        "count": 3,
+        "max_receipt_gap_s": 54.644710540771484,
+        "rate_hz": 0.03493658390936411
+      },
+      "/gimbalrotor/motor_info": {
+        "count": 1,
+        "max_receipt_gap_s": null,
+        "rate_hz": null
+      },
+      "/gimbalrotor/rpy/gain": {
+        "count": 3,
+        "max_receipt_gap_s": 55.45012807846069,
+        "rate_hz": 0.03491945268083159
+      },
+      "/gimbalrotor/flight_config_ack": {
+        "count": 2,
+        "max_receipt_gap_s": 57.24998497962952,
+        "rate_hz": 0.017467253491085043
+      },
+      "/gimbalrotor/teleop_command/takeoff": {
+        "count": 1,
+        "max_receipt_gap_s": null,
+        "rate_hz": null
+      },
+      "/gimbalrotor/debug/pose/pid": {
+        "count": 2218,
+        "max_receipt_gap_s": 0.25658082962036133,
+        "rate_hz": 40.013117808448406
+      },
+      "/gimbalrotor/four_axes/command": {
+        "count": 2218,
+        "max_receipt_gap_s": 0.2622523307800293,
+        "rate_hz": 40.013142430004244
+      },
+      "/gimbalrotor/torque_allocation_matrix_inv": {
+        "count": 2218,
+        "max_receipt_gap_s": 0.26216602325439453,
+        "rate_hz": 40.01314277436188
+      },
+      "/gimbalrotor/uav/nav": {
+        "count": 9,
+        "max_receipt_gap_s": 6.410768747329712,
+        "rate_hz": 0.44763643030058065
+      },
+      "/gimbalrotor/teleop_command/land": {
+        "count": 1,
+        "max_receipt_gap_s": null,
+        "rate_hz": null
+      },
+      "/gimbalrotor/teleop_command/halt": {
+        "count": 1,
+        "max_receipt_gap_s": null,
+        "rate_hz": null
+      }
+    },
+    "start": "2026-11-01T15:06:40.398370+09:00",
+    "end": "2026-11-01T15:07:51.461147+09:00",
+    "pwm_examples": [
+      {
+        "time": "2026-11-01T15:06:40.769291+09:00",
+        "values": [
+          1000,
+          1000,
+          1000,
+          1000,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "time": "2026-11-01T15:06:50.362116+09:00",
+        "values": [
+          1170,
+          1170,
+          1170,
+          1170,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "time": "2026-11-01T15:06:50.872973+09:00",
+        "values": [
+          1171,
+          1171,
+          1171,
+          1171,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "time": "2026-11-01T15:06:51.372865+09:00",
+        "values": [
+          1172,
+          1172,
+          1172,
+          1172,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "time": "2026-11-01T15:06:51.881179+09:00",
+        "values": [
+          1344,
+          1478,
+          1456,
+          1314,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "time": "2026-11-01T15:06:51.984017+09:00",
+        "values": [
+          1345,
+          1476,
+          1457,
+          1319,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "time": "2026-11-01T15:06:52.083045+09:00",
+        "values": [
+          1348,
+          1483,
+          1467,
+          1327,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "time": "2026-11-01T15:06:52.191734+09:00",
+        "values": [
+          1356,
+          1489,
+          1471,
+          1332,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "time": "2026-11-01T15:06:52.283334+09:00",
+        "values": [
+          1362,
+          1498,
+          1474,
+          1331,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "time": "2026-11-01T15:06:52.391578+09:00",
+        "values": [
+          1360,
+          1509,
+          1495,
+          1339,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "time": "2026-11-01T15:06:52.501479+09:00",
+        "values": [
+          1358,
+          1508,
+          1500,
+          1346,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "time": "2026-11-01T15:06:52.601230+09:00",
+        "values": [
+          1351,
+          1508,
+          1505,
+          1345,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "time": "2026-11-01T15:06:52.701595+09:00",
+        "values": [
+          1352,
+          1513,
+          1509,
+          1343,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "time": "2026-11-01T15:06:52.806908+09:00",
+        "values": [
+          1364,
+          1521,
+          1510,
+          1346,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "time": "2026-11-01T15:06:52.900163+09:00",
+        "values": [
+          1364,
+          1528,
+          1529,
+          1363,
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    ],
+    "ranges": {
+      "voltage": {
+        "count": 631,
+        "minimum": 22.38471221923828,
+        "maximum": 25.191749572753906,
+        "mean": 23.132557099670315
+      },
+      "joint_gimbal1": {
+        "count": 3541,
+        "minimum": -0.5276959999999999,
+        "maximum": 0.539968,
+        "mean": -0.09324346003953614
+      },
+      "joint_gimbal2": {
+        "count": 3541,
+        "minimum": -0.3835,
+        "maximum": 0.62127,
+        "mean": 0.10110493928268774
+      },
+      "joint_gimbal3": {
+        "count": 3541,
+        "minimum": -0.196352,
+        "maximum": 0.29759599999999997,
+        "mean": 0.015762380683422693
+      },
+      "joint_gimbal4": {
+        "count": 3541,
+        "minimum": -0.817622,
+        "maximum": 1.408212,
+        "mean": 0.07637639141485361
+      },
+      "joint_joint_yaw": {
+        "count": 3541,
+        "minimum": -0.0011201898998552398,
+        "maximum": 0.0007119932893774848,
+        "mean": -0.00015698150939345308
+      },
+      "joint_joint_roll": {
+        "count": 3541,
+        "minimum": 0.0015340065314831109,
+        "maximum": 0.0030259528988248003,
+        "mean": 0.001878175760457222
+      },
+      "uav/baselink/odom_x": {
+        "count": 7082,
+        "minimum": -0.09677349776029587,
+        "maximum": 0.027111729606986046,
+        "mean": -0.03804941225984414
+      },
+      "uav/baselink/odom_y": {
+        "count": 7082,
+        "minimum": 0.04815734550356865,
+        "maximum": 0.18781383335590363,
+        "mean": 0.1243565894170977
+      },
+      "uav/baselink/odom_z": {
+        "count": 7082,
+        "minimum": 0.17142872512340546,
+        "maximum": 0.8916563391685486,
+        "mean": 0.5758676922353302
+      },
+      "uav/baselink/odom_quaternion_norm": {
+        "count": 7082,
+        "minimum": 0.9999999999999998,
+        "maximum": 1.0000000000000002,
+        "mean": 1.0
+      },
+      "gyro_norm": {
+        "count": 12748,
+        "minimum": 0.0002995054157350351,
+        "maximum": 0.758249710191097,
+        "mean": 0.10744486931843747
+      },
+      "acc_norm": {
+        "count": 12748,
+        "minimum": 7.797322114869903,
+        "maximum": 14.35071474717016,
+        "mean": 9.765939488579706
+      },
+      "quaternion_norm": {
+        "count": 12748,
+        "minimum": 0.9999999407314066,
+        "maximum": 1.0000000761759322,
+        "mean": 1.000000004091187
+      },
+      "mocap/pose_x": {
+        "count": 7081,
+        "minimum": -0.09366998821496964,
+        "maximum": 0.027407079935073853,
+        "mean": -0.03803855325212813
+      },
+      "mocap/pose_y": {
+        "count": 7081,
+        "minimum": 0.04840575531125069,
+        "maximum": 0.1814117729663849,
+        "mean": 0.1243487242617154
+      },
+      "mocap/pose_z": {
+        "count": 7081,
+        "minimum": 0.17972752451896667,
+        "maximum": 0.890974223613739,
+        "mean": 0.5759297486369918
+      },
+      "mocap/pose_quaternion_norm": {
+        "count": 7081,
+        "minimum": 0.9999999554522713,
+        "maximum": 1.000000111516281,
+        "mean": 1.000000032751498
+      },
+      "target0": {
+        "count": 3539,
+        "minimum": 1705,
+        "maximum": 2454,
+        "mean": 1999.8657812941508
+      },
+      "target1": {
+        "count": 3539,
+        "minimum": 1709,
+        "maximum": 3054,
+        "mean": 2085.782989545069
+      },
+      "target2": {
+        "count": 3539,
+        "minimum": 1840,
+        "maximum": 3059,
+        "mean": 2070.07968352642
+      },
+      "target3": {
+        "count": 3538,
+        "minimum": 1371,
+        "maximum": 2754,
+        "mean": 1982.569248162804
+      },
+      "servo0_angle": {
+        "count": 3538,
+        "minimum": 1703,
+        "maximum": 2399,
+        "mean": 1986.1325607687959
+      },
+      "servo0_temp": {
+        "count": 3538,
+        "minimum": 24,
+        "maximum": 26,
+        "mean": 24.650650084793668
+      },
+      "servo0_load": {
+        "count": 3538,
+        "minimum": -140,
+        "maximum": 169,
+        "mean": 10.281797625777275
+      },
+      "servo1_angle": {
+        "count": 3538,
+        "minimum": 1797,
+        "maximum": 2452,
+        "mean": 2112.8278688524592
+      },
+      "servo1_temp": {
+        "count": 3538,
+        "minimum": 22,
+        "maximum": 26,
+        "mean": 22.94431882419446
+      },
+      "servo1_load": {
+        "count": 3538,
+        "minimum": -264,
+        "maximum": 369,
+        "mean": -14.806105144149237
+      },
+      "servo2_angle": {
+        "count": 3538,
+        "minimum": 1919,
+        "maximum": 2241,
+        "mean": 2057.2933860938383
+      },
+      "servo2_temp": {
+        "count": 3538,
+        "minimum": 24,
+        "maximum": 26,
+        "mean": 24.65008479366874
+      },
+      "servo2_load": {
+        "count": 3538,
+        "minimum": -166,
+        "maximum": 231,
+        "mean": 18.450819672131146
+      },
+      "servo3_angle": {
+        "count": 3538,
+        "minimum": 1514,
+        "maximum": 2965,
+        "mean": 2096.4400791407575
+      },
+      "servo3_temp": {
+        "count": 3538,
+        "minimum": 24,
+        "maximum": 25,
+        "mean": 24.364895421141888
+      },
+      "servo3_load": {
+        "count": 3538,
+        "minimum": -196,
+        "maximum": 248,
+        "mean": -5.930751837196156
+      },
+      "servo4_angle": {
+        "count": 3538,
+        "minimum": 1957,
+        "maximum": 1958,
+        "mean": 1957.3468061051442
+      },
+      "servo4_temp": {
+        "count": 3538,
+        "minimum": 24,
+        "maximum": 25,
+        "mean": 24.997173544375354
+      },
+      "servo4_load": {
+        "count": 3538,
+        "minimum": 0,
+        "maximum": 0,
+        "mean": 0.0
+      },
+      "servo5_angle": {
+        "count": 3538,
+        "minimum": 1883,
+        "maximum": 1884,
+        "mean": 1883.7710570944037
+      },
+      "servo5_temp": {
+        "count": 3538,
+        "minimum": 24,
+        "maximum": 25,
+        "mean": 24.756924816280385
+      },
+      "servo5_load": {
+        "count": 3538,
+        "minimum": 0,
+        "maximum": 0,
+        "mean": 0.0
+      },
+      "servo6_angle": {
+        "count": 3538,
+        "minimum": 2044,
+        "maximum": 2051,
+        "mean": 2047.2046353872245
+      },
+      "servo6_temp": {
+        "count": 3538,
+        "minimum": 31,
+        "maximum": 34,
+        "mean": 31.904465799886943
+      },
+      "servo6_load": {
+        "count": 3538,
+        "minimum": -114,
+        "maximum": 125,
+        "mean": -1.9971735443753533
+      },
+      "servo7_angle": {
+        "count": 3538,
+        "minimum": 2048,
+        "maximum": 2050,
+        "mean": 2048.224420576597
+      },
+      "servo7_temp": {
+        "count": 3538,
+        "minimum": 27,
+        "maximum": 32,
+        "mean": 31.353306953080835
+      },
+      "servo7_load": {
+        "count": 3538,
+        "minimum": -13,
+        "maximum": -3,
+        "mean": -7.946579988694178
+      },
+      "pwm0": {
+        "count": 699,
+        "minimum": 1000,
+        "maximum": 1463,
+        "mean": 1316.79113018598
+      },
+      "pwm1": {
+        "count": 699,
+        "minimum": 1000,
+        "maximum": 1643,
+        "mean": 1459.3962804005723
+      },
+      "pwm2": {
+        "count": 699,
+        "minimum": 1000,
+        "maximum": 1621,
+        "mean": 1459.370529327611
+      },
+      "pwm3": {
+        "count": 699,
+        "minimum": 1000,
+        "maximum": 1482,
+        "mean": 1318.7753934191703
+      },
+      "pwm4": {
+        "count": 699,
+        "minimum": 0,
+        "maximum": 0,
+        "mean": 0.0
+      },
+      "pwm5": {
+        "count": 699,
+        "minimum": 0,
+        "maximum": 0,
+        "mean": 0.0
+      },
+      "pwm6": {
+        "count": 699,
+        "minimum": 0,
+        "maximum": 0,
+        "mean": 0.0
+      },
+      "pwm7": {
+        "count": 699,
+        "minimum": 0,
+        "maximum": 0,
+        "mean": 0.0
+      }
+    },
+    "servo_errors": {}
+  },
+  "/home/clement/rosbag/year2026/11Nov/261101/all/1_realflight.bag": {
+    "audit": {
+      "bags": [
+        "/home/clement/rosbag/year2026/11Nov/261101/all/1_realflight.bag"
+      ],
+      "counts": {
+        "/rosout": 98,
+        "/gimbalrotor/imu": 13512,
+        "/gimbalrotor/servo/states": 3751,
+        "/gimbalrotor/motor_pwms": 741
+      },
+      "issues": {},
+      "pwm_observation_threshold": null,
+      "backwards_stamps": {},
+      "anomaly_total": 0,
+      "samples_retained": 0,
+      "anomalies": [],
+      "rosout_errors": [],
+      "interpretation": "PWM ceiling violations and IMU norm outliers are observations, not proof of serialization corruption. Exact prefix matches support mixing but do not by themselves prove the firmware mechanism. ROS bag bytes are payloads after the bridge, not raw UART framing. No anomalies does not exclude a rare race."
+    },
+    "timeline": [
+      {
+        "time": "2026-11-01T15:06:37.510705+09:00",
+        "state": 0
+      },
+      {
+        "time": "2026-11-01T15:06:49.968719+09:00",
+        "state": 1
+      },
+      {
+        "time": "2026-11-01T15:06:49.968824+09:00",
+        "topic": "flight_config_cmd",
+        "message": "cmd: 0"
+      },
+      {
+        "time": "2026-11-01T15:06:49.971170+09:00",
+        "topic": "flight_config_ack",
+        "message": "data: 0"
+      },
+      {
+        "time": "2026-11-01T15:06:49.993965+09:00",
+        "state": 2
+      },
+      {
+        "time": "2026-11-01T15:06:51.787155+09:00",
+        "topic": "teleop_command/takeoff",
+        "message": ""
+      },
+      {
+        "time": "2026-11-01T15:06:51.793424+09:00",
+        "state": 3
+      },
+      {
+        "time": "2026-11-01T15:06:52.570756+09:00",
+        "topic": "flight_config_cmd",
+        "message": "cmd: 160"
+      },
+      {
+        "time": "2026-11-01T15:07:03.793720+09:00",
+        "state": 5
+      },
+      {
+        "time": "2026-11-01T15:07:44.985267+09:00",
+        "topic": "teleop_command/land",
+        "message": ""
+      },
+      {
+        "time": "2026-11-01T15:07:45.017310+09:00",
+        "state": 4
+      },
+      {
+        "time": "2026-11-01T15:07:47.190470+09:00",
+        "topic": "teleop_command/halt",
+        "message": ""
+      },
+      {
+        "time": "2026-11-01T15:07:47.215120+09:00",
+        "state": 6
+      },
+      {
+        "time": "2026-11-01T15:07:47.215126+09:00",
+        "topic": "flight_config_cmd",
+        "message": "cmd: 1"
+      },
+      {
+        "time": "2026-11-01T15:07:47.221066+09:00",
+        "topic": "flight_config_ack",
+        "message": "data: 1"
+      },
+      {
+        "time": "2026-11-01T15:07:47.244064+09:00",
+        "state": 0
+      }
+    ],
+    "nonfinite": [],
+    "decode_errors": [],
+    "stamp_backwards": [],
+    "logs": [
+      {
+        "time": "2026-11-01T15:06:49.963471+09:00",
+        "node": "/gimbalrotor/aerial_robot_base_node",
+        "level": 2,
+        "text": "init height for takeoff: 0.156583, target height: 0.7"
+      },
+      {
+        "time": "2026-11-01T15:06:49.963477+09:00",
+        "node": "/gimbalrotor/aerial_robot_base_node",
+        "level": 2,
+        "text": "target xy pos: [-0.0893362, 0.119572]"
+      },
+      {
+        "time": "2026-11-01T15:06:49.968443+09:00",
+        "node": "/gimbalrotor/aerial_robot_base_node",
+        "level": 2,
+        "text": "Start state"
+      },
+      {
+        "time": "2026-11-01T15:06:49.972777+09:00",
+        "node": "/gimbalrotor/aerial_robot_base_node",
+        "level": 2,
+        "text": "START RES From AERIAL ROBOT"
+      },
+      {
+        "time": "2026-11-01T15:06:51.791117+09:00",
+        "node": "/gimbalrotor/aerial_robot_base_node",
+        "level": 2,
+        "text": "Takeoff state"
+      },
+      {
+        "time": "2026-11-01T15:06:52.570692+09:00",
+        "node": "/gimbalrotor/aerial_robot_base_node",
+        "level": 4,
+        "text": "start roll/pitch I control"
+      },
+      {
+        "time": "2026-11-01T15:07:03.793762+09:00",
+        "node": "/gimbalrotor/aerial_robot_base_node",
+        "level": 2,
+        "text": "\n \n ======================  \n Hover!!! \n ====================== \n"
+      },
+      {
+        "time": "2026-11-01T15:07:44.996903+09:00",
+        "node": "/gimbalrotor/aerial_robot_base_node",
+        "level": 2,
+        "text": "Land state"
+      },
+      {
+        "time": "2026-11-01T15:07:45.017313+09:00",
+        "node": "/gimbalrotor/aerial_robot_base_node",
+        "level": 2,
+        "text": "expected land height: 0.000000 (current height: 0.747892), velocity: -0.033517 "
+      },
+      {
+        "time": "2026-11-01T15:07:45.542087+09:00",
+        "node": "/gimbalrotor/aerial_robot_base_node",
+        "level": 2,
+        "text": "expected land height: 0.747892 (current height: 0.638962), velocity: -0.531035 "
+      },
+      {
+        "time": "2026-11-01T15:07:46.066601+09:00",
+        "node": "/gimbalrotor/aerial_robot_base_node",
+        "level": 2,
+        "text": "expected land height: 0.638962 (current height: 0.443823), velocity: -0.479003 "
+      },
+      {
+        "time": "2026-11-01T15:07:46.591899+09:00",
+        "node": "/gimbalrotor/aerial_robot_base_node",
+        "level": 2,
+        "text": "expected land height: 0.443823 (current height: 0.291178), velocity: -0.223847 "
+      },
+      {
+        "time": "2026-11-01T15:07:47.121938+09:00",
+        "node": "/gimbalrotor/aerial_robot_base_node",
+        "level": 2,
+        "text": "expected land height: 0.291178 (current height: 0.196833), velocity: -0.111650 "
+      },
+      {
+        "time": "2026-11-01T15:07:47.197285+09:00",
+        "node": "/gimbalrotor/aerial_robot_base_node",
+        "level": 2,
+        "text": "Halt state"
+      },
+      {
+        "time": "2026-11-01T15:07:47.223015+09:00",
+        "node": "/gimbalrotor/aerial_robot_base_node",
+        "level": 2,
+        "text": "STOP RES From AERIAL ROBOT"
+      }
+    ],
+    "phase": {
+      "0": {
+        "gyro_norm": {
+          "count": 3204,
+          "minimum": 0.0002995054157350351,
+          "maximum": 0.6385921045847847,
+          "mean": 0.01578399414113036
+        },
+        "acc_norm": {
+          "count": 3204,
+          "minimum": 7.797322114869903,
+          "maximum": 14.35071474717016,
+          "mean": 9.816720818032685
+        },
+        "quaternion_norm": {
+          "count": 3204,
+          "minimum": 0.9999999476040553,
+          "maximum": 1.000000064253518,
+          "mean": 1.0000000044612303
+        },
+        "pwm0": {
+          "count": 176,
+          "minimum": 1000,
+          "maximum": 1000,
+          "mean": 1000.0
+        },
+        "pwm1": {
+          "count": 176,
+          "minimum": 1000,
+          "maximum": 1000,
+          "mean": 1000.0
+        },
+        "pwm2": {
+          "count": 176,
+          "minimum": 1000,
+          "maximum": 1000,
+          "mean": 1000.0
+        },
+        "pwm3": {
+          "count": 176,
+          "minimum": 1000,
+          "maximum": 1000,
+          "mean": 1000.0
+        },
+        "pwm4": {
+          "count": 176,
+          "minimum": 0,
+          "maximum": 0,
+          "mean": 0.0
+        },
+        "pwm5": {
+          "count": 176,
+          "minimum": 0,
+          "maximum": 0,
+          "mean": 0.0
+        },
+        "pwm6": {
+          "count": 176,
+          "minimum": 0,
+          "maximum": 0,
+          "mean": 0.0
+        },
+        "pwm7": {
+          "count": 176,
+          "minimum": 0,
+          "maximum": 0,
+          "mean": 0.0
+        }
+      },
+      "1": {
+        "gyro_norm": {
+          "count": 4,
+          "minimum": 0.00961686779755661,
+          "maximum": 0.018504698008097113,
+          "mean": 0.014022563204117416
+        },
+        "acc_norm": {
+          "count": 4,
+          "minimum": 9.793610583822135,
+          "maximum": 9.816654582364393,
+          "mean": 9.809815749177746
+        },
+        "quaternion_norm": {
+          "count": 4,
+          "minimum": 0.9999999793134183,
+          "maximum": 1.0000000254140018,
+          "mean": 1.0000000053506835
+        }
+      },
+      "2": {
+        "gyro_norm": {
+          "count": 324,
+          "minimum": 0.0015948726057510296,
+          "maximum": 0.1340033732878653,
+          "mean": 0.023973796760795186
+        },
+        "acc_norm": {
+          "count": 324,
+          "minimum": 9.70913794313718,
+          "maximum": 9.870949027060279,
+          "mean": 9.767129576451028
+        },
+        "quaternion_norm": {
+          "count": 324,
+          "minimum": 0.9999999554842385,
+          "maximum": 1.0000000477596283,
+          "mean": 1.0000000062294998
+        },
+        "pwm0": {
+          "count": 18,
+          "minimum": 1000,
+          "maximum": 1172,
+          "mean": 1142.5
+        },
+        "pwm1": {
+          "count": 18,
+          "minimum": 1000,
+          "maximum": 1172,
+          "mean": 1142.5
+        },
+        "pwm2": {
+          "count": 18,
+          "minimum": 1000,
+          "maximum": 1172,
+          "mean": 1142.5
+        },
+        "pwm3": {
+          "count": 18,
+          "minimum": 1000,
+          "maximum": 1172,
+          "mean": 1142.5
+        },
+        "pwm4": {
+          "count": 18,
+          "minimum": 0,
+          "maximum": 0,
+          "mean": 0.0
+        },
+        "pwm5": {
+          "count": 18,
+          "minimum": 0,
+          "maximum": 0,
+          "mean": 0.0
+        },
+        "pwm6": {
+          "count": 18,
+          "minimum": 0,
+          "maximum": 0,
+          "mean": 0.0
+        },
+        "pwm7": {
+          "count": 18,
+          "minimum": 0,
+          "maximum": 0,
+          "mean": 0.0
+        }
+      },
+      "3": {
+        "gyro_norm": {
+          "count": 2160,
+          "minimum": 0.006115373853907005,
+          "maximum": 0.2346921711466544,
+          "mean": 0.06488306816945957
+        },
+        "acc_norm": {
+          "count": 2160,
+          "minimum": 9.35657915402144,
+          "maximum": 9.993613977206518,
+          "mean": 9.715670596168035
+        },
+        "quaternion_norm": {
+          "count": 2160,
+          "minimum": 0.9999999429211002,
+          "maximum": 1.0000000761759322,
+          "mean": 1.0000000046105624
+        },
+        "pwm0": {
+          "count": 118,
+          "minimum": 1344,
+          "maximum": 1441,
+          "mean": 1407.7966101694915
+        },
+        "pwm1": {
+          "count": 118,
+          "minimum": 1476,
+          "maximum": 1595,
+          "mean": 1573.5254237288136
+        },
+        "pwm2": {
+          "count": 118,
+          "minimum": 1456,
+          "maximum": 1590,
+          "mean": 1568.5
+        },
+        "pwm3": {
+          "count": 118,
+          "minimum": 1314,
+          "maximum": 1417,
+          "mean": 1396.4406779661017
+        },
+        "pwm4": {
+          "count": 118,
+          "minimum": 0,
+          "maximum": 0,
+          "mean": 0.0
+        },
+        "pwm5": {
+          "count": 118,
+          "minimum": 0,
+          "maximum": 0,
+          "mean": 0.0
+        },
+        "pwm6": {
+          "count": 118,
+          "minimum": 0,
+          "maximum": 0,
+          "mean": 0.0
+        },
+        "pwm7": {
+          "count": 118,
+          "minimum": 0,
+          "maximum": 0,
+          "mean": 0.0
+        }
+      },
+      "5": {
+        "gyro_norm": {
+          "count": 7420,
+          "minimum": 0.002109562688094698,
+          "maximum": 0.6096898785696075,
+          "mean": 0.13259406585033395
+        },
+        "acc_norm": {
+          "count": 7420,
+          "minimum": 9.260260357541654,
+          "maximum": 10.390437363075717,
+          "mean": 9.761115104719693
+        },
+        "quaternion_norm": {
+          "count": 7420,
+          "minimum": 0.9999999407314066,
+          "maximum": 1.000000063056584,
+          "mean": 1.000000003660908
+        },
+        "pwm0": {
+          "count": 407,
+          "minimum": 1349,
+          "maximum": 1457,
+          "mean": 1399.7002457002457
+        },
+        "pwm1": {
+          "count": 407,
+          "minimum": 1561,
+          "maximum": 1641,
+          "mean": 1585.0515970515971
+        },
+        "pwm2": {
+          "count": 407,
+          "minimum": 1561,
+          "maximum": 1621,
+          "mean": 1587.071253071253
+        },
+        "pwm3": {
+          "count": 407,
+          "minimum": 1378,
+          "maximum": 1473,
+          "mean": 1402.990171990172
+        },
+        "pwm4": {
+          "count": 407,
+          "minimum": 0,
+          "maximum": 0,
+          "mean": 0.0
+        },
+        "pwm5": {
+          "count": 407,
+          "minimum": 0,
+          "maximum": 0,
+          "mean": 0.0
+        },
+        "pwm6": {
+          "count": 407,
+          "minimum": 0,
+          "maximum": 0,
+          "mean": 0.0
+        },
+        "pwm7": {
+          "count": 407,
+          "minimum": 0,
+          "maximum": 0,
+          "mean": 0.0
+        }
+      },
+      "4": {
+        "gyro_norm": {
+          "count": 397,
+          "minimum": 0.22737248949463743,
+          "maximum": 0.758249710191097,
+          "mean": 0.4813814152020308
+        },
+        "acc_norm": {
+          "count": 397,
+          "minimum": 8.313543417725093,
+          "maximum": 10.923403141906931,
+          "mean": 9.812665103771678
+        },
+        "quaternion_norm": {
+          "count": 397,
+          "minimum": 0.9999999577126092,
+          "maximum": 1.0000000591219107,
+          "mean": 1.0000000049639417
+        },
+        "pwm0": {
+          "count": 22,
+          "minimum": 1271,
+          "maximum": 1463,
+          "mean": 1367.0
+        },
+        "pwm1": {
+          "count": 22,
+          "minimum": 1514,
+          "maximum": 1643,
+          "mean": 1580.0454545454545
+        },
+        "pwm2": {
+          "count": 22,
+          "minimum": 1475,
+          "maximum": 1612,
+          "mean": 1568.8181818181818
+        },
+        "pwm3": {
+          "count": 22,
+          "minimum": 1309,
+          "maximum": 1482,
+          "mean": 1430.090909090909
+        },
+        "pwm4": {
+          "count": 22,
+          "minimum": 0,
+          "maximum": 0,
+          "mean": 0.0
+        },
+        "pwm5": {
+          "count": 22,
+          "minimum": 0,
+          "maximum": 0,
+          "mean": 0.0
+        },
+        "pwm6": {
+          "count": 22,
+          "minimum": 0,
+          "maximum": 0,
+          "mean": 0.0
+        },
+        "pwm7": {
+          "count": 22,
+          "minimum": 0,
+          "maximum": 0,
+          "mean": 0.0
+        }
+      },
+      "6": {
+        "gyro_norm": {
+          "count": 3,
+          "minimum": 0.6033096083457508,
+          "maximum": 0.6155117566395106,
+          "mean": 0.608839519241214
+        },
+        "acc_norm": {
+          "count": 3,
+          "minimum": 9.208301020928204,
+          "maximum": 9.35701554062102,
+          "mean": 9.286549991567037
+        },
+        "quaternion_norm": {
+          "count": 3,
+          "minimum": 1.0000000126858914,
+          "maximum": 1.0000000266660467,
+          "mean": 1.000000019092537
+        }
+      }
+    },
+    "servo": {},
+    "joints": {},
+    "topics": {
+      "/rosout": {
+        "count": 98,
+        "max_receipt_gap_s": 41.20314049720764,
+        "rate_hz": 1.3863816867597611
+      },
+      "/tf_static": {
+        "count": 2,
+        "max_receipt_gap_s": 2.2649765014648438e-05,
+        "rate_hz": 44150.56842105263
+      },
+      "/gimbalrotor/kf/imu1/data": {
+        "count": 13515,
+        "max_receipt_gap_s": 0.25513410568237305,
+        "rate_hz": 179.99052068578322
+      },
+      "/gimbalrotor/mocap_node/optitrack_config/parameter_updates": {
+        "count": 1,
+        "max_receipt_gap_s": null,
+        "rate_hz": null
+      },
+      "/gimbalrotor/mocap_node/optitrack_config/parameter_descriptions": {
+        "count": 1,
+        "max_receipt_gap_s": null,
+        "rate_hz": null
+      },
+      "/tf": {
+        "count": 13828,
+        "max_receipt_gap_s": 0.25586819648742676,
+        "rate_hz": 184.15683508440222
+      },
+      "/gimbalrotor/imu": {
+        "count": 13512,
+        "max_receipt_gap_s": 0.276508092880249,
+        "rate_hz": 179.99789063914838
+      },
+      "/gimbalrotor/servo/target_states_debug": {
+        "count": 3753,
+        "max_receipt_gap_s": 0.2610154151916504,
+        "rate_hz": 49.985327959169155
+      },
+      "/gimbalrotor/servos/target_states": {
+        "count": 3752,
+        "max_receipt_gap_s": 0.2589755058288574,
+        "rate_hz": 49.984241451267145
+      },
+      "/gimbalrotor/sensor_plugin/imu1/ros_converted": {
+        "count": 13508,
+        "max_receipt_gap_s": 0.2574176788330078,
+        "rate_hz": 179.99606868829076
+      },
+      "/gimbalrotor/mocap_node/mocap/ground_pose": {
+        "count": 7505,
+        "max_receipt_gap_s": 0.26105523109436035,
+        "rate_hz": 100.00673049093035
+      },
+      "/gimbalrotor/controller/z/parameter_updates": {
+        "count": 1,
+        "max_receipt_gap_s": null,
+        "rate_hz": null
+      },
+      "/gimbalrotor/controller/roll/parameter_descriptions": {
+        "count": 1,
+        "max_receipt_gap_s": null,
+        "rate_hz": null
+      },
+      "/gimbalrotor/baro": {
+        "count": 5402,
+        "max_receipt_gap_s": 0.25591564178466797,
+        "rate_hz": 72.0074946366447
+      },
+      "/gimbalrotor/kf/mocap1/data": {
+        "count": 7491,
+        "max_receipt_gap_s": 0.2595977783203125,
+        "rate_hz": 99.8663463429023
+      },
+      "/gimbalrotor/uav/cog/odom": {
+        "count": 7503,
+        "max_receipt_gap_s": 0.25670766830444336,
+        "rate_hz": 100.02000614455949
+      },
+      "/gimbalrotor/uav/baselink/odom": {
+        "count": 7504,
+        "max_receipt_gap_s": 0.2570793628692627,
+        "rate_hz": 100.0290807514066
+      },
+      "/gimbalrotor/servo/states": {
+        "count": 3751,
+        "max_receipt_gap_s": 0.2562830448150635,
+        "rate_hz": 49.99556819146786
+      },
+      "/gimbalrotor/battery_voltage_status": {
+        "count": 666,
+        "max_receipt_gap_s": 0.28699684143066406,
+        "rate_hz": 8.872249390425177
+      },
+      "/gimbalrotor/servos/states": {
+        "count": 3751,
+        "max_receipt_gap_s": 0.25670862197875977,
+        "rate_hz": 50.00181776933037
+      },
+      "/gimbalrotor/sensor_plugin/imu1/filter_angular_velocity": {
+        "count": 13502,
+        "max_receipt_gap_s": 0.25690627098083496,
+        "rate_hz": 180.03152175201672
+      },
+      "/gimbalrotor/controller/x/parameter_descriptions": {
+        "count": 1,
+        "max_receipt_gap_s": null,
+        "rate_hz": null
+      },
+      "/gimbalrotor/sensor_plugin/imu1/acc_only": {
+        "count": 13502,
+        "max_receipt_gap_s": 0.25348424911499023,
+        "rate_hz": 180.036031510066
+      },
+      "/gimbalrotor/mocap/pose": {
+        "count": 7501,
+        "max_receipt_gap_s": 0.2614157199859619,
+        "rate_hz": 100.02069265581144
+      },
+      "/gimbalrotor/controller/x/parameter_updates": {
+        "count": 1,
+        "max_receipt_gap_s": null,
+        "rate_hz": null
+      },
+      "/gimbalrotor/rpy/pid": {
+        "count": 741,
+        "max_receipt_gap_s": 0.2888145446777344,
+        "rate_hz": 9.8782451531669
+      },
+      "/gimbalrotor/gimbals/states": {
+        "count": 3750,
+        "max_receipt_gap_s": 0.25948143005371094,
+        "rate_hz": 49.99264341778328
+      },
+      "/gimbalrotor/perching/roll_yaw/session": {
+        "count": 3002,
+        "max_receipt_gap_s": 0.2619962692260742,
+        "rate_hz": 40.02186485994268
+      },
+      "/gimbalrotor/uav/full_state": {
+        "count": 7500,
+        "max_receipt_gap_s": 0.27724123001098633,
+        "rate_hz": 100.02049438609515
+      },
+      "/gimbalrotor/motor_pwms": {
+        "count": 741,
+        "max_receipt_gap_s": 0.28665852546691895,
+        "rate_hz": 9.878275491842828
+      },
+      "/gimbalrotor/gimbals/target_states": {
+        "count": 3750,
+        "max_receipt_gap_s": 0.25837135314941406,
+        "rate_hz": 49.993892886847405
+      },
+      "/gimbalrotor/controller/pitch/parameter_updates": {
+        "count": 1,
+        "max_receipt_gap_s": null,
+        "rate_hz": null
+      },
+      "/gimbalrotor/controller/y/parameter_descriptions": {
+        "count": 1,
+        "max_receipt_gap_s": null,
+        "rate_hz": null
+      },
+      "/gimbalrotor/flight_state": {
+        "count": 3001,
+        "max_receipt_gap_s": 0.2622261047363281,
+        "rate_hz": 40.009199223107046
+      },
+      "/gimbalrotor/perching/roll_yaw/state": {
+        "count": 3002,
+        "max_receipt_gap_s": 0.2624502182006836,
+        "rate_hz": 40.02253562284808
+      },
+      "/gimbalrotor/controller/y/parameter_updates": {
+        "count": 1,
+        "max_receipt_gap_s": null,
+        "rate_hz": null
+      },
+      "/gimbalrotor/joint_states": {
+        "count": 3750,
+        "max_receipt_gap_s": 0.25663208961486816,
+        "rate_hz": 49.993646357729396
+      },
+      "/gimbalrotor/controller/z/parameter_descriptions": {
+        "count": 1,
+        "max_receipt_gap_s": null,
+        "rate_hz": null
+      },
+      "/gimbalrotor/controller/yaw/parameter_updates": {
+        "count": 1,
+        "max_receipt_gap_s": null,
+        "rate_hz": null
+      },
+      "/gimbalrotor/gimbal_dof": {
+        "count": 2999,
+        "max_receipt_gap_s": 0.2614891529083252,
+        "rate_hz": 40.00084309385862
+      },
+      "/gimbalrotor/uav_power": {
+        "count": 665,
+        "max_receipt_gap_s": 0.28815269470214844,
+        "rate_hz": 8.872874016465744
+      },
+      "/gimbalrotor/controller/roll/parameter_updates": {
+        "count": 1,
+        "max_receipt_gap_s": null,
+        "rate_hz": null
+      },
+      "/gimbalrotor/controller/yaw/parameter_descriptions": {
+        "count": 1,
+        "max_receipt_gap_s": null,
+        "rate_hz": null
+      },
+      "/gimbalrotor/controller/pitch/parameter_descriptions": {
+        "count": 1,
+        "max_receipt_gap_s": null,
+        "rate_hz": null
+      },
+      "/gimbalrotor/servo/torque_states": {
+        "count": 75,
+        "max_receipt_gap_s": 1.0729820728302002,
+        "rate_hz": 0.9999927895009102
+      },
+      "/rosout_agg": {
+        "count": 22,
+        "max_receipt_gap_s": 41.20293593406677,
+        "rate_hz": 0.3667531262850799
+      },
+      "/gimbalrotor/uav_info": {
+        "count": 1,
+        "max_receipt_gap_s": null,
+        "rate_hz": null
+      },
+      "/gimbalrotor/motor_info": {
+        "count": 1,
+        "max_receipt_gap_s": null,
+        "rate_hz": null
+      },
+      "/gimbalrotor/rpy/gain": {
+        "count": 3,
+        "max_receipt_gap_s": 55.45018744468689,
+        "rate_hz": 0.03491920847771603
+      },
+      "/gimbalrotor/flight_config_cmd": {
+        "count": 3,
+        "max_receipt_gap_s": 54.64436960220337,
+        "rate_hz": 0.03493675473033862
+      },
+      "/gimbalrotor/joint_profiles": {
+        "count": 1,
+        "max_receipt_gap_s": null,
+        "rate_hz": null
+      },
+      "/gimbalrotor/flight_config_ack": {
+        "count": 2,
+        "max_receipt_gap_s": 57.24989581108093,
+        "rate_hz": 0.017467280696892486
+      },
+      "/gimbalrotor/teleop_command/takeoff": {
+        "count": 1,
+        "max_receipt_gap_s": null,
+        "rate_hz": null
+      },
+      "/gimbalrotor/torque_allocation_matrix_inv": {
+        "count": 2218,
+        "max_receipt_gap_s": 0.26174259185791016,
+        "rate_hz": 40.01321009639418
+      },
+      "/gimbalrotor/four_axes/command": {
+        "count": 2218,
+        "max_receipt_gap_s": 0.2609124183654785,
+        "rate_hz": 40.01315035023144
+      },
+      "/gimbalrotor/debug/pose/pid": {
+        "count": 2218,
+        "max_receipt_gap_s": 0.2588155269622803,
+        "rate_hz": 40.01324608192124
+      },
+      "/gimbalrotor/estimated_external_wrench": {
+        "count": 4341,
+        "max_receipt_gap_s": 0.2587552070617676,
+        "rate_hz": 100.00328940562743
+      },
+      "/gimbalrotor/uav/nav": {
+        "count": 9,
+        "max_receipt_gap_s": 6.410668134689331,
+        "rate_hz": 0.4476344715781384
+      },
+      "/gimbalrotor/teleop_command/land": {
+        "count": 1,
+        "max_receipt_gap_s": null,
+        "rate_hz": null
+      },
+      "/gimbalrotor/teleop_command/halt": {
+        "count": 1,
+        "max_receipt_gap_s": null,
+        "rate_hz": null
+      }
+    },
+    "start": "2026-11-01T15:06:37.256713+09:00",
+    "end": "2026-11-01T15:07:52.501633+09:00",
+    "pwm_examples": [
+      {
+        "time": "2026-11-01T15:06:37.509910+09:00",
+        "values": [
+          1000,
+          1000,
+          1000,
+          1000,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "time": "2026-11-01T15:06:50.362142+09:00",
+        "values": [
+          1170,
+          1170,
+          1170,
+          1170,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "time": "2026-11-01T15:06:50.873147+09:00",
+        "values": [
+          1171,
+          1171,
+          1171,
+          1171,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "time": "2026-11-01T15:06:51.373043+09:00",
+        "values": [
+          1172,
+          1172,
+          1172,
+          1172,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "time": "2026-11-01T15:06:51.881447+09:00",
+        "values": [
+          1344,
+          1478,
+          1456,
+          1314,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "time": "2026-11-01T15:06:51.984259+09:00",
+        "values": [
+          1345,
+          1476,
+          1457,
+          1319,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "time": "2026-11-01T15:06:52.083067+09:00",
+        "values": [
+          1348,
+          1483,
+          1467,
+          1327,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "time": "2026-11-01T15:06:52.192830+09:00",
+        "values": [
+          1356,
+          1489,
+          1471,
+          1332,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "time": "2026-11-01T15:06:52.283737+09:00",
+        "values": [
+          1362,
+          1498,
+          1474,
+          1331,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "time": "2026-11-01T15:06:52.391675+09:00",
+        "values": [
+          1360,
+          1509,
+          1495,
+          1339,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "time": "2026-11-01T15:06:52.501410+09:00",
+        "values": [
+          1358,
+          1508,
+          1500,
+          1346,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "time": "2026-11-01T15:06:52.601366+09:00",
+        "values": [
+          1351,
+          1508,
+          1505,
+          1345,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "time": "2026-11-01T15:06:52.702184+09:00",
+        "values": [
+          1352,
+          1513,
+          1509,
+          1343,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "time": "2026-11-01T15:06:52.807468+09:00",
+        "values": [
+          1364,
+          1521,
+          1510,
+          1346,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "time": "2026-11-01T15:06:52.900295+09:00",
+        "values": [
+          1364,
+          1528,
+          1529,
+          1363,
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    ],
+    "ranges": {
+      "gyro_norm": {
+        "count": 13512,
+        "minimum": 0.0002995054157350351,
+        "maximum": 0.758249710191097,
+        "mean": 0.10178551316458966
+      },
+      "acc_norm": {
+        "count": 13512,
+        "minimum": 7.797322114869903,
+        "maximum": 14.35071474717016,
+        "mean": 9.768603686179594
+      },
+      "quaternion_norm": {
+        "count": 13512,
+        "minimum": 0.9999999407314066,
+        "maximum": 1.0000000761759322,
+        "mean": 1.0000000041062969
+      },
+      "target0": {
+        "count": 3753,
+        "minimum": 1705,
+        "maximum": 2454,
+        "mean": 2003.3016253663736
+      },
+      "target1": {
+        "count": 3753,
+        "minimum": 1709,
+        "maximum": 3054,
+        "mean": 2087.173994138023
+      },
+      "target2": {
+        "count": 3753,
+        "minimum": 1840,
+        "maximum": 3059,
+        "mean": 2068.181721289635
+      },
+      "target3": {
+        "count": 3752,
+        "minimum": 1371,
+        "maximum": 2754,
+        "mean": 1981.628997867804
+      },
+      "uav/baselink/odom_x": {
+        "count": 7504,
+        "minimum": -0.09677349776029587,
+        "maximum": 0.027111729606986046,
+        "mean": -0.03901145052590939
+      },
+      "uav/baselink/odom_y": {
+        "count": 7504,
+        "minimum": 0.04815734550356865,
+        "maximum": 0.18781383335590363,
+        "mean": 0.1242859467659503
+      },
+      "uav/baselink/odom_z": {
+        "count": 7504,
+        "minimum": 0.17142872512340546,
+        "maximum": 0.8916563391685486,
+        "mean": 0.5536778067518622
+      },
+      "uav/baselink/odom_quaternion_norm": {
+        "count": 7504,
+        "minimum": 0.9999999999999998,
+        "maximum": 1.0000000000000002,
+        "mean": 1.0
+      },
+      "servo0_angle": {
+        "count": 3751,
+        "minimum": 1703,
+        "maximum": 2399,
+        "mean": 1992.2207411356972
+      },
+      "servo0_temp": {
+        "count": 3751,
+        "minimum": 24,
+        "maximum": 26,
+        "mean": 24.696347640629167
+      },
+      "servo0_load": {
+        "count": 3751,
+        "minimum": -140,
+        "maximum": 169,
+        "mean": 9.697947214076246
+      },
+      "servo1_angle": {
+        "count": 3751,
+        "minimum": 1797,
+        "maximum": 2452,
+        "mean": 2116.739802719275
+      },
+      "servo1_temp": {
+        "count": 3751,
+        "minimum": 22,
+        "maximum": 26,
+        "mean": 23.03545721141029
+      },
+      "servo1_load": {
+        "count": 3751,
+        "minimum": -264,
+        "maximum": 369,
+        "mean": -13.96534257531325
+      },
+      "servo2_angle": {
+        "count": 3751,
+        "minimum": 1919,
+        "maximum": 2241,
+        "mean": 2056.1663556384965
+      },
+      "servo2_temp": {
+        "count": 3751,
+        "minimum": 24,
+        "maximum": 26,
+        "mean": 24.658491069048253
+      },
+      "servo2_load": {
+        "count": 3751,
+        "minimum": -166,
+        "maximum": 231,
+        "mean": 17.403092508664358
+      },
+      "servo3_angle": {
+        "count": 3751,
+        "minimum": 1514,
+        "maximum": 2965,
+        "mean": 2126.400159957345
+      },
+      "servo3_temp": {
+        "count": 3751,
+        "minimum": 24,
+        "maximum": 25,
+        "mean": 24.386830178619036
+      },
+      "servo3_load": {
+        "count": 3751,
+        "minimum": -196,
+        "maximum": 248,
+        "mean": -5.593974940015996
+      },
+      "servo4_angle": {
+        "count": 3751,
+        "minimum": 1957,
+        "maximum": 1958,
+        "mean": 1957.335910423887
+      },
+      "servo4_temp": {
+        "count": 3751,
+        "minimum": 24,
+        "maximum": 25,
+        "mean": 24.997334044254867
+      },
+      "servo4_load": {
+        "count": 3751,
+        "minimum": 0,
+        "maximum": 0,
+        "mean": 0.0
+      },
+      "servo5_angle": {
+        "count": 3751,
+        "minimum": 1883,
+        "maximum": 1884,
+        "mean": 1883.7280725139963
+      },
+      "servo5_temp": {
+        "count": 3751,
+        "minimum": 24,
+        "maximum": 25,
+        "mean": 24.765395894428153
+      },
+      "servo5_load": {
+        "count": 3751,
+        "minimum": 0,
+        "maximum": 0,
+        "mean": 0.0
+      },
+      "servo6_angle": {
+        "count": 3751,
+        "minimum": 2044,
+        "maximum": 2051,
+        "mean": 2047.2138096507597
+      },
+      "servo6_temp": {
+        "count": 3751,
+        "minimum": 31,
+        "maximum": 34,
+        "mean": 31.917355371900825
+      },
+      "servo6_load": {
+        "count": 3751,
+        "minimum": -124,
+        "maximum": 125,
+        "mean": -2.36256998133831
+      },
+      "servo7_angle": {
+        "count": 3751,
+        "minimum": 2048,
+        "maximum": 2050,
+        "mean": 2048.2234070914424
+      },
+      "servo7_temp": {
+        "count": 3751,
+        "minimum": 27,
+        "maximum": 32,
+        "mean": 31.354572114102904
+      },
+      "servo7_load": {
+        "count": 3751,
+        "minimum": -13,
+        "maximum": -3,
+        "mean": -7.919221540922421
+      },
+      "voltage": {
+        "count": 666,
+        "minimum": 22.38471221923828,
+        "maximum": 25.19183349609375,
+        "mean": 23.237492650120824
+      },
+      "mocap/pose_x": {
+        "count": 7501,
+        "minimum": -0.09366998821496964,
+        "maximum": 0.027407079935073853,
+        "mean": -0.03899054228123187
+      },
+      "mocap/pose_y": {
+        "count": 7501,
+        "minimum": 0.04840575531125069,
+        "maximum": 0.1814117729663849,
+        "mean": 0.12427099864870815
+      },
+      "mocap/pose_z": {
+        "count": 7501,
+        "minimum": 0.17972752451896667,
+        "maximum": 0.890974223613739,
+        "mean": 0.5538327571924901
+      },
+      "mocap/pose_quaternion_norm": {
+        "count": 7501,
+        "minimum": 0.9999999554522713,
+        "maximum": 1.000000111516281,
+        "mean": 1.0000000324306157
+      },
+      "pwm0": {
+        "count": 741,
+        "minimum": 1000,
+        "maximum": 1463,
+        "mean": 1298.8353576248312
+      },
+      "pwm1": {
+        "count": 741,
+        "minimum": 1000,
+        "maximum": 1643,
+        "mean": 1433.357624831309
+      },
+      "pwm2": {
+        "count": 741,
+        "minimum": 1000,
+        "maximum": 1621,
+        "mean": 1433.3333333333333
+      },
+      "pwm3": {
+        "count": 741,
+        "minimum": 1000,
+        "maximum": 1482,
+        "mean": 1300.7071524966261
+      },
+      "pwm4": {
+        "count": 741,
+        "minimum": 0,
+        "maximum": 0,
+        "mean": 0.0
+      },
+      "pwm5": {
+        "count": 741,
+        "minimum": 0,
+        "maximum": 0,
+        "mean": 0.0
+      },
+      "pwm6": {
+        "count": 741,
+        "minimum": 0,
+        "maximum": 0,
+        "mean": 0.0
+      },
+      "pwm7": {
+        "count": 741,
+        "minimum": 0,
+        "maximum": 0,
+        "mean": 0.0
+      },
+      "joint_gimbal1": {
+        "count": 3750,
+        "minimum": -0.5276959999999999,
+        "maximum": 0.539968,
+        "mean": -0.08408324426666562
+      },
+      "joint_gimbal2": {
+        "count": 3750,
+        "minimum": -0.3835,
+        "maximum": 0.62127,
+        "mean": 0.10698688693333223
+      },
+      "joint_gimbal3": {
+        "count": 3750,
+        "minimum": -0.196352,
+        "maximum": 0.29759599999999997,
+        "mean": 0.014066984533333146
+      },
+      "joint_gimbal4": {
+        "count": 3750,
+        "minimum": -0.817622,
+        "maximum": 1.408212,
+        "mean": 0.12145680213333701
+      },
+      "joint_joint_yaw": {
+        "count": 3750,
+        "minimum": -0.0011201898998552398,
+        "maximum": 0.0007119932893774848,
+        "mean": -0.00016402809691081104
+      },
+      "joint_joint_roll": {
+        "count": 3750,
+        "minimum": 0.0015340065314831109,
+        "maximum": 0.0030259528988248003,
+        "mean": 0.0018764823806539511
+      }
+    },
+    "servo_errors": {}
+  }
+}

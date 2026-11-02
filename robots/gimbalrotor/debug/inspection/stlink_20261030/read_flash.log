@@ -1,0 +1,37 @@
+[36m[01m      -------------------------------------------------------------------
+[39;49m[36m[01m                        STM32CubeProgrammer v2.9.0-RC01                  
+[39;49m[36m[01m      -------------------------------------------------------------------
+
+libusb: warning [libusb_exit] device 4.1 still referenced
+libusb: warning [libusb_exit] device 3.6 still referenced
+libusb: warning [libusb_exit] device 3.3 still referenced
+libusb: warning [libusb_exit] device 3.2 still referenced
+libusb: warning [libusb_exit] device 3.5 still referenced
+libusb: warning [libusb_exit] device 3.1 still referenced
+libusb: warning [libusb_exit] device 2.1 still referenced
+libusb: warning [libusb_exit] device 1.1 still referenced
+[39;49m[39;49m[39;49m[90mST-LINK SN  : 380041001900004C4732504E
+[39;49m[90mST-LINK FW  : V2J45S7
+[39;49m[90mBoard       : --
+[39;49m[90mVoltage     : 3.31V
+[39;49m[90mSWD freq    : 950 KHz
+[39;49m[90mConnect mode: Hot Plug
+[39;49m[90mReset mode  : Software reset
+[39;49m[90mDevice ID   : 0x450
+[39;49m[90mRevision ID : Rev V
+[39;49m[39;49m[39;49mDevice name : STM32H7xx
+[39;49m[39;49mFlash size  : 2 MBytes
+[39;49m[39;49mDevice type : MCU
+[39;49m[39;49mDevice CPU  : Cortex-M7
+[39;49m[39;49m[39;49mBL Version  : 0x92
+[39;49m[39;49m
+[39;49m[39;49m
+UPLOADING ...
+[39;49m[39;49m  File          : /home/clement/ros/jsk_aerial_robot_ws/src/jsk_aerial_robot/robots/gimbalrotor/inspection/stlink_20261030/flash.bin
+[39;49m[39;49m  Size          : 2097152 Bytes
+[39;49m[39;49m  Address:      : 0x8000000
+[39;49m[39;49mRead progress:
+[39;49m[39;49m[39;49m[00;32m[==================================================] 100% [39;49m
+Data read successfully
+Time elapsed during read operation is: 00:00:35.065
+[00;32m[39;49m[39;49m[39;49m[39;49m

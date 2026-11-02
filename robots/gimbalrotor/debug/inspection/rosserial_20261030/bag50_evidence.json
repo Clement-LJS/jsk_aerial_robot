@@ -1,0 +1,194 @@
+[
+  {
+    "bag": "/home/clement/rosbag/year2026/10Oct/261030/50.bag",
+    "start": "2026-10-30T15:42:11.720+09:00",
+    "end": "2026-10-30T15:45:15.504+09:00",
+    "counts": {
+      "/rosout": 110,
+      "/gimbalrotor/servo/states": 9176,
+      "/gimbalrotor/imu": 33019,
+      "/gimbalrotor/motor_pwms": 1812,
+      "/rosout_agg": 34
+    },
+    "lengths": {
+      "/gimbalrotor/imu": {
+        "60": 33019
+      },
+      "/gimbalrotor/servo/states": {
+        "68": 9176
+      }
+    },
+    "malformed_servo_count": 0,
+    "malformed_servo": [],
+    "nonincreasing_stamps": [
+      {
+        "topic": "/gimbalrotor/imu",
+        "jst": "2026-10-30T15:43:47.632+09:00",
+        "step_ms": -2.201317
+      },
+      {
+        "topic": "/gimbalrotor/imu",
+        "jst": "2026-10-30T15:43:52.640+09:00",
+        "step_ms": -0.942611
+      },
+      {
+        "topic": "/gimbalrotor/imu",
+        "jst": "2026-10-30T15:44:45.191+09:00",
+        "step_ms": -0.207662
+      }
+    ],
+    "imu_numeric_issues": {},
+    "warnings_errors": [
+      {
+        "topic": "/rosout",
+        "jst": "2026-10-30T15:42:34.110+09:00",
+        "bag_ns": 1793342554110261541,
+        "node": "/gimbalrotor/aerial_robot_base_node",
+        "level": 4,
+        "text": "start roll/pitch I control"
+      },
+      {
+        "topic": "/rosout_agg",
+        "jst": "2026-10-30T15:42:34.110+09:00",
+        "bag_ns": 1793342554110267458,
+        "node": "/gimbalrotor/aerial_robot_base_node",
+        "level": 4,
+        "text": "start roll/pitch I control"
+      },
+      {
+        "topic": "/rosout",
+        "jst": "2026-10-30T15:43:47.632+09:00",
+        "bag_ns": 1793342627632016687,
+        "node": "/gimbalrotor/aerial_robot_base_node",
+        "level": 4,
+        "text": "IMU: bad timestamp. curr time stamp: 1793342627.590532, prev time stamp: 1793342627.592733"
+      },
+      {
+        "topic": "/rosout_agg",
+        "jst": "2026-10-30T15:43:47.632+09:00",
+        "bag_ns": 1793342627632144919,
+        "node": "/gimbalrotor/aerial_robot_base_node",
+        "level": 4,
+        "text": "IMU: bad timestamp. curr time stamp: 1793342627.590532, prev time stamp: 1793342627.592733"
+      },
+      {
+        "topic": "/rosout",
+        "jst": "2026-10-30T15:43:52.635+09:00",
+        "bag_ns": 1793342632635159953,
+        "node": "/gimbalrotor/aerial_robot_base_node",
+        "level": 4,
+        "text": "IMU: bad timestamp. curr time stamp: 1793342632.590342, prev time stamp: 1793342632.591284"
+      },
+      {
+        "topic": "/rosout_agg",
+        "jst": "2026-10-30T15:43:52.635+09:00",
+        "bag_ns": 1793342632635249789,
+        "node": "/gimbalrotor/aerial_robot_base_node",
+        "level": 4,
+        "text": "IMU: bad timestamp. curr time stamp: 1793342632.590342, prev time stamp: 1793342632.591284"
+      },
+      {
+        "topic": "/rosout",
+        "jst": "2026-10-30T15:44:45.191+09:00",
+        "bag_ns": 1793342685191199091,
+        "node": "/gimbalrotor/aerial_robot_base_node",
+        "level": 4,
+        "text": "IMU: bad timestamp. curr time stamp: 1793342685.148396, prev time stamp: 1793342685.148603"
+      },
+      {
+        "topic": "/rosout_agg",
+        "jst": "2026-10-30T15:44:45.191+09:00",
+        "bag_ns": 1793342685191244305,
+        "node": "/gimbalrotor/aerial_robot_base_node",
+        "level": 4,
+        "text": "IMU: bad timestamp. curr time stamp: 1793342685.148396, prev time stamp: 1793342685.148603"
+      }
+    ]
+  },
+  {
+    "bag": "/home/clement/rosbag/year2026/10Oct/261030/inspection/50_ins.bag",
+    "start": "2026-10-30T15:42:10.078+09:00",
+    "end": "2026-10-30T15:47:06.413+09:00",
+    "counts": {
+      "/rosout": 36,
+      "/gimbalrotor/imu": 53295,
+      "/gimbalrotor/motor_pwms": 2924,
+      "/gimbalrotor/servo/states": 14803
+    },
+    "lengths": {
+      "/gimbalrotor/imu": {
+        "60": 53295
+      },
+      "/gimbalrotor/servo/states": {
+        "68": 14803
+      }
+    },
+    "malformed_servo_count": 0,
+    "malformed_servo": [],
+    "nonincreasing_stamps": [
+      {
+        "topic": "/gimbalrotor/imu",
+        "jst": "2026-10-30T15:43:47.631+09:00",
+        "step_ms": -2.201317
+      },
+      {
+        "topic": "/gimbalrotor/imu",
+        "jst": "2026-10-30T15:43:52.638+09:00",
+        "step_ms": -0.942611
+      },
+      {
+        "topic": "/gimbalrotor/imu",
+        "jst": "2026-10-30T15:44:45.196+09:00",
+        "step_ms": -0.207662
+      },
+      {
+        "topic": "/gimbalrotor/imu",
+        "jst": "2026-10-30T15:45:30.260+09:00",
+        "step_ms": -0.140541
+      }
+    ],
+    "imu_numeric_issues": {},
+    "warnings_errors": [
+      {
+        "topic": "/rosout",
+        "jst": "2026-10-30T15:42:34.109+09:00",
+        "bag_ns": 1793342554109717044,
+        "node": "/gimbalrotor/aerial_robot_base_node",
+        "level": 4,
+        "text": "start roll/pitch I control"
+      },
+      {
+        "topic": "/rosout",
+        "jst": "2026-10-30T15:43:47.631+09:00",
+        "bag_ns": 1793342627631827083,
+        "node": "/gimbalrotor/aerial_robot_base_node",
+        "level": 4,
+        "text": "IMU: bad timestamp. curr time stamp: 1793342627.590532, prev time stamp: 1793342627.592733"
+      },
+      {
+        "topic": "/rosout",
+        "jst": "2026-10-30T15:43:52.634+09:00",
+        "bag_ns": 1793342632634479391,
+        "node": "/gimbalrotor/aerial_robot_base_node",
+        "level": 4,
+        "text": "IMU: bad timestamp. curr time stamp: 1793342632.590342, prev time stamp: 1793342632.591284"
+      },
+      {
+        "topic": "/rosout",
+        "jst": "2026-10-30T15:44:45.190+09:00",
+        "bag_ns": 1793342685190991789,
+        "node": "/gimbalrotor/aerial_robot_base_node",
+        "level": 4,
+        "text": "IMU: bad timestamp. curr time stamp: 1793342685.148396, prev time stamp: 1793342685.148603"
+      },
+      {
+        "topic": "/rosout",
+        "jst": "2026-10-30T15:45:30.252+09:00",
+        "bag_ns": 1793342730252437349,
+        "node": "/gimbalrotor/aerial_robot_base_node",
+        "level": 4,
+        "text": "IMU: bad timestamp. curr time stamp: 1793342730.201211, prev time stamp: 1793342730.201352"
+      }
+    ]
+  }
+]

@@ -1,0 +1,339 @@
+{
+  "time": "2026-10-30T19:38:15.610178+09:00",
+  "kernel": "6.8.0-138-generic",
+  "usb": [
+    {
+      "sysfs": "/sys/bus/usb/devices/3-7",
+      "idVendor": "0403",
+      "idProduct": "6001",
+      "serial": "AU0JZM07",
+      "product": "FT232R USB UART",
+      "busnum": "3",
+      "devnum": "7"
+    }
+  ],
+  "parameters": {
+    "/gimbalrotor/rosserial_server": {
+      "port": "/dev/ttyUSB0",
+      "baud": 921600
+    },
+    "/gimbalrotor/motor_info": {
+      "min_pwm": 0.5,
+      "max_pwm": 0.85,
+      "min_thrust": 2.0,
+      "force_landing_thrust": 6.0,
+      "m_f_rate": -0.0157,
+      "pwm_conversion_mode": 0,
+      "vel_ref_num": 4,
+      "ref1": {
+        "voltage": 24.2,
+        "max_thrust": 21.37,
+        "polynominal2": 0.164519167,
+        "polynominal1": -16.225736115,
+        "polynominal0": 40.4484933567
+      },
+      "ref2": {
+        "voltage": 23.2,
+        "max_thrust": 19.97,
+        "polynominal2": 0.157560162,
+        "polynominal1": -15.703193407,
+        "polynominal0": 39.6576127189
+      },
+      "ref3": {
+        "voltage": 22.2,
+        "max_thrust": 18.44,
+        "polynominal2": 0.145649905,
+        "polynominal1": -14.480281285,
+        "polynominal0": 36.4201880726
+      },
+      "ref4": {
+        "voltage": 21.2,
+        "max_thrust": 17.2,
+        "polynominal2": 0.127998309,
+        "polynominal1": -12.364605078,
+        "polynominal0": 29.840817929
+      }
+    },
+    "/gimbalrotor/aerial_robot_control_name": "aerial_robot_control/gimbalrotor_controller",
+    "/gimbalrotor/flight_navigation_plugin_name": "aerial_robot_navigation/gimbalrotor_roll_yaw_perching_navigation"
+  },
+  "errors": [],
+  "publishers": {
+    "/rosout": [
+      "/gimbalrotor/aerial_robot_base_node",
+      "/gimbalrotor/robot_state_publisher_clement_ThinkPad_P14s_Gen_5_30063_4921047856079979818",
+      "/gimbalrotor/rotor_tf_publisher_clement_ThinkPad_P14s_Gen_5_30063_5390008492781225931",
+      "/gimbalrotor/rosserial_server",
+      "/gimbalrotor/mocap_node",
+      "/gimbalrotor/servo_bridge",
+      "/rosserial_capture_30836_1793356695462"
+    ],
+    "/gimbalrotor/servo/target_states": [
+      "/gimbalrotor/servo_bridge"
+    ],
+    "/gimbalrotor/servo/target_current": [
+      "/gimbalrotor/servo_bridge"
+    ],
+    "/gimbalrotor/servo/torque_enable": [
+      "/gimbalrotor/servo_bridge"
+    ],
+    "/gimbalrotor/joint_states": [
+      "/gimbalrotor/servo_bridge",
+      "/gimbalrotor/aerial_robot_base_node"
+    ],
+    "/gimbalrotor/uav/baselink/odom": [
+      "/gimbalrotor/aerial_robot_base_node"
+    ],
+    "/gimbalrotor/flight_config_cmd": [
+      "/gimbalrotor/aerial_robot_base_node"
+    ],
+    "/gimbalrotor/flight_state": [
+      "/gimbalrotor/aerial_robot_base_node"
+    ],
+    "/gimbalrotor/joints_ctrl": [
+      "/gimbalrotor/aerial_robot_base_node"
+    ],
+    "/gimbalrotor/perching/roll_yaw/state": [
+      "/gimbalrotor/aerial_robot_base_node"
+    ],
+    "/gimbalrotor/motor_info": [
+      "/gimbalrotor/aerial_robot_base_node"
+    ],
+    "/gimbalrotor/uav_info": [
+      "/gimbalrotor/aerial_robot_base_node"
+    ],
+    "/gimbalrotor/battery_voltage_status": [
+      "/gimbalrotor/rosserial_server"
+    ],
+    "/gimbalrotor/imu": [
+      "/gimbalrotor/rosserial_server"
+    ],
+    "/gimbalrotor/servo/target_states_debug": [
+      "/gimbalrotor/rosserial_server"
+    ],
+    "/gimbalrotor/servo/states": [
+      "/gimbalrotor/rosserial_server"
+    ],
+    "/gimbalrotor/servo/torque_states": [
+      "/gimbalrotor/rosserial_server"
+    ],
+    "/gimbalrotor/flight_config_ack": [
+      "/gimbalrotor/rosserial_server"
+    ],
+    "/gimbalrotor/motor_pwms": [
+      "/gimbalrotor/rosserial_server"
+    ],
+    "/gimbalrotor/rpy/pid": [
+      "/gimbalrotor/rosserial_server"
+    ],
+    "/gimbalrotor/esc_telem": [
+      "/gimbalrotor/rosserial_server"
+    ],
+    "/gimbalrotor/debug/pose/pid": [
+      "/gimbalrotor/aerial_robot_base_node"
+    ],
+    "/gimbalrotor/four_axes/command": [
+      "/gimbalrotor/aerial_robot_base_node"
+    ],
+    "/gimbalrotor/gimbals_ctrl": [
+      "/gimbalrotor/aerial_robot_base_node"
+    ],
+    "/gimbalrotor/debug/target_vectoring_force": [
+      "/gimbalrotor/aerial_robot_base_node"
+    ],
+    "/gimbalrotor/rpy/gain": [
+      "/gimbalrotor/aerial_robot_base_node"
+    ],
+    "/gimbalrotor/torque_allocation_matrix_inv": [
+      "/gimbalrotor/aerial_robot_base_node"
+    ],
+    "/gimbalrotor/gimbal_dof": [
+      "/gimbalrotor/aerial_robot_base_node"
+    ],
+    "/gimbalrotor/mocap/pose": [
+      "/gimbalrotor/mocap_node"
+    ]
+  },
+  "subscribers": {
+    "/rosout": [
+      "/rosout",
+      "/rosserial_capture_30836_1793356695462"
+    ],
+    "/gimbalrotor/joint_states": [
+      "/gimbalrotor/robot_state_publisher_clement_ThinkPad_P14s_Gen_5_30063_4921047856079979818",
+      "/gimbalrotor/aerial_robot_base_node"
+    ],
+    "/gimbalrotor/servo/states": [
+      "/gimbalrotor/servo_bridge",
+      "/rosserial_capture_30836_1793356695462"
+    ],
+    "/gimbalrotor/uav_info": [
+      "/gimbalrotor/servo_bridge",
+      "/gimbalrotor/rosserial_server"
+    ],
+    "/gimbalrotor/servo/target_states_debug": [
+      "/gimbalrotor/servo_bridge",
+      "/rosserial_capture_30836_1793356695462"
+    ],
+    "/gimbalrotor/gimbals_ctrl": [
+      "/gimbalrotor/servo_bridge"
+    ],
+    "/gimbalrotor/imu": [
+      "/gimbalrotor/aerial_robot_base_node",
+      "/rosserial_capture_30836_1793356695462"
+    ],
+    "/gimbalrotor/joints_ctrl": [
+      "/gimbalrotor/servo_bridge"
+    ],
+    "/gimbalrotor/mocap/pose": [
+      "/gimbalrotor/aerial_robot_base_node"
+    ],
+    "/gimbalrotor/uav/nav": [
+      "/gimbalrotor/aerial_robot_base_node"
+    ],
+    "/gimbalrotor/battery_voltage_status": [
+      "/gimbalrotor/aerial_robot_base_node"
+    ],
+    "/gimbalrotor/flight_config_ack": [
+      "/gimbalrotor/aerial_robot_base_node"
+    ],
+    "/gimbalrotor/teleop_command/takeoff": [
+      "/gimbalrotor/aerial_robot_base_node",
+      "/rosserial_capture_30836_1793356695462"
+    ],
+    "/gimbalrotor/teleop_command/halt": [
+      "/gimbalrotor/aerial_robot_base_node",
+      "/rosserial_capture_30836_1793356695462"
+    ],
+    "/gimbalrotor/teleop_command/force_landing": [
+      "/gimbalrotor/aerial_robot_base_node",
+      "/rosserial_capture_30836_1793356695462"
+    ],
+    "/gimbalrotor/teleop_command/land": [
+      "/gimbalrotor/aerial_robot_base_node",
+      "/rosserial_capture_30836_1793356695462"
+    ],
+    "/gimbalrotor/teleop_command/start": [
+      "/gimbalrotor/aerial_robot_base_node",
+      "/rosserial_capture_30836_1793356695462"
+    ],
+    "/gimbalrotor/uav/baselink/odom": [
+      "/gimbalrotor/aerial_robot_base_node"
+    ],
+    "/gimbalrotor/servo/target_states": [
+      "/gimbalrotor/rosserial_server",
+      "/rosserial_capture_30836_1793356695462"
+    ],
+    "/gimbalrotor/servo/torque_enable": [
+      "/gimbalrotor/rosserial_server"
+    ],
+    "/gimbalrotor/flight_config_cmd": [
+      "/gimbalrotor/rosserial_server"
+    ],
+    "/gimbalrotor/gimbal_dof": [
+      "/gimbalrotor/rosserial_server"
+    ],
+    "/gimbalrotor/four_axes/command": [
+      "/gimbalrotor/rosserial_server",
+      "/rosserial_capture_30836_1793356695462"
+    ],
+    "/gimbalrotor/motor_info": [
+      "/gimbalrotor/rosserial_server",
+      "/rosserial_capture_30836_1793356695462"
+    ],
+    "/gimbalrotor/rpy/gain": [
+      "/gimbalrotor/rosserial_server"
+    ],
+    "/gimbalrotor/torque_allocation_matrix_inv": [
+      "/gimbalrotor/rosserial_server",
+      "/rosserial_capture_30836_1793356695462"
+    ],
+    "/gimbalrotor/perching/servo_neutral_mode": [
+      "/gimbalrotor/rosserial_server"
+    ],
+    "/gimbalrotor/motor_pwms": [
+      "/rosserial_capture_30836_1793356695462"
+    ],
+    "/gimbalrotor/flight_state": [
+      "/rosserial_capture_30836_1793356695462"
+    ],
+    "/gimbalrotor/rpy/pid": [
+      "/rosserial_capture_30836_1793356695462"
+    ],
+    "/gimbalrotor/esc_telem": [
+      "/rosserial_capture_30836_1793356695462"
+    ]
+  },
+  "topic_types": {
+    "/rosout": "rosgraph_msgs/Log",
+    "/gimbalrotor/joint_states": "sensor_msgs/JointState",
+    "/gimbalrotor/servo/states": "spinal/ServoStates",
+    "/gimbalrotor/servo/target_states": "spinal/ServoControlCmd",
+    "/gimbalrotor/servo/target_current": "spinal/ServoControlCmd",
+    "/gimbalrotor/servo/torque_enable": "spinal/ServoTorqueCmd",
+    "/gimbalrotor/uav_info": "spinal/UavInfo",
+    "/gimbalrotor/servo/target_states_debug": "spinal/ServoControlCmd",
+    "/gimbalrotor/gimbals_ctrl": "sensor_msgs/JointState",
+    "/gimbalrotor/imu": "spinal/Imu",
+    "/gimbalrotor/joints_ctrl": "sensor_msgs/JointState",
+    "/gimbalrotor/mocap/pose": "geometry_msgs/PoseStamped",
+    "/gimbalrotor/uav/baselink/odom": "nav_msgs/Odometry",
+    "/gimbalrotor/uav/nav": "aerial_robot_msgs/FlightNav",
+    "/gimbalrotor/battery_voltage_status": "std_msgs/Float32",
+    "/gimbalrotor/flight_config_ack": "std_msgs/UInt8",
+    "/gimbalrotor/teleop_command/takeoff": "std_msgs/Empty",
+    "/gimbalrotor/teleop_command/halt": "std_msgs/Empty",
+    "/gimbalrotor/teleop_command/force_landing": "std_msgs/Empty",
+    "/gimbalrotor/teleop_command/land": "std_msgs/Empty",
+    "/gimbalrotor/teleop_command/start": "std_msgs/Empty",
+    "/gimbalrotor/flight_config_cmd": "spinal/FlightConfigCmd",
+    "/gimbalrotor/flight_state": "std_msgs/UInt8",
+    "/gimbalrotor/perching/roll_yaw/state": "std_msgs/String",
+    "/gimbalrotor/motor_info": "spinal/PwmInfo",
+    "/gimbalrotor/servo/torque_states": "spinal/ServoTorqueStates",
+    "/gimbalrotor/motor_pwms": "spinal/Pwms",
+    "/gimbalrotor/rpy/pid": "spinal/RollPitchYawTerms",
+    "/gimbalrotor/esc_telem": "spinal/ESCTelemetryArray",
+    "/gimbalrotor/gimbal_dof": "std_msgs/UInt8",
+    "/gimbalrotor/four_axes/command": "spinal/FourAxisCommand",
+    "/gimbalrotor/rpy/gain": "spinal/RollPitchYawTerms",
+    "/gimbalrotor/torque_allocation_matrix_inv": "spinal/TorqueAllocationMatrixInv",
+    "/gimbalrotor/perching/servo_neutral_mode": "std_msgs/Bool",
+    "/gimbalrotor/debug/pose/pid": "aerial_robot_msgs/PoseControlPid",
+    "/gimbalrotor/debug/target_vectoring_force": "std_msgs/Float32MultiArray"
+  },
+  "unadvertised_topics": [
+    "/gimbalrotor/perching/servo_neutral_mode",
+    "/gimbalrotor/teleop_command/force_landing",
+    "/gimbalrotor/teleop_command/halt",
+    "/gimbalrotor/teleop_command/land",
+    "/gimbalrotor/teleop_command/start",
+    "/gimbalrotor/teleop_command/takeoff",
+    "/gimbalrotor/uav/nav"
+  ],
+  "nodes": {
+    "/gimbalrotor/rosserial_server": {
+      "uri": "http://192.168.1.190:35075/",
+      "pid": 30154
+    },
+    "/gimbalrotor/aerial_robot_base_node": {
+      "uri": "http://192.168.1.190:46001/",
+      "pid": 30150
+    }
+  },
+  "git_head": "af9291d5e77e314794316ed0d0189e48b94dea99",
+  "git_branch": "develop/pochitab_passiveperching/main",
+  "git_status": "M launch/include/sensors.launch.xml\n M simulate_run/README.txt\n M simulate_run/bench.launch\n M simulate_run/bench_capture.py\n M simulate_run/payload_checks.py\n M simulate_run/summarize_capture.py\n M simulate_run/test_offline.py\n?? inspection/\n?? simulate_run/capture_context.py\n?? simulate_run/capture_usb.py\n?? simulate_run/event_context.py\n?? simulate_run/passive_monitor.py",
+  "bridge_log_tail": [
+    "1793356130.110368724 WARN /gimbalrotor/rosserial_server [/home/clement/ros/jsk_aerial_robot_ws/src/rosserial/rosserial_server/include/rosserial_server/session.h:226(read_body)] [topics: /rosout, /gimbalrotor/gps, /gimbalrotor/battery_voltage_status, /gimbalrotor/imu, /gimbalrotor/baro, /gimbalrotor/servo/target_states_debug, /gimbalrotor/servo/states, /gimbalrotor/servo/torque_states, /gimbalrotor/flight_config_ack, /gimbalrotor/motor_pwms, /gimbalrotor/rpy/pid, /gimbalrotor/rpy/feedback_state, /gimbalrotor/esc_telem] Rejecting message on topicId=155, length=21 with bad checksum.",
+    "1793356162.894141907 WARN /gimbalrotor/rosserial_server [/home/clement/ros/jsk_aerial_robot_ws/src/rosserial/rosserial_server/include/rosserial_server/session.h:226(read_body)] [topics: /rosout, /gimbalrotor/gps, /gimbalrotor/battery_voltage_status, /gimbalrotor/imu, /gimbalrotor/baro, /gimbalrotor/servo/target_states_debug, /gimbalrotor/servo/states, /gimbalrotor/servo/torque_states, /gimbalrotor/flight_config_ack, /gimbalrotor/motor_pwms, /gimbalrotor/rpy/pid, /gimbalrotor/rpy/feedback_state, /gimbalrotor/esc_telem] Rejecting message on topicId=155, length=21 with bad checksum.",
+    "1793356499.115343915 WARN /gimbalrotor/rosserial_server [/home/clement/ros/jsk_aerial_robot_ws/src/rosserial/rosserial_server/include/rosserial_server/session.h:226(read_body)] [topics: /rosout, /gimbalrotor/gps, /gimbalrotor/battery_voltage_status, /gimbalrotor/imu, /gimbalrotor/baro, /gimbalrotor/servo/target_states_debug, /gimbalrotor/servo/states, /gimbalrotor/servo/torque_states, /gimbalrotor/flight_config_ack, /gimbalrotor/motor_pwms, /gimbalrotor/rpy/pid, /gimbalrotor/rpy/feedback_state, /gimbalrotor/esc_telem] Rejecting message on topicId=155, length=21 with bad checksum.",
+    "1793356507.115723793 WARN /gimbalrotor/rosserial_server [/home/clement/ros/jsk_aerial_robot_ws/src/rosserial/rosserial_server/include/rosserial_server/session.h:226(read_body)] [topics: /rosout, /gimbalrotor/gps, /gimbalrotor/battery_voltage_status, /gimbalrotor/imu, /gimbalrotor/baro, /gimbalrotor/servo/target_states_debug, /gimbalrotor/servo/states, /gimbalrotor/servo/torque_states, /gimbalrotor/flight_config_ack, /gimbalrotor/motor_pwms, /gimbalrotor/rpy/pid, /gimbalrotor/rpy/feedback_state, /gimbalrotor/esc_telem] Rejecting message on topicId=152, length=5 with bad checksum.",
+    "1793356531.117419990 WARN /gimbalrotor/rosserial_server [/home/clement/ros/jsk_aerial_robot_ws/src/rosserial/rosserial_server/include/rosserial_server/session.h:226(read_body)] [topics: /rosout, /gimbalrotor/gps, /gimbalrotor/battery_voltage_status, /gimbalrotor/imu, /gimbalrotor/baro, /gimbalrotor/servo/target_states_debug, /gimbalrotor/servo/states, /gimbalrotor/servo/torque_states, /gimbalrotor/flight_config_ack, /gimbalrotor/motor_pwms, /gimbalrotor/rpy/pid, /gimbalrotor/rpy/feedback_state, /gimbalrotor/esc_telem] Rejecting message on topicId=155, length=21 with bad checksum.",
+    "1793356539.117790842 WARN /gimbalrotor/rosserial_server [/home/clement/ros/jsk_aerial_robot_ws/src/rosserial/rosserial_server/include/rosserial_server/session.h:226(read_body)] [topics: /rosout, /gimbalrotor/gps, /gimbalrotor/battery_voltage_status, /gimbalrotor/imu, /gimbalrotor/baro, /gimbalrotor/servo/target_states_debug, /gimbalrotor/servo/states, /gimbalrotor/servo/torque_states, /gimbalrotor/flight_config_ack, /gimbalrotor/motor_pwms, /gimbalrotor/rpy/pid, /gimbalrotor/rpy/feedback_state, /gimbalrotor/esc_telem] Rejecting message on topicId=155, length=21 with bad checksum.",
+    "1793356555.119024437 WARN /gimbalrotor/rosserial_server [/home/clement/ros/jsk_aerial_robot_ws/src/rosserial/rosserial_server/include/rosserial_server/session.h:226(read_body)] [topics: /rosout, /gimbalrotor/gps, /gimbalrotor/battery_voltage_status, /gimbalrotor/imu, /gimbalrotor/baro, /gimbalrotor/servo/target_states_debug, /gimbalrotor/servo/states, /gimbalrotor/servo/torque_states, /gimbalrotor/flight_config_ack, /gimbalrotor/motor_pwms, /gimbalrotor/rpy/pid, /gimbalrotor/rpy/feedback_state, /gimbalrotor/esc_telem] Rejecting message on topicId=155, length=21 with bad checksum.",
+    "1793356563.119291505 WARN /gimbalrotor/rosserial_server [/home/clement/ros/jsk_aerial_robot_ws/src/rosserial/rosserial_server/include/rosserial_server/session.h:226(read_body)] [topics: /rosout, /gimbalrotor/gps, /gimbalrotor/battery_voltage_status, /gimbalrotor/imu, /gimbalrotor/baro, /gimbalrotor/servo/target_states_debug, /gimbalrotor/servo/states, /gimbalrotor/servo/torque_states, /gimbalrotor/flight_config_ack, /gimbalrotor/motor_pwms, /gimbalrotor/rpy/pid, /gimbalrotor/rpy/feedback_state, /gimbalrotor/esc_telem] Rejecting message on topicId=155, length=21 with bad checksum."
+  ],
+  "bridge_log_source": "/home/clement/.ros/log/ac99ffe6-d44c-11f1-8692-8b50d40e3440/rosout.log",
+  "bridge_log_search_truncated": false
+}

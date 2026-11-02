@@ -1,0 +1,160 @@
+REAL FLIGHT INVESTIGATION -- NOVEMBER 1, 15:06:37 (JST)
+
+INPUTS
+/home/clement/rosbag/year2026/11Nov/261101/all/1_realflight.bag
+  15:06:37.257--15:07:52.502, 75.245 s.
+/home/clement/rosbag/year2026/11Nov/261101/1_realflight/2026-11-01-15-06-40_0.bag
+  15:06:40.398--15:07:51.461, 71.063 s.
+Also read metadata_start/end.json, events.jsonl, connections and recorder log.
+The user renamed the files during inspection; the original all-topics name was
+2026-11-01-15-06-37.bag. The two bags are overlapping views of ONE flight.
+The user states this was actual flight with propellers, not the earlier hand test.
+
+MAIN CONCLUSION
+The bags show a real, growing coupled roll/yaw/gimbal oscillation before LAND.
+The strongest visible behavior is approximately 1.7 Hz in gimbal 4 target,
+gimbal 4 feedback, roll gyro and yaw gyro. Commands themselves oscillate and
+feedback follows with delay. This supports a closed-loop stability problem
+involving attitude control, allocation and actuator dynamics. It does not prove
+which gain, mechanical property, filter or latency is the original cause.
+No rosserial checksum/deserialization event was recorded DURING this flight.
+
+TIMELINE
+15:06:49.954 manual start in selected bag; ARM_ON at 49.994.
+15:06:51.787 manual takeoff; TAKEOFF at 51.793.
+15:06:52.571 roll/pitch integral control enabled.
+15:06:55.3 early takeoff roll transient: IMU approximately +14.7 degrees,
+  mocap approximately +16.1 degrees. This predates the later growing oscillation.
+15:07:03.794 HOVER.
+15:07:21.254, 22.068, 22.914: upward velocity requests, +0.1 m/s.
+15:07:24.402, 25.420: downward velocity requests, -0.1 m/s.
+15:07:27.615, 30.642, 32.715, 39.126: yaw-rate requests, +0.1 rad/s.
+  Recorded FlightNav messages do not request X/Y translation.
+15:07:30--39 increasing gimbal oscillation; faster and stronger thereafter.
+After approximately 15:07:39.6 the yaw target holds near 10.55 degrees,
+  while oscillation continues growing. No continuous changing yaw command is
+  required to sustain the later motion.
+15:07:44.985 manual LAND; LAND state 45.017.
+15:07:47.190 manual HALT; ARM_OFF at 47.244.
+Thus landing follows the developing instability; it did not initiate it.
+Oscillation becomes still larger during descent, then collapses after halt.
+The bags cannot establish whether a person touched the robot near touchdown.
+
+QUANTIFIED OSCILLATION
+Gimbal 4, degrees (index 3 in servo feedback; mapping checked against Servo.yaml):
+  Window JST         commanded target       measured feedback
+  15:07:30--35       -15.0 to +12.8          -12.8 to +12.5
+  15:07:35--39       -15.0 to +20.3          -12.9 to +19.4
+  15:07:39--42       -34.9 to +29.6          -30.0 to +25.3
+  15:07:42--44.9     -43.9 to +49.0          -37.3 to +43.5
+  LAND to HALT      -59.4 to +62.1          -44.1 to +55.6
+Before LAND, the last window has constant yaw target, actual yaw 8.02--12.86
+degrees and roll -3.82--+1.17 degrees. Small-looking attitude excursions can
+still involve fast, growing rates and very large actuator swings.
+Roll-rate peak magnitude grows from 0.181 rad/s in 15:07:05--20 to 0.518 rad/s
+in 15:07:42--44.9, and reaches 0.735 rad/s during descent.
+Window 15:07:39.7--44.9: all four signals (roll rate, yaw rate, gimbal 4 target
+and feedback) have a dominant spectral bin at 1.729 Hz; resolution ~0.192 Hz.
+This is an approximate oscillation frequency, not an exact system eigenfrequency.
+
+TARGET VERSUS FEEDBACK
+At the late oscillation, a cross-correlation places gimbal 4 feedback about
+85 ms behind target (correlation ~0.992). Gimbal 1/2 estimates are ~95/110 ms.
+These are estimates from bag arrival times and periodic signals, not direct
+measurements of physical motor latency: feedback publication/filtering/transport
+also contribute. Do not interpret 85 ms as proof of a defective servo.
+The measured servo follows a strongly oscillating target. It is therefore not
+simply a stationary target with unexplained motion of servo 4.
+No servo error flags, invalid arrays, decoding failures or nonfinite numeric
+values were found in non-configuration messages in either bag.
+
+CONTROL PATH AND POSSIBLE CONTRIBUTORS
+The selected controller is aerial_robot_control/gimbalrotor_controller and
+navigation is gimbalrotor_roll_yaw_perching_navigation. Perching state remains
+FREE_FLIGHT throughout; no perching engagement appears in the recording.
+The local gimbal_calc_in_fc path sends allocation and translational force
+components to the flight controller. FC attitude feedback terms then change
+the force vector and atan2-derived gimbal angle; the FC applies a simple angle
+low-pass update. Consequently rate feedback, servo response, filtering and
+allocation coupling all matter to closed-loop phase/stability.
+Source: robots/gimbalrotor/src/control/gimbalrotor_controller.cpp:254,288
+Source: aerial_robot_nerve/spinal/mcu_project/lib/Jsk_Lib/flight_control/attitude/attitude_control.cpp:381,1208
+Firmware equivalence with the checked local branch remains the earlier user
+assumption; it has not been proven by matching a flashed image to a build.
+
+Recorded gains: roll P/I/D 30/1.5/25; pitch 15/4/7; yaw 14/1/5.5.
+The three rpy/gain messages have the same values, so no recorded gain jump
+explains the onset. Strong growing D-term outputs accompany the oscillation.
+That does NOT establish that increasing/decreasing a particular gain will fix it.
+The recorded 8x3 inverse torque allocation matrix has condition number roughly
+4.03--4.06 and finite entries: no sudden numerical blow-up is evident in that
+matrix. This is not a complete robustness analysis of the full allocator.
+
+MOTORS AND VOLTAGE
+Observed motor peaks (channels 1--4): 1463, 1643, 1621, 1482 PWM-equivalent.
+Configured ceiling is 1700; no sample reaches it. PWM feedback is only ~10 Hz,
+so brief saturation between samples cannot be excluded. No actual ESC RPM
+telemetry was recorded; PWM is not evidence of actual motor speed/thrust.
+Voltage: 25.19 V maximum before flight, minimum 22.38 V, then recovery after
+halt. There is no abrupt collapse coincident with late oscillation and no
+LOW_BATTERY or FORCE_LANDING state in the recorded flight. Battery sag alone
+is not established as the cause.
+
+TIMING / RECORDING LOCATION
+Metadata identifies capture host kernel 6.8.0-138-generic and local ROS log at
+/home/clement/.ros/log/... . The controller and rosserial node URIs are on
+192.168.1.115. Thus the diagnostic recorder ran on the laptop, not on the VIM4.
+Both bags have simultaneous arrival pauses across several topics around
+15:07:04--06, up to ~277 ms for IMU. Across the longest IMU pause, consecutive
+source timestamps differ by only 5 ms. This is strong evidence of delivery or
+recording backlog; it must not be called a 277 ms FC/control freeze.
+Mocap also has some genuine publisher timestamp gaps (e.g. 132--158 ms in that
+period); possible network, source, or scheduling effects are not isolated here.
+These largest stalls are tens of seconds before the late growing oscillation.
+Late flight (15:07:39--44) has no comparable long source-time pause in the
+sampled IMU or pose PID streams. One ~54 ms mocap bag-arrival gap has a ~10.6 ms
+source interval. A large late mocap dropout is not established as the trigger.
+An onboard recording is needed to distinguish control-input timing from the
+laptop's reception timing. Using an onboard controller does not mean the bag
+recorder itself is running onboard.
+
+ORIGINAL ROSSERIAL ISSUE
+All-topics flight bag: 13,512 IMU, 3,751 servo states, 741 PWM messages.
+Selected bag: 12,748 IMU, 3,538 servo states, 699 PWM messages.
+No bad checksum, deserialize, bad_alloc, Buffer Overrun or backward IMU stamp
+was found during these bag intervals. All messages could be deserialized.
+No new USB PCAP exists for this flight, so rejected-wire-byte verification is
+unavailable. Clean recorded ROS data cannot prove that every transfer was clean.
+
+The metadata embeds earlier local bridge-log history with 11 checksum/header
+warnings across three bursts:
+  14:50:08: 2 IMU checksum warnings.
+  14:58:06: 5 checksum warnings (IMU, target-debug, servo states, RPY PID).
+  15:04:04: 1 header-checksum plus 3 body-checksum warnings (servo, IMU, baro).
+The last burst precedes the all-topics bag by about 153 seconds and the late
+instability by over seven minutes. These show the issue persists in the wider
+session, but do not demonstrate that it triggered this flight's instability.
+Never count metadata's historical log tail as if it were an in-bag flight event.
+
+NEXT DEBUG PRIORITIES
+1. Investigate coupled roll/yaw/gimbal dynamics, beginning with command-to-angle
+   response under load, filtering/delays and the existing gains. Compare with
+   a known stable flight/configuration before choosing any tuning change.
+2. Record selected diagnostics onboard (same machine as the bridge/controller)
+   to remove the laptop reception path from timing conclusions. Current bags
+   already contain useful target feedback, gyro, PID and command topics; -a is
+   not necessary for the known rosserial investigation.
+3. For the separate corruption issue, collect raw bytes via a diagnostic bridge
+   or supported USB monitoring. VIM4's current kernel lacks usbmon. Preserve
+   pre-arm/stationary intervals since earlier corruptions occur without flight.
+No autonomous flight, tuning change, controller patch or kernel change was made.
+
+ARTIFACTS
+audit.json: per-bag raw validation, log/timeline and full numeric ranges.
+metrics.json, series.npz: extracted numeric data and initial interval checks.
+oscillation.json: explicit-time windows, spectra, approximate lag and log history.
+flight_overview.png / flight_late.png: whole-flight and late-flight plots.
+oscillation_detail.png: commanded/measured gimbal 4, gyro, yaw target and D terms.
+analyze.py / plot.py / oscillation.py: reproducible offline analysis scripts.
+Only local inspection artifacts changed. Recordings and flight/control code were
+not modified; no commit, push or additional staging was performed.

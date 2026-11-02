@@ -1,0 +1,101 @@
+{
+  "provenance": "Read-only raw rosbag inspection on 2026-10-30; not output from the saved offline_audit.py, which was not executed.",
+  "bag_root": "/home/clement/rosbag/year2026/10Oct",
+  "git_head": "e01f640d347a3e721e2a8a121945337da0047143",
+  "branch": "develop/pochitab_passiveperching/main",
+  "bags": [
+    {"path": "261029/7gpttuned_2.bag", "imu_count": 9930, "servo_count": 2756, "servo_count_length_failures": 0},
+    {"path": "261029/12.bag", "imu_count": 3080, "servo_count": 854, "servo_count_length_failures": 0},
+    {"path": "261029/5.bag", "imu_count": 11105, "servo_count": 3083, "servo_count_length_failures": 0},
+    {"path": "261026/20perching_failed.bag", "imu_count": 8546, "servo_count": 2317, "servo_count_length_failures": 0},
+    {"path": "261026/21navigation_failed.bag", "imu_count": 8229, "servo_count": 2268, "servo_count_length_failures": 5}
+  ],
+  "all_bags_checks": {
+    "imu_lengths": [60],
+    "servo_lengths": [68],
+    "imu_nonfinite_float_count": 0,
+    "imu_invalid_nanoseconds_count": 0,
+    "imu_quaternion_norm_outside_0_9_to_1_1_count": 0,
+    "imu_md5": "ae078a6cf2a27bba55c15c4ea83c6817",
+    "servo_md5": "8ab23ee17ec1578fba9ec2244276b0ef",
+    "note": "These checks do not establish sensor accuracy, physical plausibility in every axis, absence of gaps, or absence of all forms of corruption."
+  },
+  "match_method": "Exact contiguous prefix of a 60-byte IMU payload at any servo-payload offset, within +/-1 second of bag reception time; minimum 16 matching bytes and 4 distinct byte values. All observed matches start at servo offset zero. Approximate deltas below were rounded to microseconds.",
+  "anomalies_21navigation_failed": [
+    {
+      "bag_time_ns": 1793028548688373933,
+      "count": 3199023753,
+      "expected_length": 22393166283,
+      "length": 68,
+      "stamp": [1793028548, 691694280],
+      "imu_prefix_bytes": 19,
+      "imu_bag_delta_seconds_approx": -0.000237,
+      "error": "std::bad_alloc",
+      "error_bag_time_ns": 1793028548688329508,
+      "error_source_stamp_ns": 1793028548698785294,
+      "hex": "c471df6ac86a3a29893aadbe284e1ebe97201c01f0071df4ff0002f8071df4ff000317081bfcff000419062400000005c6051b00000006ff0720faff0007010820f2ff00"
+    },
+    {
+      "bag_time_ns": 1793028558290003261,
+      "count": 3202392497,
+      "expected_length": 22416747491,
+      "length": 68,
+      "stamp": [1793028558, 292401453],
+      "imu_prefix_bytes": 50,
+      "imu_bag_delta_seconds_approx": -0.000095,
+      "error": "std::bad_alloc",
+      "error_bag_time_ns": 1793028558289977572,
+      "error_source_stamp_ns": 1793028558298806367,
+      "hex": "ce71df6a2db16d11b1a1e0be589468be1e7e1c41e3e99abd35acc53c54cafebccb623342ec7e02c2466d1bc2208178bc3bd91b000000060008200000000700081ff9ff00"
+    },
+    {
+      "bag_time_ns": 1793028558688115611,
+      "count": 58356,
+      "expected_length": 408504,
+      "length": 68,
+      "stamp": [1793028558, 692401453],
+      "imu_prefix_bytes": null,
+      "imu_bag_delta_seconds_approx": null,
+      "error": "Buffer Overrun",
+      "error_bag_time_ns": 1793028558699174862,
+      "error_source_stamp_ns": 1793028558699511707,
+      "hex": "ce71df6a2d354529f4e3000000fc071b0c000001a2071a99ff0002d3071bd1ff000379081a0a00000419062300000005c6051b00000006000820feff000700081ff6ff00"
+    },
+    {
+      "bag_time_ns": 1793028578092556846,
+      "count": 1050683330,
+      "expected_length": 7354783322,
+      "length": 68,
+      "stamp": [1793028578, 98723718],
+      "imu_prefix_bytes": 23,
+      "imu_bag_delta_seconds_approx": -0.000830,
+      "error": "std::bad_alloc",
+      "error_bag_time_ns": 1793028578089477690,
+      "error_source_stamp_ns": 1793028578100336154,
+      "hex": "e271df6a8667e205c227a03e23bbeabf393c1241f898ac0bff0002f7061bebfe0003b30719d4ff000419062200000005c6051a0000000601081febff000701081ff4ff00"
+    },
+    {
+      "bag_time_ns": 1793028583889450862,
+      "count": 3197955730,
+      "expected_length": 22385690122,
+      "length": 68,
+      "stamp": [1793028583, 895629698],
+      "imu_prefix_bytes": 60,
+      "imu_bag_delta_seconds_approx": -0.000045,
+      "error": "std::bad_alloc",
+      "error_bag_time_ns": 1793028583889453619,
+      "error_source_stamp_ns": 1793028583900190567,
+      "hex": "e771df6a8239623592ee9cbe233445bebbb61c41543bbfba0d2f6f3ac3dce13a2f5fec41a4cafdc1123a53c209176bbc9e885e3c0c04933ed42a753fe807010820f5ff00"
+    }
+  ],
+  "errors": {
+    "node": "/gimbalrotor/servo_bridge",
+    "severity": 8,
+    "rosout_bad_alloc": 4,
+    "rosout_buffer_overrun": 1,
+    "rosout_agg_duplicate_bad_alloc": 4,
+    "rosout_agg_duplicate_buffer_overrun": 1,
+    "other_four_bags_matching_errors": 0
+  },
+  "time_caveat": "Bag reception, error source stamps and embedded MCU stamps are separate clocks/observations. Deltas are correlation evidence, not one-way latency or execution-order proof."
+}

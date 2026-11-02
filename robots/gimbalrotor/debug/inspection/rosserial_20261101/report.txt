@@ -1,0 +1,138 @@
+NOVEMBER 1 RECORDING AUDIT (all times JST)
+
+Conclusion: the earlier mixed-message / deserialization corruption was NOT
+reproduced in these recordings. The controller did arm, enter TAKEOFF and HOVER,
+and stop in response to the user's halt. Three timing/recording issues remain.
+
+INPUTS AND COVERAGE
+Parent: /home/clement/rosbag/year2026/11Nov/261101
+Selected-topic run: 2026-11-01-14-38-14-063816
+  Bag: 14:38:14.331 to 14:40:05.097 (110.766 seconds).
+  19,897 IMU messages; 5,526 servo feedback messages; 1,092 PWM messages.
+All-topics bag: all/2026-11-01-14-38-58.bag
+  14:38:58.484 to 14:40:09.335 (70.851 seconds).
+  12,726 IMU messages; 3,534 servo feedback messages; 699 PWM messages.
+These overlap and are NOT separate reproduction trials; do not add duplicate
+events across them. Both bag files opened and all recorded messages deserialized.
+USB: 14:38:40.511 to 14:40:08.058 (87.548 seconds).
+USB covers arming, takeoff, movement, halt and the backward timestamp; it does
+not cover the selected bag's first 26 seconds or the all-topics bag's final second.
+
+ERROR CHECKS
+No recorded bad-checksum/deserialization/bad_alloc/Buffer Overrun messages.
+No invalid servo array counts or lengths, invalid IMU/PWM packet lengths,
+nonfinite numeric values in non-configuration topics, or servo error flags.
+No loss-of-sync / reconnect reported during these recordings.
+Recorder monitor_dropped = 0. No buffer/disk warning in recorder.log.
+
+USB CAPTURE VALIDATED
+186,342 USB monitor records; tcpdump reports zero kernel drops.
+Reconstructed 33,441 complete FC-to-host rosserial frames and 5,914 host-to-FC
+frames. All complete frames pass header-length and body checksums. No interior
+unparsed bytes, no truncated USB records, no failed USB completion events,
+and no FTDI line-status error bits. The first 32 inbound serial bytes are a
+partial frame because capture started midstream, not evidence of corruption.
+USB IN includes 15,758 IMU and 4,376 servo-state frames. All servo-state frames
+have exact payload matches in the bags; 15,757 IMU frames have exact matches.
+The one unmatched IMU frame is discussed below.
+
+The decoder removes two FTDI status bytes per 64-byte USB IN packet, assembles
+the continuous serial streams, and counts IN completion / OUT submission data
+once. USB submissions with -115 are pending requests, not failed completions.
+Four synthetic tests cover framing, checksum failure, bad-header recovery,
+USB packet status stripping and a frame split across USB completions.
+Exact payload matches are evidence for topic association, NOT unique negotiated
+topic identities: small zero/one-byte payloads can match unrelated ROS topics.
+Protocol ID 10 is rosserial time sync, despite zero-filled payload coincidences.
+
+TIMELINE
+14:39:12.514  Manual START observed.
+14:39:12.521  FC arming acknowledgement; ARM_ON published at 12.544.
+14:39:13.504  Manual TAKEOFF; TAKEOFF state at 13.519.
+14:39:15.619  Roll/pitch integral control enabled (normal controller event).
+14:39:33.294  HOVER state.
+14:39:43.078  Manual HALT.
+14:39:43.096  Stop acknowledgement; ARM_OFF at 43.119.
+14:39:50.716  Backward IMU timestamp warning while disarmed.
+The HOVER label is a controller state, not proof of unsupported physical flight.
+
+FINDING 1: BACKWARD IMU TIME STEP
+Exactly one event, seen in both bags: delta -758,798 ns (-0.759 ms).
+Previous IMU stamp: 1793511590.716732750.
+Next IMU stamp:     1793511590.715973952.
+The same backwards ordering is already present in valid USB input frames.
+Thus this particular time step was not introduced by rosbag ordering alone.
+The host time-sync response was submitted at 14:39:50.712986; the affected
+IMU frame began arriving at 14:39:50.715871, about 2.885 ms later.
+Clock synchronization/offset adjustment is the leading explanation for this
+event. It is not proof of the exact MCU execution sequence, nor proof of the
+separate shared-buffer corruption hypothesis. The local rosserial syncTime()
+calls setNow(), replacing offsets without a monotonic-time guard.
+The IMU estimator explicitly returns early for a non-increasing timestamp;
+the angular-velocity output also carries this time step in the all-topics bag.
+Source: aerial_robot_nerve/spinal/mcu_project/boards/stm32H7_v2/ros_lib/ros/node_handle.h:361
+Source: aerial_robot_estimation/src/sensor/imu.cpp:158
+
+FINDING 2: IRREGULAR MOCAP ARRIVAL
+Mocap averages approximately 100 Hz, but arrival intervals are not consistently
+10 ms. Selected bag has 52 gaps over 50 ms; all-topics bag has 35 (overlap).
+During TAKEOFF: 14:39:22.008 to 14:39:22.251, approximately 242 ms gap.
+After disarm, only in the all-topics tail: 14:40:08.768 to 14:40:09.049,
+approximately 281 ms gap. ROS header timestamps show corresponding gaps and
+consecutive sequence numbers. This is upstream of bag storage, at/before mocap
+publication; it does not prove whether Wi-Fi/network delivery, the Motive server,
+or local scheduling caused it. Header timestamps are stamped by the local bridge,
+not necessarily the camera's original acquisition time.
+No forced-landing or mocap health-timeout event is recorded. Still, this timing
+is undesirable for control and should be investigated separately from rosserial.
+Earlier missing-mocap readiness was resolved by the time these bags started.
+
+FINDING 3: ONE VALID USB IMU FRAME ABSENT FROM BOTH BAGS
+USB frame at 14:38:58.628152, embedded IMU stamp 1793511538.628537837, has a valid
+checksum and plausible finite values, but no exact payload or stamp match in
+either bag. Neighboring IMU samples are present. This is near startup of the
+all-topics recorder, before arming; temporal coincidence is not proof of cause.
+This supports a host-side delivery/recording loss after the USB capture point.
+The local rosserial publisher uses queue depth 1, making a queue drop plausible,
+but these files cannot pinpoint where the sample was lost. Zero usbmon kernel
+drops and zero diagnostic queue drops do not guarantee lossless ROS publication.
+Source: rosserial/rosserial_server/include/rosserial_server/topic_handlers.h:70
+
+ACTUATOR / SENSOR OBSERVATIONS
+Motor channels 1-4 peak at PWM equivalents 1491, 1593, 1587, 1455.
+Armed idle is about 1170-1171; disarmed values are 1000. Remaining four array
+entries stay zero, consistent with this four-motor configuration.
+Configured max_pwm=0.85 (1700-equivalent), min_thrust=2: this was normal bringup,
+not the old 1100-limited bench launch. No recorded value reaches 1700. PWM is
+command/feedback evidence, not measured motor RPM; ESC telemetry was absent.
+Servo feedback reports zero hardware error flags; temperature range 25-36 C.
+Gimbals move substantially (gimbal4 approximately -73 to +71 degrees); roll/yaw
+joints remain near neutral. No conclusion about tracking accuracy from ranges alone.
+Battery telemetry ranges 24.803-25.201 V; no low-voltage override recorded.
+IMU gyro peak is 0.902 rad/s, acceleration norm 6.99-12.89 m/s^2, quaternion
+norm remains near 1. Mocap height spans 0.187-0.724 m, consistent with hand lifting.
+Allocation and four-axis commands each have 1,184 messages at about 40 Hz while
+control is active. The intended control workload was exercised.
+
+IMPLICATION FOR ROOT-CAUSE DEBUGGING
+This is a useful clean-corruption baseline, not a deterministic reproduction.
+Arming/control load plus this hand movement did not trigger the old corruption.
+Prior disarmed corrupt packets mean arming is not a necessary condition either.
+Continue using selected topics plus USB; record -a is not required for the known
+corruption evidence. Begin both captures before commands and keep a disarmed
+baseline; compare repeated stationary/moving/manual-control intervals without
+increasing PWM just to provoke a fault. A future bad packet captured at USB can
+separate host-side handling from corruption already present at USB reception.
+The shared MCU serialization buffer remains a hypothesis supported by earlier
+mixed payloads, not something confirmed or disproved by this error-free interval.
+
+ARTIFACTS / VALIDATION
+audit.py and evidence.json: per-bag checks, ranges, USB framing audit.
+timing_plot.py, timing.json and overview.png: timing evidence and overview.
+test_audit.py: four passing synthetic decoder tests.
+Only offline inspection files were added; no recording was edited or moved,
+no runtime robot/source logic changed, no commit or push performed.
+
+USB decoding references:
+https://www.tcpdump.org/linktypes/LINKTYPE_USB_LINUX_MMAPPED.html
+https://github.com/torvalds/linux/blob/master/drivers/usb/serial/ftdi_sio.c

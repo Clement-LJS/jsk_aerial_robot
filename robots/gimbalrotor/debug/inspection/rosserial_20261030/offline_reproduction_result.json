@@ -1,0 +1,63 @@
+{
+  "model": [
+    {
+      "case": "IMU interrupts servo serialization",
+      "serial_frame_checksum_valid": true,
+      "servo_payload_hex": "f232e46a400d380c000080be0000003fc3f51c410ad7233c0ad7a33c8fc2f53c0000c841000070c1000020c20000000000000000000000000000803f7607ff071e000000",
+      "decode": {
+        "valid": false,
+        "error": "Buffer Overrun: count=3196059648, requires 22372417548 bytes, actual 68"
+      },
+      "foreign_prefix_bytes": 60,
+      "foreign_prefix_matches": true
+    },
+    {
+      "case": "PWM telemetry interrupts servo serialization",
+      "serial_frame_checksum_valid": true,
+      "servo_payload_hex": "08000000e803e803e803e8030000000000000000b4071e00000002ff071e00000003ff071e00000004ff071e00000005ff071e00000006ff071e00000007ff071e000000",
+      "decode": {
+        "valid": false,
+        "error": "Buffer Overrun: count=65537000, requires 458759012 bytes, actual 68"
+      },
+      "foreign_prefix_bytes": 20,
+      "foreign_prefix_matches": true
+    },
+    {
+      "case": "Noninterleaved complete publish operations",
+      "serial_frame_checksum_valid": true,
+      "decode": {
+        "valid": true,
+        "count": 8,
+        "length": 68
+      },
+      "note": "Serialized schedule control; not an implemented firmware mutex fix."
+    },
+    {
+      "case": "One payload byte changes after checksum construction",
+      "serial_frame_checksum_valid": false,
+      "note": "Demonstrates checksum rejection; does not identify the recorded topicId."
+    }
+  ],
+  "limitations": [
+    "Deterministic software model, not a captured MCU race",
+    "Python underfill is not the C++ std::bad_alloc exception",
+    "No robot communication or control"
+  ],
+  "recorded": {
+    "bag": "/home/clement/rosbag/year2026/10Oct/261030/inspection/22_yes.bag",
+    "malformed_total": 1,
+    "samples_omitted": 0,
+    "samples": [
+      {
+        "bag_time_ns": 1793340146336583842,
+        "bounded_check": {
+          "valid": false,
+          "error": "Buffer Overrun: count=65537000, requires 458759012 bytes, actual 68"
+        },
+        "payload_length": 68,
+        "hex": "08000000e803e803e803e8030000000000000000a9fed6ffba00aafe9bff0100f9ff47000900000000000000a5ff1f0539041a00000006fe072105000007000821faff00",
+        "actual_python_ros_exception": "DeserializationError: unpack requires a buffer of 7 bytes"
+      }
+    ]
+  }
+}

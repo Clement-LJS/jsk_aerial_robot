@@ -1,0 +1,82 @@
+{
+  "profile": "bringup.launch: real_machine=true, simulation=false, airframe=beetle, roll_yaw_perching=true",
+  "board_reference": "stm32H7_v2; H7 uses the same relevant serializer and task structure. Confirm actual board at later firmware verification.",
+  "deployment": "Local/onboard/FC source equivalence supplied by user; source hashes are not a flash-image comparison.",
+  "files": [
+    {
+      "path": "robots/gimbalrotor/launch/bringup.launch",
+      "role": "Select roll_yaw_perching navigation, gimbalrotor controller, sensors and servo bridge",
+      "sha256": "3c59e09004efef8aa64d7e1f9dc928164efdd11ecfaa23d0c1ce294925010de4"
+    },
+    {
+      "path": "robots/gimbalrotor/launch/include/sensors.launch.xml",
+      "role": "Physical rosserial bridge inclusion",
+      "sha256": "b141b61711b225e6aabd7ae28f1e266149811a2716774f527c733423edb682fe"
+    },
+    {
+      "path": "robots/gimbalrotor/config/beetle/GimbalrotorControl.yaml",
+      "role": "gimbal_calc_in_fc true",
+      "sha256": "727ac5588f06cb7662df65d9210590e3bfb6fcb6e47cf9d526b38a3eb85cd9ce"
+    },
+    {
+      "path": "robots/gimbalrotor/src/control/gimbalrotor_controller.cpp",
+      "role": "Allocation and FourAxisCommand publication",
+      "sha256": "22953e6804a6aaf5ccb617ce2d8f0258967ccd84f5e813826f3588f8d78bc094"
+    },
+    {
+      "path": "aerial_robot_nerve/spinal/mcu_project/lib/Jsk_Lib/flight_control/attitude/attitude_control.cpp",
+      "role": "FC attitude/force allocation, gimbal/PWM calculation and PWM publication",
+      "sha256": "9f0217c31a2bb83f45f2292de5855e4a1d1455592826bdc42045a13347e64993"
+    },
+    {
+      "path": "aerial_robot_nerve/spinal/mcu_project/lib/Jsk_Lib/servo/servo.cpp",
+      "role": "Independent servo feedback publication",
+      "sha256": "c35bcd9d656ebf0b324aa8130a237c8ddb86e403bbb7a8815c258b03306aefdb"
+    },
+    {
+      "path": "aerial_robot_nerve/spinal/mcu_project/boards/stm32H7_v2/Src/main.cpp",
+      "role": "One shared node handle, core and servo tasks",
+      "sha256": "082e2e559b41d711d2e5023e9f017a434fc8fd841a52a64f0e4baa6ff2e1217b"
+    },
+    {
+      "path": "aerial_robot_nerve/spinal/mcu_project/boards/stm32H7_v2/Inc/FreeRTOSConfig.h",
+      "role": "Preemptive scheduler configuration",
+      "sha256": "4bb9550bfad660164a9b2e3a3e1a6d59846a347ff39a6317b2b1f4a21ca779b4"
+    },
+    {
+      "path": "aerial_robot_nerve/spinal/mcu_project/boards/stm32H7_v2/ros_lib/ros/node_handle.h",
+      "role": "Shared buffer serialize/header/checksum/write sequence",
+      "sha256": "7f92184af328db415c2e11fea21fec5bf9bc27b7e640d5f59ce8ca4c37cbf0f6"
+    },
+    {
+      "path": "aerial_robot_nerve/spinal/mcu_project/boards/stm32H7_v2/ros_lib/spinal/ServoStates.h",
+      "role": "Timestamp and servo array serializer",
+      "sha256": "56d5e003ea4432ccd308c432cdc93e6b22dc99cef8288aea9c46f6977a91abff"
+    },
+    {
+      "path": "aerial_robot_nerve/spinal/mcu_project/boards/stm32H7_v2/ros_lib/spinal/ServoState.h",
+      "role": "Seven-byte individual servo serializer",
+      "sha256": "9a47f7e356937c0aad47ce89fd96e0b31376640b0df2348db2137a8f49549d24"
+    },
+    {
+      "path": "aerial_robot_nerve/spinal/mcu_project/boards/stm32H7_v2/ros_lib/spinal/Pwms.h",
+      "role": "Twenty-byte eight-entry PWM serializer",
+      "sha256": "6188669a4408dc6d59fed88a162bb71164bebac3ad563b438957a95ea24e7333"
+    },
+    {
+      "path": "aerial_robot_nerve/spinal/src/ros_lib/ros/node_handle_stm.h",
+      "role": "Node-handle integration does not serialize concurrent publish calls",
+      "sha256": "a4053e4760d85682d8efdfe77cc000f03d280772bf9690f42bdef0fbf5f0f2e7"
+    },
+    {
+      "path": "aerial_robot_nerve/spinal/src/ros_lib/STM32Hardware.cpp",
+      "role": "TX lock begins at enqueue-copy, after serialization",
+      "sha256": "31b6437316113f56cb87fa49af7e2d7db9c4e248e4dabb14d7de629a2d93e062"
+    },
+    {
+      "path": "aerial_robot_model/src/servo_bridge/servo_bridge.cpp",
+      "role": "Typed servo subscriber and derived joint states",
+      "sha256": "1328ba579d02c215fdab8e13a086dd78c1b42e4da9be67ac22bc6d80c80709f0"
+    }
+  ]
+}

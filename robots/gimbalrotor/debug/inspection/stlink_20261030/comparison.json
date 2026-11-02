@@ -1,0 +1,89 @@
+{
+  "branch": "develop/pochitab_passiveperching/main",
+  "head": "e01f640d347a3e721e2a8a121945337da0047143",
+  "flash_bytes": 2097152,
+  "flash_sha256": "5d2d15ce0aa4f3b0cd6d2603bb59fc2dd5ef332b0401e0d37619df35d57e2e86",
+  "flash_reset_vector": "0x801cdf9",
+  "comparisons": [
+    {
+      "board": "stm32H7",
+      "binary": "/home/clement/ros/jsk_aerial_robot_ws/src/jsk_aerial_robot/aerial_robot_nerve/spinal/mcu_project/boards/stm32H7/STM32CubeIDE/Debug/spinal.bin",
+      "bytes": 238120,
+      "sha256": "6bfc1e772307c36290eab1d470e472eec23f5fa3679e5d6c179a01a2b1b66266",
+      "match": false,
+      "mismatch_bytes": 214862,
+      "first_mismatch": "0x8000004",
+      "reset_vector": "0x801921d",
+      "elf_segments": [
+        {
+          "address": "0x8000000",
+          "bytes": 237176,
+          "match": false,
+          "mismatch_bytes": 213984
+        },
+        {
+          "address": "0x8039e78",
+          "bytes": 944,
+          "match": false,
+          "mismatch_bytes": 878
+        }
+      ]
+    },
+    {
+      "board": "stm32H7_v2",
+      "binary": "/home/clement/ros/jsk_aerial_robot_ws/src/jsk_aerial_robot/aerial_robot_nerve/spinal/mcu_project/boards/stm32H7_v2/STM32CubeIDE/Debug/spinal.bin",
+      "bytes": 270456,
+      "sha256": "46981486801489456abe1699a2b53c2b248353cd665bb3189371f5d4b8edd9b5",
+      "match": false,
+      "mismatch_bytes": 259237,
+      "first_mismatch": "0x8000004",
+      "reset_vector": "0x80207b9",
+      "elf_segments": [
+        {
+          "address": "0x8000000",
+          "bytes": 270312,
+          "match": false,
+          "mismatch_bytes": 259095
+        },
+        {
+          "address": "0x8041fe8",
+          "bytes": 144,
+          "match": false,
+          "mismatch_bytes": 142
+        }
+      ]
+    }
+  ],
+  "message_md5_strings": {
+    "Imu": {
+      "local_md5": "ae078a6cf2a27bba55c15c4ea83c6817",
+      "present_in_flash": true
+    },
+    "ServoStates": {
+      "local_md5": "8ab23ee17ec1578fba9ec2244276b0ef",
+      "present_in_flash": true
+    },
+    "ServoState": {
+      "local_md5": "8bb74606b2a7f0d9c5d2efdff5bd8fa0",
+      "present_in_flash": true
+    },
+    "Pwms": {
+      "local_md5": "2c8c334b8b8efa66767058af395f7c74",
+      "present_in_flash": true
+    }
+  },
+  "markers": {
+    "servo/target_states_debug": {
+      "present_in_flash": true,
+      "present_in_saved_h7_v2_binary": false
+    },
+    "perching/servo_neutral_mode": {
+      "present_in_flash": true,
+      "present_in_saved_h7_v2_binary": false
+    },
+    "boards/stm32H7_v2/": {
+      "present_in_flash": true,
+      "present_in_saved_h7_v2_binary": true
+    }
+  }
+}

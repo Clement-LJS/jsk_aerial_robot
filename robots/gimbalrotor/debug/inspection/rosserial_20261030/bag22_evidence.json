@@ -1,0 +1,143 @@
+{
+  "bag": "/home/clement/rosbag/year2026/10Oct/261030/inspection/22_yes.bag",
+  "counts": {
+    "/rosout": 4,
+    "/gimbalrotor/imu": 23815,
+    "/gimbalrotor/servo/states": 6613
+  },
+  "schemas": {
+    "/gimbalrotor/imu": {
+      "type": "spinal/Imu",
+      "md5": "ae078a6cf2a27bba55c15c4ea83c6817",
+      "definition": "time stamp\n\nfloat32[3] acc  # data of accelerometer[m/s^2]\nfloat32[3] gyro # data of gyroscopic sensor [rad/s]\nfloat32[3] mag  # data of magnetometer[T]\nfloat32[4] quaternion  # Quaternion [x, y, z, w]\n\n"
+    },
+    "/gimbalrotor/servo/states": {
+      "type": "spinal/ServoStates",
+      "md5": "8ab23ee17ec1578fba9ec2244276b0ef",
+      "definition": "time stamp\nspinal/ServoState[] servos\n\n================================================================================\nMSG: spinal/ServoState\nuint8 index #from 0\nint16 angle # dynamixel: 15bit[-32768, 32767]\nuint8 temp # temperature\nint16 load # load\nuint8 error # error\n"
+    }
+  },
+  "lengths": {
+    "/gimbalrotor/imu": {
+      "60": 23815
+    },
+    "/gimbalrotor/servo/states": {
+      "68": 6613
+    }
+  },
+  "malformed_servo": [
+    {
+      "bag_ns": 1793340146336583842,
+      "jst": "2026-10-30T15:02:26.336+09:00",
+      "source_stamp": [
+        8,
+        65537000
+      ],
+      "length": 68,
+      "count": 65537000,
+      "expected_length": 458759012,
+      "hex": "08000000e803e803e803e8030000000000000000a9fed6ffba00aafe9bff0100f9ff47000900000000000000a5ff1f0539041a00000006fe072105000007000821faff00",
+      "imu_match": null,
+      "nearest_error": {
+        "topic": "/rosout",
+        "bag_ns": 1793340147061730769,
+        "jst": "2026-10-30T15:02:27.061+09:00",
+        "source_ns": 1793340146985637738,
+        "node": "/gimbalrotor/servo_bridge",
+        "level": 8,
+        "text": "Exception thrown when deserializing message of length [68] from [/gimbalrotor/rosserial_server]: Buffer Overrun"
+      }
+    }
+  ],
+  "imu_issues": {},
+  "servo_issues": {},
+  "timing": {
+    "/gimbalrotor/imu": {
+      "max_receive_gap_ms": 252.57606,
+      "gaps_over100ms": 24,
+      "nonincreasing_source": [
+        {
+          "jst": "2026-10-30T15:01:48.637+09:00",
+          "step_ms": -0.968057
+        }
+      ]
+    },
+    "/gimbalrotor/servo/states": {
+      "max_receive_gap_ms": 257.198547,
+      "gaps_over100ms": 22,
+      "nonincreasing_source": [
+        {
+          "jst": "2026-10-30T15:02:26.336+09:00",
+          "step_ms": -1793340138170.3542
+        }
+      ]
+    }
+  },
+  "warnings_errors": [
+    {
+      "topic": "/rosout",
+      "bag_ns": 1793340076133897498,
+      "jst": "2026-10-30T15:01:16.133+09:00",
+      "source_ns": 1793340076056265676,
+      "node": "/gimbalrotor/rosserial_server",
+      "level": 4,
+      "text": "Rejecting message on topicId=162, length=21 with bad checksum."
+    },
+    {
+      "topic": "/rosout",
+      "bag_ns": 1793340108637953287,
+      "jst": "2026-10-30T15:01:48.637+09:00",
+      "source_ns": 1793340108561835768,
+      "node": "/gimbalrotor/aerial_robot_base_node",
+      "level": 4,
+      "text": "IMU: bad timestamp. curr time stamp: 1793340108.560512, prev time stamp: 1793340108.561480"
+    },
+    {
+      "topic": "/rosout",
+      "bag_ns": 1793340147061730769,
+      "jst": "2026-10-30T15:02:27.061+09:00",
+      "source_ns": 1793340146985637738,
+      "node": "/gimbalrotor/servo_bridge",
+      "level": 8,
+      "text": "Exception thrown when deserializing message of length [68] from [/gimbalrotor/rosserial_server]: Buffer Overrun"
+    }
+  ],
+  "pwm_prefix_hypothesis": {
+    "schema": "spinal/Pwms",
+    "candidate_values": [
+      1000,
+      1000,
+      1000,
+      1000,
+      0,
+      0,
+      0,
+      0
+    ],
+    "candidate_hex": "08000000e803e803e803e8030000000000000000",
+    "matches_first_20_bytes": true,
+    "count_field_hex": "e803e803",
+    "note": "Exact match to constructed schema-consistent payload, not a separately recorded motor-output sample: this bag contains only IMU/servo/log topics."
+  },
+  "motion_checks": {
+    "entire_bag": {
+      "imu_count": 23815,
+      "acc_norm_min": 5.888337962378479,
+      "acc_norm_max": 13.870458990657399,
+      "gyro_norm_max_rad_s": 3.3386745464419594,
+      "gyro_norm_median_rad_s": 0.009491855543688813,
+      "first_to_last_orientation_degrees": 0.4924948455814658,
+      "max_gyro_bag_ns": 1793340146670713850
+    },
+    "within_2s_of_corruption": {
+      "imu_count": 722,
+      "acc_norm_min": 7.468080002140589,
+      "acc_norm_max": 13.870458990657399,
+      "gyro_norm_max_rad_s": 3.3386745464419594,
+      "gyro_norm_median_rad_s": 1.0129074447561648,
+      "first_to_last_orientation_degrees": 4.256222141584406,
+      "max_gyro_bag_ns": 1793340146670713850
+    }
+  },
+  "user_context": "User confirms disarmed throughout; may have manually moved robot."
+}

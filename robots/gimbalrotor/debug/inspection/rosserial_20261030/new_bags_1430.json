@@ -1,0 +1,1033 @@
+{
+  "method": "Offline raw bag reads; communication and IMU/servo telemetry only. Recorded ROS reception times are not local monotonic times or cross-machine latency.",
+  "bags": [
+    {
+      "file": "1.bag",
+      "start_jst": "2026-10-30T14:30:31.175+09:00",
+      "end_jst": "2026-10-30T14:32:11.932+09:00",
+      "duration_s": 100.75626752,
+      "selected_counts": {
+        "/rosout": 98,
+        "/gimbalrotor/imu": 18095,
+        "/gimbalrotor/servo/states": 5023,
+        "/rosout_agg": 22
+      },
+      "schemas": {
+        "/gimbalrotor/imu": {
+          "type": "spinal/Imu",
+          "md5": "ae078a6cf2a27bba55c15c4ea83c6817",
+          "caller": "/gimbalrotor/rosserial_server"
+        },
+        "/gimbalrotor/servo/states": {
+          "type": "spinal/ServoStates",
+          "md5": "8ab23ee17ec1578fba9ec2244276b0ef",
+          "caller": "/gimbalrotor/rosserial_server"
+        }
+      },
+      "lengths": {
+        "/gimbalrotor/imu": {
+          "60": 18095
+        },
+        "/gimbalrotor/servo/states": {
+          "68": 5023
+        }
+      },
+      "timing": {
+        "/gimbalrotor/imu": {
+          "first_jst": "2026-10-30T14:30:31.399+09:00",
+          "last_jst": "2026-10-30T14:32:11.929+09:00",
+          "span_s": 100.529665544,
+          "mean_hz": 179.98667261138542,
+          "reception_gaps_ms": {
+            "min": 0.001085,
+            "p50": 3.664002,
+            "p95": 19.489149,
+            "p99": 41.578556,
+            "max": 295.630805
+          },
+          "source_steps_ms": {
+            "min": 0.084337,
+            "p50": 5.0,
+            "p95": 7.0,
+            "p99": 8.0,
+            "max": 14.069758
+          },
+          "source_backwards": 0,
+          "source_equal": 0,
+          "receive_gaps_gt50ms": 106,
+          "receive_gaps_gt100ms": 30,
+          "largest_receive_gaps": [
+            {
+              "end_bag_time_ns": 1793338254700587956,
+              "end_jst": "2026-10-30T14:30:54.700+09:00",
+              "receive_ms": 295.630805,
+              "source_ms": 6.0
+            },
+            {
+              "end_bag_time_ns": 1793338323893017001,
+              "end_jst": "2026-10-30T14:32:03.893+09:00",
+              "receive_ms": 266.923967,
+              "source_ms": 5.0
+            },
+            {
+              "end_bag_time_ns": 1793338260740373936,
+              "end_jst": "2026-10-30T14:31:00.740+09:00",
+              "receive_ms": 260.80119,
+              "source_ms": 5.0
+            },
+            {
+              "end_bag_time_ns": 1793338259821676090,
+              "end_jst": "2026-10-30T14:30:59.821+09:00",
+              "receive_ms": 235.497328,
+              "source_ms": 5.0
+            },
+            {
+              "end_bag_time_ns": 1793338259396250363,
+              "end_jst": "2026-10-30T14:30:59.396+09:00",
+              "receive_ms": 233.556697,
+              "source_ms": 8.0
+            },
+            {
+              "end_bag_time_ns": 1793338322368798358,
+              "end_jst": "2026-10-30T14:32:02.368+09:00",
+              "receive_ms": 230.182446,
+              "source_ms": 7.0
+            },
+            {
+              "end_bag_time_ns": 1793338324113806357,
+              "end_jst": "2026-10-30T14:32:04.113+09:00",
+              "receive_ms": 220.530589,
+              "source_ms": 5.0
+            },
+            {
+              "end_bag_time_ns": 1793338261554985052,
+              "end_jst": "2026-10-30T14:31:01.554+09:00",
+              "receive_ms": 208.84479,
+              "source_ms": 5.0
+            }
+          ]
+        },
+        "/gimbalrotor/servo/states": {
+          "first_jst": "2026-10-30T14:30:31.451+09:00",
+          "last_jst": "2026-10-30T14:32:11.929+09:00",
+          "span_s": 100.477767038,
+          "mean_hz": 49.98120627124122,
+          "reception_gaps_ms": {
+            "min": 0.001473,
+            "p50": 19.354115,
+            "p95": 39.823002,
+            "p99": 72.085045,
+            "max": 279.654508
+          },
+          "source_steps_ms": {
+            "min": 13.084337,
+            "p50": 20.0,
+            "p95": 20.0,
+            "p99": 20.0,
+            "max": 27.447753
+          },
+          "source_backwards": 0,
+          "source_equal": 0,
+          "receive_gaps_gt50ms": 122,
+          "receive_gaps_gt100ms": 31,
+          "largest_receive_gaps": [
+            {
+              "end_bag_time_ns": 1793338254696744267,
+              "end_jst": "2026-10-30T14:30:54.696+09:00",
+              "receive_ms": 279.654508,
+              "source_ms": 20.0
+            },
+            {
+              "end_bag_time_ns": 1793338260739192842,
+              "end_jst": "2026-10-30T14:31:00.739+09:00",
+              "receive_ms": 259.662632,
+              "source_ms": 20.0
+            },
+            {
+              "end_bag_time_ns": 1793338243324283723,
+              "end_jst": "2026-10-30T14:30:43.324+09:00",
+              "receive_ms": 252.491282,
+              "source_ms": 20.0
+            },
+            {
+              "end_bag_time_ns": 1793338323891725407,
+              "end_jst": "2026-10-30T14:32:03.891+09:00",
+              "receive_ms": 246.199274,
+              "source_ms": 20.0
+            },
+            {
+              "end_bag_time_ns": 1793338259392968873,
+              "end_jst": "2026-10-30T14:30:59.392+09:00",
+              "receive_ms": 239.235713,
+              "source_ms": 20.0
+            },
+            {
+              "end_bag_time_ns": 1793338322367108734,
+              "end_jst": "2026-10-30T14:32:02.367+09:00",
+              "receive_ms": 237.596123,
+              "source_ms": 20.0
+            },
+            {
+              "end_bag_time_ns": 1793338259822586574,
+              "end_jst": "2026-10-30T14:30:59.822+09:00",
+              "receive_ms": 236.37606,
+              "source_ms": 20.0
+            },
+            {
+              "end_bag_time_ns": 1793338324113231377,
+              "end_jst": "2026-10-30T14:32:04.113+09:00",
+              "receive_ms": 221.50597,
+              "source_ms": 20.0
+            }
+          ]
+        }
+      },
+      "malformed_servo_count": 0,
+      "servo_anomalies": [],
+      "invalid_servo_stamp_count": 0,
+      "servo_index_sequences": {
+        "(0, 1, 2, 3, 4, 5, 6, 7)": 5023
+      },
+      "servo_nonzero_errors": [],
+      "servo_temp_range": [
+        22,
+        33
+      ],
+      "imu_issues": {},
+      "imu_norms": {
+        "acc": {
+          "min": 8.371543668407877,
+          "p50": 9.819950161144398,
+          "p95": 9.849213009627661,
+          "p99": 9.991603940147595,
+          "max": 10.76497211774043
+        },
+        "gyro": {
+          "min": 0.0003531763192699767,
+          "p50": 0.011914889257515087,
+          "p95": 0.25149133626368864,
+          "p99": 0.3161337559213789,
+          "max": 0.8513858936547796
+        },
+        "mag": {
+          "min": 56.41032462838223,
+          "p50": 63.96777870400779,
+          "p95": 66.14623731791028,
+          "p99": 67.32777312679693,
+          "max": 70.1816771065918
+        },
+        "quaternion": {
+          "min": 0.9999999391548186,
+          "p50": 1.0000000040899943,
+          "p95": 1.000000035835389,
+          "p99": 1.0000000469461363,
+          "max": 1.0000000676560061
+        }
+      },
+      "imu_peaks": {
+        "acc": {
+          "norm": 10.76497211774043,
+          "bag_time_ns": 1793338288976638053,
+          "jst": "2026-10-30T14:31:28.976+09:00",
+          "vector": [
+            -0.10641743242740631,
+            0.31991323828697205,
+            10.75969123840332
+          ]
+        },
+        "gyro": {
+          "norm": 0.8513858936547796,
+          "bag_time_ns": 1793338288499757051,
+          "jst": "2026-10-30T14:31:28.499+09:00",
+          "vector": [
+            0.8096969723701477,
+            0.16508764028549194,
+            0.20492638647556305
+          ]
+        },
+        "mag": {
+          "norm": 70.1816771065918,
+          "bag_time_ns": 1793338288419646020,
+          "jst": "2026-10-30T14:31:28.419+09:00",
+          "vector": [
+            42.59647750854492,
+            -38.02394485473633,
+            -40.80670928955078
+          ]
+        },
+        "quaternion": {
+          "norm": 1.0000000676560061,
+          "bag_time_ns": 1793338321178826392,
+          "jst": "2026-10-30T14:32:01.178+09:00",
+          "vector": [
+            -0.011149266734719276,
+            0.009395114146173,
+            0.40037626028060913,
+            0.9162349104881287
+          ]
+        }
+      },
+      "imu_axis_ranges": [
+        [
+          -0.6904419660568237,
+          0.6493534445762634
+        ],
+        [
+          -1.456263780593872,
+          3.0345468521118164
+        ],
+        [
+          8.368302345275879,
+          10.75969123840332
+        ],
+        [
+          -0.3195329010486603,
+          0.8096969723701477
+        ],
+        [
+          -0.17585337162017822,
+          0.25539880990982056
+        ],
+        [
+          -0.40476712584495544,
+          0.3126872479915619
+        ],
+        [
+          25.496475219726562,
+          49.796478271484375
+        ],
+        [
+          -38.02394485473633,
+          -11.923946380615234
+        ],
+        [
+          -52.80670928955078,
+          -32.856712341308594
+        ],
+        [
+          -0.0503847673535347,
+          0.1412516087293625
+        ],
+        [
+          -0.03501834720373154,
+          0.05455055460333824
+        ],
+        [
+          0.2333083301782608,
+          0.4370993673801422
+        ],
+        [
+          0.8893194198608398,
+          0.9721500277519226
+        ]
+      ],
+      "deserialization_errors": [],
+      "communication_warnings": []
+    },
+    {
+      "file": "rosserial_diag_2026-10-30-14-30-32.bag",
+      "start_jst": "2026-10-30T14:30:32.665+09:00",
+      "end_jst": "2026-10-30T14:32:13.293+09:00",
+      "duration_s": 100.627900416,
+      "selected_counts": {
+        "/rosout": 23,
+        "/gimbalrotor/imu": 18065,
+        "/gimbalrotor/servo/states": 5018
+      },
+      "schemas": {
+        "/gimbalrotor/imu": {
+          "type": "spinal/Imu",
+          "md5": "ae078a6cf2a27bba55c15c4ea83c6817",
+          "caller": "/gimbalrotor/rosserial_server"
+        },
+        "/gimbalrotor/servo/states": {
+          "type": "spinal/ServoStates",
+          "md5": "8ab23ee17ec1578fba9ec2244276b0ef",
+          "caller": "/gimbalrotor/rosserial_server"
+        }
+      },
+      "lengths": {
+        "/gimbalrotor/imu": {
+          "60": 18065
+        },
+        "/gimbalrotor/servo/states": {
+          "68": 5018
+        }
+      },
+      "timing": {
+        "/gimbalrotor/imu": {
+          "first_jst": "2026-10-30T14:30:32.930+09:00",
+          "last_jst": "2026-10-30T14:32:13.293+09:00",
+          "span_s": 100.363269647,
+          "mean_hz": 179.98616489414022,
+          "reception_gaps_ms": {
+            "min": 0.000995,
+            "p50": 4.058009,
+            "p95": 18.677823,
+            "p99": 39.146399,
+            "max": 293.26346
+          },
+          "source_steps_ms": {
+            "min": 0.084337,
+            "p50": 5.0,
+            "p95": 7.0,
+            "p99": 8.0,
+            "max": 14.069758
+          },
+          "source_backwards": 0,
+          "source_equal": 0,
+          "receive_gaps_gt50ms": 95,
+          "receive_gaps_gt100ms": 28,
+          "largest_receive_gaps": [
+            {
+              "end_bag_time_ns": 1793338254696710531,
+              "end_jst": "2026-10-30T14:30:54.696+09:00",
+              "receive_ms": 293.26346,
+              "source_ms": 6.0
+            },
+            {
+              "end_bag_time_ns": 1793338260735876355,
+              "end_jst": "2026-10-30T14:31:00.735+09:00",
+              "receive_ms": 256.47811,
+              "source_ms": 5.0
+            },
+            {
+              "end_bag_time_ns": 1793338323887779480,
+              "end_jst": "2026-10-30T14:32:03.887+09:00",
+              "receive_ms": 241.966078,
+              "source_ms": 5.0
+            },
+            {
+              "end_bag_time_ns": 1793338259817675895,
+              "end_jst": "2026-10-30T14:30:59.817+09:00",
+              "receive_ms": 232.182348,
+              "source_ms": 5.0
+            },
+            {
+              "end_bag_time_ns": 1793338322366960226,
+              "end_jst": "2026-10-30T14:32:02.366+09:00",
+              "receive_ms": 229.3706,
+              "source_ms": 7.0
+            },
+            {
+              "end_bag_time_ns": 1793338259391527734,
+              "end_jst": "2026-10-30T14:30:59.391+09:00",
+              "receive_ms": 228.765677,
+              "source_ms": 8.0
+            },
+            {
+              "end_bag_time_ns": 1793338324109859098,
+              "end_jst": "2026-10-30T14:32:04.109+09:00",
+              "receive_ms": 219.038503,
+              "source_ms": 5.0
+            },
+            {
+              "end_bag_time_ns": 1793338261551232766,
+              "end_jst": "2026-10-30T14:31:01.551+09:00",
+              "receive_ms": 208.32008,
+              "source_ms": 5.0
+            }
+          ]
+        },
+        "/gimbalrotor/servo/states": {
+          "first_jst": "2026-10-30T14:30:32.930+09:00",
+          "last_jst": "2026-10-30T14:32:13.293+09:00",
+          "span_s": 100.363222606,
+          "mean_hz": 49.98843071924306,
+          "reception_gaps_ms": {
+            "min": 0.001777,
+            "p50": 19.420761,
+            "p95": 39.485965,
+            "p99": 72.862894,
+            "max": 279.683939
+          },
+          "source_steps_ms": {
+            "min": 13.084337,
+            "p50": 20.0,
+            "p95": 20.0,
+            "p99": 20.0,
+            "max": 27.447753
+          },
+          "source_backwards": 0,
+          "source_equal": 0,
+          "receive_gaps_gt50ms": 121,
+          "receive_gaps_gt100ms": 33,
+          "largest_receive_gaps": [
+            {
+              "end_bag_time_ns": 1793338254696726379,
+              "end_jst": "2026-10-30T14:30:54.696+09:00",
+              "receive_ms": 279.683939,
+              "source_ms": 20.0
+            },
+            {
+              "end_bag_time_ns": 1793338260736025068,
+              "end_jst": "2026-10-30T14:31:00.736+09:00",
+              "receive_ms": 258.908105,
+              "source_ms": 20.0
+            },
+            {
+              "end_bag_time_ns": 1793338243320747779,
+              "end_jst": "2026-10-30T14:30:43.320+09:00",
+              "receive_ms": 249.3325,
+              "source_ms": 20.0
+            },
+            {
+              "end_bag_time_ns": 1793338323890829506,
+              "end_jst": "2026-10-30T14:32:03.890+09:00",
+              "receive_ms": 245.313195,
+              "source_ms": 20.0
+            },
+            {
+              "end_bag_time_ns": 1793338259391508281,
+              "end_jst": "2026-10-30T14:30:59.391+09:00",
+              "receive_ms": 237.828093,
+              "source_ms": 20.0
+            },
+            {
+              "end_bag_time_ns": 1793338322366978731,
+              "end_jst": "2026-10-30T14:32:02.366+09:00",
+              "receive_ms": 237.593828,
+              "source_ms": 20.0
+            },
+            {
+              "end_bag_time_ns": 1793338259818711300,
+              "end_jst": "2026-10-30T14:30:59.818+09:00",
+              "receive_ms": 233.235864,
+              "source_ms": 20.0
+            },
+            {
+              "end_bag_time_ns": 1793338324111124659,
+              "end_jst": "2026-10-30T14:32:04.111+09:00",
+              "receive_ms": 220.295153,
+              "source_ms": 20.0
+            }
+          ]
+        }
+      },
+      "malformed_servo_count": 0,
+      "servo_anomalies": [],
+      "invalid_servo_stamp_count": 0,
+      "servo_index_sequences": {
+        "(0, 1, 2, 3, 4, 5, 6, 7)": 5018
+      },
+      "servo_nonzero_errors": [],
+      "servo_temp_range": [
+        22,
+        33
+      ],
+      "imu_issues": {},
+      "imu_norms": {
+        "acc": {
+          "min": 8.371543668407877,
+          "p50": 9.82043828039558,
+          "p95": 9.849492669447402,
+          "p99": 9.991603940147595,
+          "max": 10.76497211774043
+        },
+        "gyro": {
+          "min": 0.0003531763192699767,
+          "p50": 0.01194724538627304,
+          "p95": 0.25152186494481826,
+          "p99": 0.3161337559213789,
+          "max": 0.8513858936547796
+        },
+        "mag": {
+          "min": 56.41032462838223,
+          "p50": 63.97343609911364,
+          "p95": 66.14656539242908,
+          "p99": 67.32777312679693,
+          "max": 70.1816771065918
+        },
+        "quaternion": {
+          "min": 0.9999999391548186,
+          "p50": 1.0000000040761334,
+          "p95": 1.000000035835389,
+          "p99": 1.0000000469259887,
+          "max": 1.0000000676560061
+        }
+      },
+      "imu_peaks": {
+        "acc": {
+          "norm": 10.76497211774043,
+          "bag_time_ns": 1793338288975340525,
+          "jst": "2026-10-30T14:31:28.975+09:00",
+          "vector": [
+            -0.10641743242740631,
+            0.31991323828697205,
+            10.75969123840332
+          ]
+        },
+        "gyro": {
+          "norm": 0.8513858936547796,
+          "bag_time_ns": 1793338288499563130,
+          "jst": "2026-10-30T14:31:28.499+09:00",
+          "vector": [
+            0.8096969723701477,
+            0.16508764028549194,
+            0.20492638647556305
+          ]
+        },
+        "mag": {
+          "norm": 70.1816771065918,
+          "bag_time_ns": 1793338288419514689,
+          "jst": "2026-10-30T14:31:28.419+09:00",
+          "vector": [
+            42.59647750854492,
+            -38.02394485473633,
+            -40.80670928955078
+          ]
+        },
+        "quaternion": {
+          "norm": 1.0000000676560061,
+          "bag_time_ns": 1793338321178755364,
+          "jst": "2026-10-30T14:32:01.178+09:00",
+          "vector": [
+            -0.011149266734719276,
+            0.009395114146173,
+            0.40037626028060913,
+            0.9162349104881287
+          ]
+        }
+      },
+      "imu_axis_ranges": [
+        [
+          -0.6904419660568237,
+          0.6493534445762634
+        ],
+        [
+          -1.456263780593872,
+          3.0345468521118164
+        ],
+        [
+          8.368302345275879,
+          10.75969123840332
+        ],
+        [
+          -0.3195329010486603,
+          0.8096969723701477
+        ],
+        [
+          -0.17585337162017822,
+          0.25539880990982056
+        ],
+        [
+          -0.40476712584495544,
+          0.3126872479915619
+        ],
+        [
+          25.496475219726562,
+          49.796478271484375
+        ],
+        [
+          -38.02394485473633,
+          -11.923946380615234
+        ],
+        [
+          -52.80670928955078,
+          -32.856712341308594
+        ],
+        [
+          -0.0503847673535347,
+          0.1412516087293625
+        ],
+        [
+          -0.03501834720373154,
+          0.05455055460333824
+        ],
+        [
+          0.2333083301782608,
+          0.4370993673801422
+        ],
+        [
+          0.8893194198608398,
+          0.9721500277519226
+        ]
+      ],
+      "deserialization_errors": [],
+      "communication_warnings": []
+    }
+  ],
+  "cross_bag_comparison": {
+    "/gimbalrotor/imu": {
+      "source_window_ns": [
+        1793338232919815082,
+        1793338331859308665
+      ],
+      "records_1bag": 17808,
+      "records_diag": 17808,
+      "identical_payloads": 17808,
+      "only_1bag": 0,
+      "only_diag": 0
+    },
+    "/gimbalrotor/servo/states": {
+      "source_window_ns": [
+        1793338232916815082,
+        1793338331852308665
+      ],
+      "records_1bag": 4947,
+      "records_diag": 4947,
+      "identical_payloads": 4947,
+      "only_1bag": 0,
+      "only_diag": 0
+    }
+  },
+  "followup": {
+    "1.bag": {
+      "log_level_counts": [
+        {
+          "topic": "/rosout",
+          "node": "/record_1793338231095150241",
+          "level": 2,
+          "count": 83
+        },
+        {
+          "topic": "/rosout_agg",
+          "node": "/record_1793338231095150241",
+          "level": 2,
+          "count": 7
+        },
+        {
+          "topic": "/rosout",
+          "node": "/gimbalrotor/aerial_robot_base_node",
+          "level": 2,
+          "count": 14
+        },
+        {
+          "topic": "/rosout_agg",
+          "node": "/gimbalrotor/aerial_robot_base_node",
+          "level": 2,
+          "count": 14
+        },
+        {
+          "topic": "/rosout",
+          "node": "/gimbalrotor/aerial_robot_base_node",
+          "level": 4,
+          "count": 1
+        },
+        {
+          "topic": "/rosout_agg",
+          "node": "/gimbalrotor/aerial_robot_base_node",
+          "level": 4,
+          "count": 1
+        }
+      ],
+      "warning_or_error_record_count": 2,
+      "bursts": {
+        "/gimbalrotor/imu": {
+          "gap_ms": 295.630805,
+          "gap_end_ns": 1793338254700587956,
+          "packets_in_next20ms": 57,
+          "source_span_in_burst_ms": 311.0,
+          "last_burst_bag_ns": 1793338254718253044
+        },
+        "/gimbalrotor/servo/states": {
+          "gap_ms": 279.654508,
+          "gap_end_ns": 1793338254696744267,
+          "packets_in_next20ms": 15,
+          "source_span_in_burst_ms": 280.0,
+          "last_burst_bag_ns": 1793338254712801033
+        }
+      },
+      "timestamp_fraction_changes": {
+        "/gimbalrotor/imu": {
+          "count": 40,
+          "smallest_source_steps": [
+            {
+              "bag_time_ns": 1793338315918368373,
+              "source_step_ms": 0.084337,
+              "fraction_change_ns": 84337
+            },
+            {
+              "bag_time_ns": 1793338270935985044,
+              "source_step_ms": 0.116461,
+              "fraction_change_ns": 116461
+            },
+            {
+              "bag_time_ns": 1793338260934508412,
+              "source_step_ms": 0.748952,
+              "fraction_change_ns": -251048
+            },
+            {
+              "bag_time_ns": 1793338305910400234,
+              "source_step_ms": 1.172931,
+              "fraction_change_ns": -827069
+            }
+          ],
+          "largest_source_steps": [
+            {
+              "bag_time_ns": 1793338295885473760,
+              "source_step_ms": 14.069758,
+              "fraction_change_ns": 69758
+            },
+            {
+              "bag_time_ns": 1793338313400124545,
+              "source_step_ms": 12.447753,
+              "fraction_change_ns": 447753
+            },
+            {
+              "bag_time_ns": 1793338268353624595,
+              "source_step_ms": 10.750101,
+              "fraction_change_ns": -249899
+            },
+            {
+              "bag_time_ns": 1793338253329431802,
+              "source_step_ms": 9.909458,
+              "fraction_change_ns": -90542
+            }
+          ]
+        },
+        "/gimbalrotor/servo/states": {
+          "count": 40,
+          "smallest_source_steps": [
+            {
+              "bag_time_ns": 1793338315917759753,
+              "source_step_ms": 13.084337,
+              "fraction_change_ns": 84337
+            },
+            {
+              "bag_time_ns": 1793338270877434835,
+              "source_step_ms": 15.116461,
+              "fraction_change_ns": 116461
+            },
+            {
+              "bag_time_ns": 1793338261140358271,
+              "source_step_ms": 15.748952,
+              "fraction_change_ns": -251048
+            },
+            {
+              "bag_time_ns": 1793338305901064874,
+              "source_step_ms": 16.172931,
+              "fraction_change_ns": -827069
+            }
+          ],
+          "largest_source_steps": [
+            {
+              "bag_time_ns": 1793338313418258468,
+              "source_step_ms": 27.447753,
+              "fraction_change_ns": 447753
+            },
+            {
+              "bag_time_ns": 1793338295899516997,
+              "source_step_ms": 27.069758,
+              "fraction_change_ns": 69758
+            },
+            {
+              "bag_time_ns": 1793338253333948357,
+              "source_step_ms": 24.909458,
+              "fraction_change_ns": -90542
+            },
+            {
+              "bag_time_ns": 1793338303394792020,
+              "source_step_ms": 24.002596,
+              "fraction_change_ns": 2596
+            }
+          ]
+        }
+      }
+    },
+    "rosserial_diag_2026-10-30-14-30-32.bag": {
+      "log_level_counts": [
+        {
+          "topic": "/rosout",
+          "node": "/record_1793338232644325604",
+          "level": 2,
+          "count": 1
+        },
+        {
+          "topic": "/rosout",
+          "node": "/record_1793338231095150241",
+          "level": 2,
+          "count": 7
+        },
+        {
+          "topic": "/rosout",
+          "node": "/gimbalrotor/aerial_robot_base_node",
+          "level": 2,
+          "count": 14
+        },
+        {
+          "topic": "/rosout",
+          "node": "/gimbalrotor/aerial_robot_base_node",
+          "level": 4,
+          "count": 1
+        }
+      ],
+      "warning_or_error_record_count": 1,
+      "bursts": {
+        "/gimbalrotor/imu": {
+          "gap_ms": 293.26346,
+          "gap_end_ns": 1793338254696710531,
+          "packets_in_next20ms": 56,
+          "source_span_in_burst_ms": 305.0,
+          "last_burst_bag_ns": 1793338254709184318
+        },
+        "/gimbalrotor/servo/states": {
+          "gap_ms": 279.683939,
+          "gap_end_ns": 1793338254696726379,
+          "packets_in_next20ms": 15,
+          "source_span_in_burst_ms": 280.0,
+          "last_burst_bag_ns": 1793338254713994417
+        }
+      },
+      "timestamp_fraction_changes": {
+        "/gimbalrotor/imu": {
+          "count": 40,
+          "smallest_source_steps": [
+            {
+              "bag_time_ns": 1793338315915182986,
+              "source_step_ms": 0.084337,
+              "fraction_change_ns": 84337
+            },
+            {
+              "bag_time_ns": 1793338270876139475,
+              "source_step_ms": 0.116461,
+              "fraction_change_ns": 116461
+            },
+            {
+              "bag_time_ns": 1793338260932074392,
+              "source_step_ms": 0.748952,
+              "fraction_change_ns": -251048
+            },
+            {
+              "bag_time_ns": 1793338305909470178,
+              "source_step_ms": 1.172931,
+              "fraction_change_ns": -827069
+            }
+          ],
+          "largest_source_steps": [
+            {
+              "bag_time_ns": 1793338295885343283,
+              "source_step_ms": 14.069758,
+              "fraction_change_ns": 69758
+            },
+            {
+              "bag_time_ns": 1793338313399866367,
+              "source_step_ms": 12.447753,
+              "fraction_change_ns": 447753
+            },
+            {
+              "bag_time_ns": 1793338268353379403,
+              "source_step_ms": 10.750101,
+              "fraction_change_ns": -249899
+            },
+            {
+              "bag_time_ns": 1793338253327744912,
+              "source_step_ms": 9.909458,
+              "fraction_change_ns": -90542
+            }
+          ]
+        },
+        "/gimbalrotor/servo/states": {
+          "count": 40,
+          "smallest_source_steps": [
+            {
+              "bag_time_ns": 1793338315915159058,
+              "source_step_ms": 13.084337,
+              "fraction_change_ns": 84337
+            },
+            {
+              "bag_time_ns": 1793338270876195805,
+              "source_step_ms": 15.116461,
+              "fraction_change_ns": 116461
+            },
+            {
+              "bag_time_ns": 1793338261137364774,
+              "source_step_ms": 15.748952,
+              "fraction_change_ns": -251048
+            },
+            {
+              "bag_time_ns": 1793338305900420741,
+              "source_step_ms": 16.172931,
+              "fraction_change_ns": -827069
+            }
+          ],
+          "largest_source_steps": [
+            {
+              "bag_time_ns": 1793338313418215874,
+              "source_step_ms": 27.447753,
+              "fraction_change_ns": 447753
+            },
+            {
+              "bag_time_ns": 1793338295899617092,
+              "source_step_ms": 27.069758,
+              "fraction_change_ns": 69758
+            },
+            {
+              "bag_time_ns": 1793338253333572981,
+              "source_step_ms": 24.909458,
+              "fraction_change_ns": -90542
+            },
+            {
+              "bag_time_ns": 1793338303394764589,
+              "source_step_ms": 24.002596,
+              "fraction_change_ns": 2596
+            }
+          ]
+        }
+      }
+    }
+  },
+  "diagnostic_all_servo_prefix_scan": {
+    "window_seconds_each_side": 1,
+    "minimum_bytes": 16,
+    "minimum_distinct_byte_values": 4,
+    "matches": []
+  },
+  "diagnostic_servo_raw_ranges": {
+    "0": {
+      "angle_min": 1687,
+      "angle_max": 2269,
+      "load_min": -101,
+      "load_max": 117
+    },
+    "1": {
+      "angle_min": 1890,
+      "angle_max": 2351,
+      "load_min": -217,
+      "load_max": 106
+    },
+    "2": {
+      "angle_min": 1897,
+      "angle_max": 2296,
+      "load_min": -148,
+      "load_max": 239
+    },
+    "3": {
+      "angle_min": 1659,
+      "angle_max": 2348,
+      "load_min": -118,
+      "load_max": 148
+    },
+    "4": {
+      "angle_min": 2764,
+      "angle_max": 2764,
+      "load_min": 0,
+      "load_max": 0
+    },
+    "5": {
+      "angle_min": 1082,
+      "angle_max": 1085,
+      "load_min": 0,
+      "load_max": 0
+    },
+    "6": {
+      "angle_min": 2044,
+      "angle_max": 2050,
+      "load_min": -116,
+      "load_max": 110
+    },
+    "7": {
+      "angle_min": 2048,
+      "angle_max": 2049,
+      "load_min": -15,
+      "load_max": 0
+    }
+  },
+  "other_log_observation": {
+    "jst": "2026-10-30T14:30:51.093+09:00",
+    "node": "/gimbalrotor/aerial_robot_base_node",
+    "level": 4,
+    "message": "start roll/pitch I control",
+    "note": "Reported as a log observation only; control logic was not inspected."
+  }
+}

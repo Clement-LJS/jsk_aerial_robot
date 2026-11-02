@@ -1,0 +1,53 @@
+LOCAL DEBUG REORGANIZATION / REPRODUCTION VALIDATION -- 2026-11-01 JST
+
+Completed without a ROS workspace build, environment setup, live graph calls,
+device access, SSH, firmware changes, staging, commits or pushes.
+
+Files organized
+  simulate_run -> debug/simulate_run, with old-path compatibility symlink.
+  inspection -> debug/inspection, with old-path compatibility symlink.
+  External recordings remain at /home/clement/rosbag/...
+  Recorder provenance and historical ST-Link comparison use robust root discovery.
+  Capture/launch/control behavior remains unchanged. Existing bench.launch is an
+  optional propeller-off startup wrapper; it was not launched.
+
+Validation
+  6 new reproduction tests passed.
+  19 existing passive capture tests passed.
+  4 existing USB parser tests passed.
+  5 existing payload parser tests passed.
+  All relocated/new Python files parsed successfully.
+  Old-path capture --help and new-path USB --help work without starting capture.
+  Model-only execution passes without importing rosbag.
+  15 reviewed production source hashes match the source manifest.
+  No tracked launch/config/src/include/scripts/build-definition changes.
+  The capture test's 'disk full' diagnostic is a mocked failure-path test, not
+  an actual disk-space failure or a new recording.
+
+Actual 5_pidtuning diagnostic splits read offline
+  116052 IMU messages; 32035 servo messages; 6330 PWM messages.
+  3604 allocation messages, each first example 8x3; 3604 four-axis messages,
+  first example with eight force components. Saved metadata selects the expected
+  gimbalrotor controller and roll/yaw perching navigation.
+  One malformed servo sample at 17:13:19.201895 JST, ARM_OFF.
+  Latest allocation and four-axis messages were approximately 19.909 s earlier.
+  Matching PWM [1000,1000,1000,1000,0,0,0,0] arrived 1.729327 ms before it.
+  Actual bytes produce genpy DeserializationError (buffer of 7 bytes required).
+
+Controlled Python schedule
+  Interrupt servo serialization after the first 20 payload bytes, complete PWM
+  publication, then resume servo serialization and frame construction.
+  Result has a valid modeled rosserial checksum and servo count 65537000.
+  First 20 bytes match the observed PWM prefix exactly.
+  Using the preceding valid servo sample, two suffix bytes differ from the
+  observed corrupted sample (offsets 20 and 55). These are changing servo-angle
+  bytes; the true uncorrupted interrupted sample is unavailable. Full-payload
+  equality is NOT claimed and the JSON reports false for that comparison.
+  Completing publications one at a time preserves both messages and count=8.
+
+Evidence boundary
+  This is a source-pinned Python port and actual bag decoding, not execution of
+  the C++ allocator/serializer on STM32. No natural MCU task switch was observed,
+  no on-controller hook was implemented and no production serialization mutex
+  was installed. LIVE_VERIFICATION.txt specifies the remaining controlled
+  firmware experiment and fix validation for a later maintenance session.

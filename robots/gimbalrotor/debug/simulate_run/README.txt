@@ -1,5 +1,12 @@
 PASSIVE CAPTURE FOR NORMAL GIMBALROTOR BRINGUP (LAPTOP OR ONBOARD PC)
 
+Canonical source location is now gimbalrotor/debug/simulate_run. The old
+gimbalrotor/simulate_run path remains a compatibility symlink for active runs.
+Known VIM4 limitation (2026-11-01): kernel 5.4.125 has CONFIG_USB_MON unset.
+The USB commands below apply only on a host with usbmon support; they will not
+work on that VIM4 merely by installing tcpdump. ROS topic recording still works.
+See ../LIVE_VERIFICATION.txt for the planned alternative raw-byte capture.
+
 Use your normal bringup and keyboard. This recorder never commands the robot,
 changes parameters, blocks arming/takeoff, or halts on an error. You control
 start, takeoff and stop. The existing controller performs allocation and
@@ -22,14 +29,14 @@ The onboard prerequisites/USB device have not been checked by these instructions
 
 SSH terminal 1 (ROS capture):
 
-  CAPTURE_CODE="$(rospack find gimbalrotor)/simulate_run"
+  CAPTURE_CODE="$(rospack find gimbalrotor)/debug/simulate_run"
   mkdir -p "$HOME/rosbag/year2026/11Nov/261101/inspection"
   cd "$HOME/rosbag/year2026/11Nov/261101/inspection"
   python3 "$CAPTURE_CODE/bench_capture.py"
 
 Leave it running. SSH terminal 2 (USB capture):
 
-  CAPTURE_CODE="$(rospack find gimbalrotor)/simulate_run"
+  CAPTURE_CODE="$(rospack find gimbalrotor)/debug/simulate_run"
   cd "$HOME/rosbag/year2026/11Nov/261101/inspection"
   sudo modprobe usbmon
   sudo python3 "$CAPTURE_CODE/capture_usb.py"
@@ -60,13 +67,13 @@ ROSBAG + USB: COPY THESE COMMANDS, RUN BEFORE ARMING
 Keep your normal bringup running. In a second terminal with your ROS environment:
 
   cd /home/clement/rosbag/year2026/11Nov/261101
-  python3 /home/clement/ros/jsk_aerial_robot_ws/src/jsk_aerial_robot/robots/gimbalrotor/simulate_run/bench_capture.py
+  python3 /home/clement/ros/jsk_aerial_robot_ws/src/jsk_aerial_robot/robots/gimbalrotor/debug/simulate_run/bench_capture.py
 
 Leave that terminal running. In a third terminal:
 
   cd /home/clement/rosbag/year2026/11Nov/261101
   sudo modprobe usbmon
-  sudo python3 /home/clement/ros/jsk_aerial_robot_ws/src/jsk_aerial_robot/robots/gimbalrotor/simulate_run/capture_usb.py
+  sudo python3 /home/clement/ros/jsk_aerial_robot_ws/src/jsk_aerial_robot/robots/gimbalrotor/debug/simulate_run/capture_usb.py
 
 No paths or filenames need substituting for this example. On another day, change
 only the cd directory in BOTH terminals to your desired existing recording folder.

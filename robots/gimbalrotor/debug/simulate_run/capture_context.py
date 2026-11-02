@@ -63,7 +63,7 @@ def snapshot(topics):
                 result['nodes'][node] = {'uri': uri, 'pid': pid if code == 1 else None}
     except Exception as exc:
         result['errors'].append(str(exc))
-    root = Path(__file__).resolve().parent.parent
+    root = next(p for p in Path(__file__).resolve().parents if (p / 'package.xml').is_file())
     for key, command in (('git_head', ['git', 'rev-parse', 'HEAD']),
                          ('git_branch', ['git', 'branch', '--show-current']),
                          ('git_status', ['git', 'status', '--short'])):
