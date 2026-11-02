@@ -1,7 +1,9 @@
 # Gazebo-only overrides, loaded after RollYawPerching.yaml and Servo.yaml.
 navigation:
   roll_yaw_perching:
-    # Stationary simulated IMU rate noise exceeds the hardware 0.01 rad/s gate.
+    # Automatic endpoint settling only (also enable if explicitly opted in).
+    # Stationary simulated IMU rate noise exceeds the hardware 0.01 rad/s value.
+    require_settled_on_enable: false
     settle_rate: 0.08
 servo_controller:
   joints:

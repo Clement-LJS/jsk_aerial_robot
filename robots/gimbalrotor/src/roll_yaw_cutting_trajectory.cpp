@@ -199,7 +199,7 @@ Plan prepare(const Kinematics& model,const Vec& initial,const Mat& neutral,const
 }
 const char* stageName(Stage s)
 {
-  static const char* names[]={"FREE_FLIGHT","CONTACT_LOCKED","REZERO","PRE_ALIGN","READY","EXECUTING","PAUSED","COMPLETED_HOLD","FAULT_HOLD"};
+  static const char* names[]={"FREE_FLIGHT","CONTACT_LOCKED","REZERO","PRE_ALIGN","READY","EXECUTING","PAUSED","COMPLETED_HOLD","FAULT_HOLD","MANUAL"};
   return names[static_cast<int>(s)];
 }
 bool ExecutionConfig::valid() const
@@ -208,22 +208,39 @@ bool ExecutionConfig::valid() const
                 settle_rate,settle_time,settle_timeout}) if(!std::isfinite(x)||x<=0) return false;
   return std::isfinite(future_tolerance)&&future_tolerance>=0&&future_tolerance<timeout&&settle_timeout>settle_time;
 }
-bool Executor::feedbackValid(const Feedback& s) const
+std::string Executor::feedbackRejection(const Feedback& s) const
 {
+  if(!config.valid()||!planning.valid()) return "invalid execution/planning configuration";
+  if(!s.hover) return "contact control requires HOVER without forced landing";
+  if(!s.valid) return s.invalid_reason.empty()?"invalid/incoherent feedback":s.invalid_reason;
+  if(!std::isfinite(s.now)) return "invalid feedback clock";
   auto fresh=[&](double t){return std::isfinite(t)&&t>0&&s.now-t>=-config.future_tolerance&&s.now-t<=config.timeout;};
-  return config.valid()&&planning.valid()&&s.valid&&s.hover&&std::isfinite(s.now)&&fresh(s.joint_stamp)&&fresh(s.body_stamp)&&
-    poseValid(s.body)&&s.eta.allFinite()&&s.joint_rate.allFinite()&&s.body_omega.allFinite();
+  if(!fresh(s.joint_stamp)) return "stale/future joint feedback";
+  if(!fresh(s.body_stamp)) return "stale/future body feedback";
+  if(!poseValid(s.body)) return "invalid body pose/rotation";
+  if(!s.eta.allFinite()) return "nonfinite joint positions";
+  if(!s.joint_rate.allFinite()||!s.body_omega.allFinite()) return "invalid angular-rate feedback";
+  return "";
 }
+bool Executor::feedbackValid(const Feedback& s) const
+{ return feedbackRejection(s).empty(); }
 bool Executor::capture(const Feedback& s,const Kinematics& m)
 {
-  if(!feedbackValid(s)||s.joint_rate.tail<2>().norm()>config.settle_rate||s.body_omega.norm()>config.settle_rate)
-  { reason="lock requires fresh, valid, settled HOVER feedback"; return false; }
+  if(owns()) { reason="existing contact retained; disable before capture"; return false; }
+  const auto rejection=feedbackRejection(s);
+  if(!rejection.empty()) { reason=rejection; return false; }
+  if(config.require_settled_on_enable&&
+     (s.joint_rate.tail<2>().norm()>config.settle_rate||s.body_omega.norm()>config.settle_rate))
+  { reason="optional settled-on-enable rate check failed"; return false; }
   Kinematics next=m; Vec q=s.eta; q[0]=0;
   if(!next.lock(s.body,q)) { reason="invalid fixed-pivot model"; return false; }
   std::string why;
   if(!configurationAllowed(next,q,Desired{s.body.linear(),Vec::Zero(),Vec::Zero()},planning,why)) { reason=why; return false; }
-  model=next; target=Reference(); target.eta=q; model.evaluate(q,target.body,target.cog);
-  target.desired.rotation=target.body.linear(); ++session; plan=Plan();
+  Reference held; held.eta=q;
+  if(!next.evaluate(q,held.body,held.cog)) { reason="invalid captured body/CoG FK"; return false; }
+  held.desired.rotation=held.body.linear();
+  model=std::move(next); target=held; ++session; plan=Plan();
+  first_fault.clear();
   stage=Stage::CONTACT_LOCKED; reason="measured contact captured; N is locked body orientation";
   last_time_=s.now; progress=stable_since_=ready_since_=0; stopping_=cancel_=false; speed_=1; return true;
 }
@@ -231,8 +248,11 @@ bool Executor::accept(Plan p)
 {
   if(stage!=Stage::REZERO||p.session!=session) return false;
   if(!p.ok) { stage=Stage::CONTACT_LOCKED; reason=p.reason; return false; }
-  if((p.align.knots.front().eta-target.eta).norm()>1e-9) { fault("plan start no longer matches held target"); return false; }
-  plan=std::move(p); stage=Stage::CONTACT_LOCKED; reason="plan ready; align with current session ID"; return true;
+  if(p.align.knots.size()<2||(p.align.knots.front().eta-target.eta).norm()>1e-9) { fault("plan start no longer matches held target"); return false; }
+  plan=std::move(p); progress=0; speed_=1; stopping_=cancel_=false;
+  stage=plan.manual?Stage::MANUAL:Stage::CONTACT_LOCKED;
+  reason=plan.manual?plan.reason:"plan ready; align with current session ID";
+  return true;
 }
 bool Executor::command(const std::string& cmd,std::uint64_t id)
 {
@@ -246,29 +266,34 @@ bool Executor::command(const std::string& cmd,std::uint64_t id)
     if(plan.cut.knots.empty()) { reason="alignment-only plan; prepare a pitch stroke to start"; return false; }
     stage=Stage::EXECUTING; progress=0; speed_=1; stable_since_=ready_since_=0; return true;
   }
-  if((cmd=="pause"||cmd=="cancel")&&(stage==Stage::PRE_ALIGN||stage==Stage::EXECUTING))
-  { stopping_=true; cancel_=cmd=="cancel"; reason="decelerating along validated path"; return true; }
+  if((cmd=="pause"||cmd=="cancel")&&(stage==Stage::PRE_ALIGN||stage==Stage::EXECUTING||stage==Stage::MANUAL))
+  { stopping_=true; cancel_=cmd=="cancel"||stage==Stage::MANUAL; reason="decelerating along validated path"; return true; }
   if(cmd=="resume"&&stage==Stage::PAUSED) {
     stage=paused_align_?Stage::PRE_ALIGN:Stage::EXECUTING; stopping_=false; return true;
   }
-  if(cmd=="cancel"&&(stage==Stage::PAUSED||stage==Stage::REZERO||stage==Stage::CONTACT_LOCKED||stage==Stage::READY))
+  if(cmd=="cancel"&&(stage==Stage::PAUSED||stage==Stage::REZERO||stage==Stage::CONTACT_LOCKED||stage==Stage::READY||stage==Stage::COMPLETED_HOLD))
   { plan=Plan(); stage=Stage::COMPLETED_HOLD; reason="cancelled; holding contact"; return true; }
   reason="command rejected in current trajectory state"; return false;
 }
 void Executor::fault(const std::string& why)
 {
-  if(owns()) stage=Stage::FAULT_HOLD;
-  reason=why; target.velocity.setZero(); target.acceleration.setZero();
+  if(owns()) {
+    // Preserve the initiating cause for state/UI; diagnostics retain the latest
+    // observation in reason even if subsequent tracking checks also fail.
+    if(stage!=Stage::FAULT_HOLD) first_fault=why;
+    stage=Stage::FAULT_HOLD;
+  }
+  reason=why; plan=Plan(); stopping_=cancel_=false; target.velocity.setZero(); target.acceleration.setZero();
   target.body_omega.setZero(); target.body_acceleration.setZero(); target.cog_velocity.setZero(); target.cog_acceleration.setZero();
   target.cog_omega.setZero(); target.cog_angular_acceleration.setZero();
   target.desired={target.body.linear(),Vec::Zero(),Vec::Zero()};
 }
 void Executor::reset()
-{ stage=Stage::FREE_FLIGHT; ++session; plan=Plan(); reason="perching disabled"; last_time_=0; }
+{ stage=Stage::FREE_FLIGHT; ++session; plan=Plan(); first_fault.clear(); reason="perching disabled"; last_time_=0; }
 void Executor::tick(const Feedback& s)
 {
   if(!owns()) return;
-  if(!feedbackValid(s)) { fault("invalid/stale joint or body feedback, or loss of HOVER"); return; }
+  if(!feedbackValid(s)) { fault(feedbackRejection(s)); return; }
   if(!model.estimate(s.body,s.eta,measured)) { fault("passive hinge estimation failed"); return; }
   Vec measured_q=s.eta; measured_q[0]=measured.alpha;
   if((measured_q.array()<planning.limits.lower.array()).any()||
@@ -283,8 +308,8 @@ void Executor::tick(const Feedback& s)
   const double dt=s.now-last_time_; last_time_=s.now;
   if(!std::isfinite(dt)||dt<=0||dt>config.timeout) { fault("invalid execution clock step"); return; }
   if(stage==Stage::FAULT_HOLD) return;
-  if(stage!=Stage::PRE_ALIGN&&stage!=Stage::EXECUTING) return;
-  const auto& path=stage==Stage::PRE_ALIGN?plan.align:plan.cut;
+  if(stage!=Stage::PRE_ALIGN&&stage!=Stage::EXECUTING&&stage!=Stage::MANUAL) return;
+  const auto& path=stage==Stage::EXECUTING?plan.cut:plan.align;
   if(!plan.ok||plan.session!=session) { fault("trajectory ownership/session mismatch"); return; }
   const double speed_acc=std::min((planning.limits.acceleration.array()/planning.limits.velocity.array()).minCoeff(),
                                 planning.cog_acceleration_limit/planning.cog_speed_limit)*.5;
@@ -302,11 +327,20 @@ void Executor::tick(const Feedback& s)
   next.desired.acceleration=next.desired.acceleration*speed_*speed_+next.desired.omega*ds;
   next.velocity*=speed_; next.body_omega*=speed_; next.cog_velocity*=speed_; next.cog_omega*=speed_; next.desired.omega*=speed_;
   target=next;
-  if(stopping_&&speed_==0) {
+  // Reaching the path's zero-rate endpoint also completes a stop. Otherwise an
+  // automatic alignment could enter READY before deceleration finished and leave
+  // a pending cancel/disable stranded there.
+  if(stopping_&&(speed_==0||progress>=path.duration())) {
     paused_align_=stage==Stage::PRE_ALIGN; stage=cancel_?Stage::COMPLETED_HOLD:Stage::PAUSED;
     if(cancel_) plan=Plan(); stopping_=cancel_=false; reason="stopped at contact-consistent reference"; return;
   }
   if(progress>=path.duration()) {
+    // A discrete manual move ends at rest, without the automatic READY settling
+    // gate. The next increment separately requires close measured tracking.
+    if(stage==Stage::MANUAL) {
+      stage=Stage::COMPLETED_HOLD; plan=Plan();
+      reason="manual increment complete; holding contact"; return;
+    }
     if(ready_since_==0) ready_since_=s.now;
     const bool settled=s.joint_rate.tail<2>().norm()<config.settle_rate&&s.body_omega.norm()<config.settle_rate;
     if(!settled) stable_since_=0; else if(stable_since_==0) stable_since_=s.now;

@@ -54,6 +54,7 @@ struct Path
 struct Plan
 {
   bool ok=false;
+  bool manual=false;
   std::uint64_t session=0;
   int scale_attempt=0;
   std::string reason;
@@ -64,18 +65,20 @@ bool samplePath(const Kinematics&,const Path&,double time,Reference&);
 Plan prepare(const Kinematics&,const Vec& initial,const Mat& neutral,const Request&,const PlanningConfig&);
 
 enum class Stage { FREE_FLIGHT, CONTACT_LOCKED, REZERO, PRE_ALIGN, READY, EXECUTING,
-                   PAUSED, COMPLETED_HOLD, FAULT_HOLD };
+                   PAUSED, COMPLETED_HOLD, FAULT_HOLD, MANUAL };
 const char* stageName(Stage);
 struct Feedback
 {
   double now=0, joint_stamp=0, body_stamp=0;
   bool hover=false, valid=false;
+  std::string invalid_reason;
   Pose body=Pose::Identity(); Vec eta=Vec::Zero(), joint_rate=Vec::Zero(), body_omega=Vec::Zero();
 };
 struct ExecutionConfig
 {
   double timeout=.15, future_tolerance=.02, pivot_tolerance=.01, hinge_tolerance=.03;
   double tracking_tolerance=.04, orientation_tolerance=.04, settle_rate=.01, settle_time=.5, settle_timeout=10;
+  bool require_settled_on_enable=false;
   bool valid() const;
 };
 class Executor
@@ -84,6 +87,7 @@ public:
   Stage stage=Stage::FREE_FLIGHT;
   std::uint64_t session=0;
   std::string reason="free flight";
+  std::string first_fault;
   ExecutionConfig config;
   PlanningConfig planning;
   Kinematics model;
@@ -93,6 +97,7 @@ public:
   double progress=0;
   bool owns() const { return stage!=Stage::FREE_FLIGHT; }
   bool feedbackValid(const Feedback&) const;
+  std::string feedbackRejection(const Feedback&) const;
   bool capture(const Feedback&,const Kinematics&);
   bool accept(Plan);
   bool command(const std::string&,std::uint64_t);

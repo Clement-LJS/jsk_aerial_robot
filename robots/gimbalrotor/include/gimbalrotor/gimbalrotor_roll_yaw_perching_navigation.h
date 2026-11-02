@@ -34,9 +34,11 @@ protected:
 private:
   bool snapshotModel(roll_yaw::Kinematics&,std::string&);
   roll_yaw::Feedback feedback() const;
+  std::string manualTrackingRejection(const roll_yaw::Feedback&,const roll_yaw::Reference&) const;
   void jointCallback(const sensor_msgs::JointStateConstPtr&);
   void bodyCallback(const nav_msgs::OdometryConstPtr&);
   void request(const std::string&,std::uint64_t);
+  void manualCallback(const geometry_msgs::Vector3StampedConstPtr&);
   void diagnostics();
   roll_yaw::Executor core_;
   roll_yaw::Feedback measured_;
@@ -45,8 +47,15 @@ private:
   roll_yaw::Vec axis_=roll_yaw::Vec::Zero();
   std::string roll_,yaw_,contact_,prefix_,world_,body_frame_;
   std::string lock_failure_;
+  std::string joint_failure_="no joint feedback", body_failure_="no body feedback";
+  std::uint64_t joint_ignored_stamps_=0, body_ignored_stamps_=0;
   bool configuration_valid_=false, joint_valid_=false, body_valid_=false;
   bool output_inhibited_=false;
+  bool disable_pending_=false;
+  double manual_max_step_=.008726646259971648, manual_timeout_=.25;
+  double manual_tracking_tolerance_=.03;
+  ros::Time manual_stamp_;
+  double planning_started_=0;
   double synchronization_tolerance_=.05, cog_model_tolerance_=.005;
   std::future<roll_yaw::Plan> pending_;
   ros::Time lock_stamp_;
