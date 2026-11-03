@@ -1,4 +1,4 @@
-**Last updated:** 2026-11-02
+**Last updated:** 2026-11-03
 
 **Documented branch:** `develop/pochitab_passiveperching/main`  
 
@@ -36,8 +36,8 @@ numeric destination prompts or per-key planning transactions.
 | `a`, `f` | Active roll joint − / + |
 | `i`, `k` | Passive-hinge alpha + / −, relative to the current lock |
 | `z` | Explicit body pitch rezero with measured roll/yaw joints frozen |
-| `b` | Explicit relock while remaining perched |
-| Space | Stop advancement and hold; QP motion decelerates first |
+| `b` | Final relock after fresh rezero ready/not-active/not-failed feedback |
+| Space | Cancel the target producer and hold the applied reference |
 | `g`, `h` | Land, HALT motors |
 | `s`, `?` | Status, help |
 | `q`, Ctrl+C | Request stop, retain contact hold, restore terminal and quit |
@@ -45,12 +45,32 @@ numeric destination prompts or per-key planning transactions.
 Supported setup: **physically perch → e → z → wait PITCH_REZERO_HOLD → b → navigate**.
 Enable only captures measured contact; it does not start rezero. Manual motion is
 available immediately after a valid lock if no setup operation is pending. Rezero
-uses the calibrated passive axis, joint/tilt/travel/rate limits, and an analytic
-reachability check with the active joints fixed. Readiness requires measured
-pitch error and pitch rate to remain within tolerance for the configured duration.
-ACTIVE and ready-HOLD block manual input until deliberate relock. A failed setup
-holds and requires cause resolution and disable/retry; relock cannot clear it.
-Relock acknowledges a fresh base lock identity and measured target baseline.
+uses multilink's signed measured-feedback routine, with roll/yaw frozen:
+`alpha_dot = command_sign * clamp(kp * wrap(target_pitch - measured_pitch), ±rate_limit)`.
+The integrated alpha is bounded by passive travel. Body position and attitude rotate
+together about the same captured physical pivot. Readiness requires measured pitch
+error and measured pitch rate to remain within tolerance for the stable duration.
+ACTIVE and HOLD block ordinary motion. Failures retain the last valid body reference
+and frozen active joints, with the cause in diagnostics.
+
+The mounting pipe has approximately pi yaw. At zero active joints, contact/pivot +Y
+maps approximately to body −Y, so positive alpha reduces measured world body pitch.
+`pitch_rezero_command_sign: -1.0` therefore gives negative feedback, as in multilink;
+this sign is applied once to alpha rate, separately from servo polarity. Nonzero
+roll/yaw use the actual transformed hinge axis. A local FK response check rejects
+a sign/geometry combination that would increase the pitch error; there is no
+analytic endpoint solver or Stroke-based rezero controller.
+
+The navigator **inherits the base relock callback**, as multilink does: enabled +
+HOVER → reset old setup/targets → capture current measured joints/body → publish a
+new base lock identity. It adds no stationary-body, completed-motion, or QP-stage
+gate. Invalid measurements reject capture with an explicit reason. General relock
+is available on `perching/relock` (`Empty`), including while moving. The keyboard's
+`b` is specifically the multilink final-setup operation: it requires fresh rezero
+ready=true, active=false, failed=false. On setup failure, use `d` and resolve the
+cause before retrying. These keyboard checks are distinct from general navigator
+relock policy. Successful relock refreshes every nominal baseline without zeroing
+the active servos.
 
 ```yaml
 navigation:
@@ -60,28 +80,45 @@ navigation:
 
 Missing/false selects direct FK. Roll/yaw are URDF joint angles and pitch is the
 passive hinge coordinate; positive joint motion can produce negative body rotation.
-The keyboard reads applied mechanism targets and sends small absolute targets to
-`perching/roll_yaw/target` (`Vector3Stamped`: x=roll, y=alpha, z=yaw). The frame ID
-is `perching_lock_<base lock timestamp in nanoseconds>`. Repeated absolute targets
-are idempotent, and nominal lookahead is bounded against the applied reference.
-Space uses `perching/roll_yaw/cancel` with the current `UInt64` lock identity; it
-never commands zero joints or a return to the old lock. Keyboard freshness uses
-local monotonic receipt time. The navigator does not compare laptop command stamps
-with its clock; onboard estimator/joint source-time checks remain in place.
+The keyboard accumulates independent nominal destinations and sends `Float64`
+commands under `perching/roll_yaw`: `alpha_target`, `roll_target`, `yaw_target`.
+Each callback changes only its own coordinate. Quick `j`, `a`, `i` taps preserve
+all three destinations, even before feedback catches up. Navigator `nominal_angles`
+reports accepted destinations; `target_angles` reports applied references (both
+`Vector3Stamped`, x=roll, y=alpha, z=yaw). Restart/relock read nominal feedback;
+rejected/clamped commands reconcile with it. Manual output follows multilink's
+bounded nominal → final → FK flow, with zero-rate hold references and no per-key
+quintic interpolation, lookahead limit, or endpoint-tracking gate. Joint/tilt limits
+and physical contact/feedback checks still apply. Velocity/acceleration trajectory
+caps apply to the optional QP producer; rezero uses its configured feedback rate cap.
+
+The existing full-vector `perching/roll_yaw/target` interface remains available for
+intentional complete nominal updates, with frame ID
+`perching_lock_<base lock timestamp in nanoseconds>`. Ordinary keys use independent
+topics so untouched coordinates cannot be overwritten. Space uses
+`perching/roll_yaw/cancel` (`UInt64` base lock identity), holds the applied reference,
+and never zeros joints or returns to the old lock. Local monotonic receipt time
+provides keyboard freshness; multilink itself uses local ROS receipt times. Remote
+lock stamps are identities, not clocks to subtract. Navigator command callbacks
+validate current onboard feedback without comparing laptop command timestamps;
+onboard estimator/joint source-time checks remain intact.
 
 With `qp_planning: true`, explicit `prepare`, `align`, `start`, `pause`, `resume`,
 and `cancel` topics under `perching/roll_yaw` accept the current `UInt64` session.
 `navigation/roll_yaw_perching/request` specifies the existing lock-relative **body**
 orientation request in radians. This optional planner feeds the same FK/output
-path. Manual key meanings do not change; a manual key cancels the QP producer,
-decelerates along its validated path, then applies the latest small step from the
-stopped reference. Failed plans hold with a reason and never fall back to another
+path. Manual key meanings do not change. A manual input invalidates the optional
+producer and updates the requested nominal coordinate immediately, preserving the
+other destinations. No QP state or per-key transaction gates manual navigation. Failed plans hold with a reason and never fall back to another
 motion. QP-only settings cannot invalidate ordinary FK capture/navigation.
 
-The common hooks are base enable/disable and measured lock identity, the shared
+The common hooks are base enable/disable/relock/reset and measured lock identity, the shared
 recursive state lock, `applyManualPitchDelta`, and the base update's virtual
 `applyActivePerchingTarget`. Roll–yaw retains its own passive-hinge FK, articulated
-CoG conversion, named active-joint output, optional QP producer, and setup state.
+CoG conversion and named active-joint output. The optional QP executor exists only
+for an explicit planning request; ordinary navigation owns its nominal/final
+targets independently. Rezero ports multilink's trigger, feedback update, frozen-joint
+checks, ready/failed HOLD and final-relock keyboard workflow.
 The legacy pitch topic and pitch-only `uav/nav` position command mean absolute
 lock-relative alpha; independent translations/body roll/yaw are rejected while
 perched. Normal, multilink and pitch-only implementations and key mappings are

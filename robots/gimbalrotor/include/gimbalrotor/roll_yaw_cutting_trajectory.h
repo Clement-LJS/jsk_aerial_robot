@@ -35,7 +35,7 @@ private:
   double distance_,sign_,speed_,ramp_,feed_;
 };
 Desired cuttingOrientation(const Mat& neutral,const Request&,double theta,double rate,double acceleration);
-struct Knot { double t=0; Vec eta=Vec::Zero(), velocity=Vec::Zero(), acceleration=Vec::Zero(); };
+struct Knot { double t=0; Vec eta=Vec::Zero(), velocity=Vec::Zero(); };
 struct Reference
 {
   double t=0, orientation_error=0;
@@ -62,13 +62,9 @@ struct Plan
   Path align,cut;
 };
 bool samplePath(const Kinematics&,const Path&,double time,Reference&);
-// Solver-free FK and short, bounded interpolation used by manual navigation.
+// Solver-free mechanism validation and FK shared by nominal and QP targets.
 bool mechanismAllowed(const Kinematics&,const Vec&,const PlanningConfig&,std::string&);
 bool mechanismReference(const Kinematics&,const Vec&,const Vec&,const Vec&,Reference&);
-bool interpolateMechanism(const Reference&,const Vec&,const PlanningConfig&,Path&,std::string&);
-// Analytic one-axis pitch reachability; never changes active joints or invokes IK/QP.
-bool passivePitchTarget(const Kinematics&,const Vec&,double pitch,double travel,
-                        const PlanningConfig&,double& alpha,std::string&);
 Plan prepare(const Kinematics&,const Vec& initial,const Mat& neutral,const Request&,const PlanningConfig&);
 
 enum class Stage { FREE_FLIGHT, CONTACT_LOCKED, PLANNING, PRE_ALIGN, READY, EXECUTING,
@@ -86,9 +82,12 @@ struct ExecutionConfig
   double timeout=.15, future_tolerance=.02, pivot_tolerance=.01, hinge_tolerance=.03;
   double tracking_tolerance=.04, orientation_tolerance=.04, settle_rate=.01, settle_time=.5, settle_timeout=10;
   bool require_settled_on_enable=false;
+  bool feedbackConfigValid() const;
   bool settlingValid() const;
   bool valid() const;
 };
+// Shared onboard feedback validation; manual navigation does not instantiate an executor.
+std::string feedbackRejection(const Feedback&,const ExecutionConfig&,const PlanningConfig&);
 class Executor
 {
 public:
@@ -108,6 +107,8 @@ public:
   bool feedbackValid(const Feedback&) const;
   std::string feedbackRejection(const Feedback&) const;
   bool capture(const Feedback&,const Kinematics&);
+  // Attach an explicit planner to an already captured base lock; do not recapture contact.
+  bool attach(const Kinematics&,const Reference&,std::uint64_t,double now);
   bool accept(Plan);
   bool command(const std::string&,std::uint64_t);
   void tick(const Feedback&);

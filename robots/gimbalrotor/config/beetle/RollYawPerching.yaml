@@ -13,13 +13,19 @@ navigation:
     # Explicit setup: keyboard e -> z -> measured ready-HOLD -> b -> navigate.
     # Rezero uses only the configured passive hinge, with measured active joints frozen.
     pitch_rezero_target_pitch: 0.0
+    pitch_rezero_kp: 1.0
+    # Same convention as multilink: alpha rotates about contact/pivot +Y.
+    # The mounting yaw (~pi) maps it toward body -Y near zero roll/yaw.
+    # Thus +alpha decreases world body pitch; apply this sign exactly once.
+    pitch_rezero_command_sign: -1.0
     pitch_rezero_rate_limit: 0.1745329
     pitch_rezero_max_delta: 0.5235988
     pitch_rezero_pitch_tolerance: 0.0349066
     pitch_rezero_rate_tolerance: 0.05
     pitch_rezero_stable_duration: 0.3
-    pitch_rezero_timeout: 10.0
-    pitch_rezero_joint_hold_tolerance: 0.02
+    pitch_rezero_timeout: 5.0
+    pitch_rezero_roll_joint_hold_tolerance: 0.02
+    pitch_rezero_yaw_joint_hold_tolerance: 0.02
     roll_joint: joint_roll
     yaw_joint: joint_yaw
     contact_link: roll_hand_link
@@ -66,19 +72,18 @@ navigation:
     tracking_tolerance: 0.04
     body_tracking_tolerance: 0.04
     cog_model_tolerance: 0.005
-    # Enable captures measured configuration; endpoint settling stays separate.
-    require_settled_on_enable: false
+    # Only optional QP trajectory endpoints wait for measured settling.
+    # Enable/relock capture current measurements without a zero-rate prerequisite.
     settle_rate: 0.01
     settle_time: 0.5
     settle_timeout: 10.0
-    # target: Vector3Stamped absolute x=active roll/y=passive alpha/z=active yaw.
-    # frame_id=perching_lock_<base lock timestamp ns>; stamps are informational.
-    # Feedback/commands use local receipt freshness, never laptop/onboard clock age.
-    # cancel: UInt64 current lock identity; holds the applied reference (no zeroing).
-    # manual_pitch_delta and pitch-only uav/nav retain absolute lock-relative alpha.
-    manual_max_step: 0.00872664626 # max lookahead from applied reference, 0.5 deg
-    # Proposed and applied references must remain within this measured bound.
-    manual_tracking_tolerance: 0.03
+    # Multilink-style independent absolute Float64 targets under perching/roll_yaw:
+    # alpha_target, roll_target, yaw_target. Each changes only its own nominal.
+    # nominal_angles / target_angles report nominal / applied [roll, alpha, yaw].
+    # Legacy full-vector target accepts that order with frame_id=perching_lock_<ns>.
+    # Remote command stamps are informational; onboard feedback stamps stay checked.
+    # cancel holds the applied reference. manual_pitch_delta and pitch-only uav/nav
+    # remain absolute lock-relative alpha; no per-key lookahead or planning phase.
     request:
       # Only qp_planning=true and explicit prepare/align/start use this body request.
       # Relative to N = measured body orientation at this contact lock.
