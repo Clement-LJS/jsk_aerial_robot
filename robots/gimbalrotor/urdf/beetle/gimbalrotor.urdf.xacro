@@ -3,10 +3,20 @@
     xmlns:xacro="http://www.ros.org/wiki/xacro" name="gimbalrotor_link" >
   <xacro:arg name="use_saw" default="true"/>
   <xacro:arg name="use_hand" default="false"/>
+
   <xacro:arg name="use_yaw_joint" default="false"/>
+  <xacro:property name="inter_joint_junction_offset_x" value="0.0245"/>
+  <xacro:property name="yaw_hand_offset_x" value="0.012"/>
+
   <xacro:arg name="use_roll_joint" default="false"/>
+  <xacro:property name="roll_joint_asm_offset_x_inroll" value="0.027"/>
+
   <xacro:arg name="use_pitch_joint_only" default="false"/>
+  <xacro:property name="pitch_joint_only_hand_offset_x" value="0.027"/>
+
   <xacro:arg name="use_roll_yaw_joint" default="true"/>
+  <xacro:property name="roll_joint_asm_offset_x_inrollyaw" value="0.027"/>
+
 
 
 
@@ -221,31 +231,31 @@
     <!-- saw link  -->
     <link name="saw">
       <inertial>
-  <origin xyz="0.35108 0.0305 0.04114"/> <!-- for no gear, direct motor -->
-	<!-- <origin xyz="0.31654 0.00003 0.03656"/> --> <!-- for gear bankin-->
-	<mass value="0.37"/> <!-- for no gear, direct motor -->
-  <!-- <mass value="0.423690"/> --> <!-- for gear bankin-->
-	<inertia
-      ixx="0.00050337103" ixy="-0.00027014591" ixz="0.00036440456"
-      iyy="0.00246854959" iyz="-0.00016404750"
-      izz="0.00230725723"/> <!-- for no gear, direct motor -->
+        <origin xyz="0.35108 -0.0305 0.04114"/> <!-- for no gear, direct motor -->
+	      <!-- <origin xyz="0.31654 0.00003 0.03656"/> --> <!-- for gear bankin-->
+	      <mass value="0.37"/> <!-- for no gear, direct motor -->
+        <!-- <mass value="0.423690"/> --> <!-- for gear bankin-->
+        <inertia
+          ixx="0.00050337103" ixy="-0.00027014591" ixz="0.00036440456"
+          iyy="0.00246854959" iyz="-0.00016404750"
+          izz="0.00230725723"/> <!-- for no gear, direct motor -->
 
-	    <!-- ixx="0.0004659" ixy="-0.00014505" ixz="0.0002106"
-	    iyy="0.0023921" iyz="-0.00000324"
-	    izz="0.00222804"/> --> <!-- for gear bankin-->
+          <!-- ixx="0.0004659" ixy="-0.00014505" ixz="0.0002106"
+          iyy="0.0023921" iyz="-0.00000324"
+          izz="0.00222804"/> --> <!-- for gear bankin-->
       </inertial>
       <visual>
-	<origin xyz="0 0 0" rpy="0 0 0"/>
-	<geometry>
-        <mesh filename="package://gimbalrotor/urdf/beetle/mesh/urdf_saw_asm_nogear.STL" scale="0.001 0.001 0.001"/> <!-- for no gear, direct motor -->
-    	  <!-- <mesh filename="package://gimbalrotor/urdf/beetle/mesh/fullassem_pochitab.STL" scale="0.001 0.001 0.001"/> --> <!-- for gear bankin-->
-	</geometry>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry>
+          <mesh filename="package://gimbalrotor/urdf/beetle/mesh/urdf_saw_asm_nogear.STL" scale="0.001 0.001 0.001"/> <!-- for no gear, direct motor -->
+          <!-- <mesh filename="package://gimbalrotor/urdf/beetle/mesh/fullassem_pochitab.STL" scale="0.001 0.001 0.001"/> --> <!-- for gear bankin-->
+        </geometry>
       </visual>
       <collision>
-	<origin xyz="0.236 0.024 0.039" rpy="0 0 0"/>
-	<geometry>
-	  <box size="0.471 0.134 0.153"/>
-	</geometry>
+        <origin xyz="0.236 0.024 0.039" rpy="0 0 0"/>
+        <geometry>
+          <box size="0.471 0.134 0.153"/>
+        </geometry>
       </collision>
     </link>
   </xacro:if>
@@ -254,24 +264,24 @@
     ## passive hand link
     <link name="passive_hand_link">
       <inertial>
-  <origin xyz="0.23238 -0.01452 0.00876"/> <!-- lock -->
-	<mass value="0.35620"/>
-	<inertia
-	    ixx="0.00043814302" ixy="0.00002455686" ixz="-0.00004022510"
-	    iyy="0.00282533956" iyz="-0.00006617372"
-	    izz="0.00290304284"/>
+        <origin xyz="0.23238 -0.01452 0.00876"/> <!-- lock -->
+	      <mass value="0.35620"/>
+        <inertia
+          ixx="0.00043814302" ixy="0.00002455686" ixz="-0.00004022510"
+          iyy="0.00282533956" iyz="-0.00006617372"
+          izz="0.00290304284"/>
       </inertial>
       <visual>
-	<origin xyz="0 0 0" rpy="0 0 0"/>
-	<geometry>
-    	  <mesh filename="package://gimbalrotor/urdf/beetle/mesh/perching_hand_lock.STL" scale="0.001 0.001 0.001"/>
-	</geometry>
+	      <origin xyz="0 0 0" rpy="0 0 0"/>
+	      <geometry>
+    	    <mesh filename="package://gimbalrotor/urdf/beetle/mesh/perching_hand_lock.STL" scale="0.001 0.001 0.001"/>
+	      </geometry>
       </visual>
       <collision>
-	<origin xyz="0.236 0.024 0" rpy="0 0 0"/>
-	<geometry>
-	  <box size="0.253 0.09 0.038"/>
-	</geometry>
+	      <origin xyz="0.236 0.024 0" rpy="0 0 0"/>
+	      <geometry>
+	        <box size="0.253 0.09 0.038"/>
+	      </geometry>
       </collision>
     </link>
   </xacro:if>
@@ -285,84 +295,84 @@
 
 
   <xacro:if value="$(arg use_yaw_joint)">
-      ## passive hand link
-      <link name="pitch_pipe_link">
-        <inertial>
-    <origin xyz="0.17942 0.02463 -0.00001"/>
-    <mass value="0.21857"/>
-    <inertia
-        ixx="0.0002180" ixy="0.0001083" ixz="-0.0000018"
-        iyy="0.0008801" iyz="0.0000001"
-        izz="0.0010463"/>
-        </inertial>
-        <visual>
-    <origin xyz="0 0 0" rpy="0 0 0"/>
-    <geometry>
-        <mesh filename="package://gimbalrotor/urdf/beetle/mesh/pitchjoint_asm.STL" scale="0.001 0.001 0.001"/>
-    </geometry>
-        </visual>
-        <collision>
-    <origin xyz="0.236 0.024 0" rpy="0 0 0"/>
-    <geometry>
-      <box size="0.253 0.09 0.038"/>
-    </geometry>
-        </collision>
-      </link>
-    </xacro:if>
+    ## passive hand link
+    <link name="pitch_pipe_link">
+      <inertial>
+        <origin xyz="0.17942 0.02463 -0.00001"/>
+        <mass value="0.21857"/>
+        <inertia
+          ixx="0.0002180" ixy="0.0001083" ixz="-0.0000018"
+          iyy="0.0008801" iyz="0.0000001"
+          izz="0.0010463"/>
+      </inertial>
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry>
+          <mesh filename="package://gimbalrotor/urdf/beetle/mesh/pitchjoint_asm.STL" scale="0.001 0.001 0.001"/>
+        </geometry>
+      </visual>
+      <collision>
+        <origin xyz="0.236 0.024 0" rpy="0 0 0"/>
+        <geometry>
+          <box size="0.253 0.09 0.038"/>
+        </geometry>
+      </collision>
+    </link>
+  </xacro:if>
 
 
-    <xacro:if value="$(arg use_yaw_joint)">
-      ## passive hand link
-      <link name="inter_joint_junction_link">
-        <inertial>
-    <origin xyz="-0.000392 0.005947 0.004039"/>
-    <mass value="0.09014"/>
-    <inertia
-        ixx="0.000072" ixy="-0.000013" ixz="0.00001"
-        iyy="0.000077" iyz="0.000002"
-        izz="0.00008"/>
-        </inertial>
-        <visual>
-    <origin xyz="0.02450 0 0" rpy="0 0 0"/>
-    <geometry>
-        <mesh filename="package://gimbalrotor/urdf/beetle/mesh/inter_joint_junction_full.STL" scale="0.001 0.001 0.001"/>
-    </geometry>
-        </visual>
-        <collision>
-    <origin xyz="0.236 0.024 0" rpy="0 0 0"/>
-    <geometry>
-      <box size="0.253 0.09 0.138"/>
-    </geometry>
-        </collision>
-      </link>
-    </xacro:if>
+  <xacro:if value="$(arg use_yaw_joint)">
+    ## passive hand link
+    <link name="inter_joint_junction_link">
+      <inertial>
+        <origin xyz="${inter_joint_junction_offset_x - 0.000392} 0.005947 0.004039"/>
+        <mass value="0.09014"/>
+        <inertia
+          ixx="0.000072" ixy="-0.000013" ixz="0.00001"
+          iyy="0.000077" iyz="0.000002"
+          izz="0.00008"/>
+      </inertial>
+      <visual>
+        <origin xyz="${inter_joint_junction_offset_x} 0 0" rpy="0 0 0"/>
+        <geometry>
+          <mesh filename="package://gimbalrotor/urdf/beetle/mesh/inter_joint_junction_full.STL" scale="0.001 0.001 0.001"/>
+        </geometry>
+      </visual>
+      <collision>
+        <origin xyz="0.236 0.024 0" rpy="0 0 0"/>
+        <geometry>
+          <box size="0.253 0.09 0.138"/>
+        </geometry>
+      </collision>
+    </link>
+  </xacro:if>
 
 
-    <xacro:if value="$(arg use_yaw_joint)">
-      ## passive hand link
-      <link name="yaw_hand_link">
-        <inertial>
-    <origin xyz="0.09876 -0.01002 0.01533"/>
-    <mass value="0.51749"/>
-    <inertia
-        ixx="0.0007220" ixy="-0.0000888" ixz="-0.0004064"
-        iyy="0.0032767" iyz="-0.0000482"
-        izz="0.0031562"/>
-        </inertial>
-        <visual>
-    <origin xyz="0.012 0 0" rpy="0 0 0"/>
-    <geometry>
-        <mesh filename="package://gimbalrotor/urdf/beetle/mesh/yawjoint_hand_asm.STL" scale="0.001 0.001 0.001"/>
-    </geometry>
-        </visual>
-        <collision>
-    <origin xyz="0.236 0.024 0" rpy="0 0 0"/>
-    <geometry>
-      <box size="0.253 0.09 0.038"/>
-    </geometry>
-        </collision>
-      </link>
-    </xacro:if>
+  <xacro:if value="$(arg use_yaw_joint)">
+    ## passive hand link
+    <link name="yaw_hand_link">
+      <inertial>
+        <origin xyz="${yaw_hand_offset_x + 0.09876} -0.01002 0.01533"/>
+        <mass value="0.51749"/>
+        <inertia
+          ixx="0.0007220" ixy="-0.0000888" ixz="-0.0004064"
+          iyy="0.0032767" iyz="-0.0000482"
+          izz="0.0031562"/>
+      </inertial>
+      <visual>
+        <origin xyz="${yaw_hand_offset_x} 0 0" rpy="0 0 0"/>
+        <geometry>
+          <mesh filename="package://gimbalrotor/urdf/beetle/mesh/yawjoint_hand_asm.STL" scale="0.001 0.001 0.001"/>
+        </geometry>
+      </visual>
+      <collision>
+        <origin xyz="0.236 0.024 0" rpy="0 0 0"/>
+        <geometry>
+          <box size="0.253 0.09 0.038"/>
+        </geometry>
+      </collision>
+    </link>
+  </xacro:if>
 
 
 
@@ -378,84 +388,84 @@
 
 
   <xacro:if value="$(arg use_roll_joint)">
-      ## passive hand link
-      <link name="pitch_pipe_link">
-        <inertial>
-    <origin xyz="0.17942 0.02463 -0.00001"/>
-    <mass value="0.21857"/>
-    <inertia
-        ixx="0.0002180" ixy="0.0001083" ixz="-0.0000018"
-        iyy="0.0008801" iyz="0.0000001"
-        izz="0.0010463"/>
-        </inertial>
-        <visual>
-    <origin xyz="0 0 0" rpy="0 0 0"/>
-    <geometry>
-        <mesh filename="package://gimbalrotor/urdf/beetle/mesh/pitchjoint_asm.STL" scale="0.001 0.001 0.001"/>
-    </geometry>
-        </visual>
-        <collision>
-    <origin xyz="0.132000 0.023037 0.000000" rpy="0 0 0"/>
-    <geometry>
-      <box size="0.264001 0.108076 0.046968"/>
-    </geometry>
-        </collision>
-      </link>
-    </xacro:if>
+    ## passive hand link
+    <link name="pitch_pipe_link">
+      <inertial>
+        <origin xyz="0.17942 0.02463 -0.00001"/>
+        <mass value="0.21857"/>
+        <inertia
+          ixx="0.0002180" ixy="0.0001083" ixz="-0.0000018"
+          iyy="0.0008801" iyz="0.0000001"
+          izz="0.0010463"/>
+      </inertial>
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry>
+          <mesh filename="package://gimbalrotor/urdf/beetle/mesh/pitchjoint_asm.STL" scale="0.001 0.001 0.001"/>
+        </geometry>
+      </visual>
+      <collision>
+        <origin xyz="0.132000 0.023037 0.000000" rpy="0 0 0"/>
+        <geometry>
+          <box size="0.264001 0.108076 0.046968"/>
+        </geometry>
+      </collision>
+    </link>
+  </xacro:if>
 
 
-    <xacro:if value="$(arg use_roll_joint)">
-      ## passive hand link
-      <link name="roll_joint_asm_link">
-        <inertial>
-    <origin xyz="0.01389 0.00134 -0.03377"/>
-    <mass value="0.27126"/>
-    <inertia
-        ixx="0.0002973" ixy="-0.0000149" ixz="-0.0000158"
-        iyy="0.0004041" iyz="0.0000123"
-        izz="0.0002392"/>
-        </inertial>
-        <visual>
-    <origin xyz="0.0270 0 0" rpy="0 0 0"/>
-    <geometry>
-        <mesh filename="package://gimbalrotor/urdf/beetle/mesh/roll_joint_asm.STL" scale="0.001 0.001 0.001"/>
-    </geometry>
-        </visual>
-        <collision>
-    <origin xyz="0.030000 0.003525 -0.030994" rpy="0 0 0"/>
-    <geometry>
-      <box size="0.112001 0.071551 0.117989"/>
-    </geometry>
-        </collision>
-      </link>
-    </xacro:if>
+  <xacro:if value="$(arg use_roll_joint)">
+    ## passive hand link
+    <link name="roll_joint_asm_link">
+      <inertial>
+        <origin xyz="${roll_joint_asm_offset_x_inroll + 0.01389} 0.00134 -0.03377"/>
+        <mass value="0.27126"/>
+        <inertia
+          ixx="0.0002973" ixy="-0.0000149" ixz="-0.0000158"
+          iyy="0.0004041" iyz="0.0000123"
+          izz="0.0002392"/>
+      </inertial>
+      <visual>
+        <origin xyz="${roll_joint_asm_offset_x_inroll} 0 0" rpy="0 0 0"/>
+        <geometry>
+          <mesh filename="package://gimbalrotor/urdf/beetle/mesh/roll_joint_asm.STL" scale="0.001 0.001 0.001"/>
+        </geometry>
+      </visual>
+      <collision>
+        <origin xyz="0.030000 0.003525 -0.030994" rpy="0 0 0"/>
+        <geometry>
+          <box size="0.112001 0.071551 0.117989"/>
+        </geometry>
+      </collision>
+    </link>
+  </xacro:if>
 
 
-    <xacro:if value="$(arg use_roll_joint)">
-      ## passive hand link
-      <link name="roll_hand_link">
-        <inertial>
-    <origin xyz="0.17702 -0.02352 0.00828"/>
-    <mass value="0.30806"/>
-    <inertia
-        ixx="0.0004461" ixy="0.0001357" ixz="-0.0001474"
-        iyy="0.0013111" iyz="-0.0000856"
-        izz="0.0013577"/>
-        </inertial>
-        <visual>
-    <origin xyz="0 0 0" rpy="0 0 0"/>
-    <geometry>
-        <mesh filename="package://gimbalrotor/urdf/beetle/mesh/perching_hand_roll_asm.STL" scale="0.001 0.001 0.001"/>
-    </geometry>
-        </visual>
-        <collision>
-    <origin xyz="0.139742 -0.000605 0.009999" rpy="0 0 0"/>
-    <geometry>
-      <box size="0.279486 0.140791 0.111999"/>
-    </geometry>
-        </collision>
-      </link>
-    </xacro:if>
+  <xacro:if value="$(arg use_roll_joint)">
+    ## passive hand link
+    <link name="roll_hand_link">
+      <inertial>
+        <origin xyz="0.17702 -0.02352 0.00828"/>
+        <mass value="0.30806"/>
+        <inertia
+          ixx="0.0004461" ixy="0.0001357" ixz="-0.0001474"
+          iyy="0.0013111" iyz="-0.0000856"
+          izz="0.0013577"/>
+      </inertial>
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry>
+          <mesh filename="package://gimbalrotor/urdf/beetle/mesh/perching_hand_roll_asm.STL" scale="0.001 0.001 0.001"/>
+        </geometry>
+      </visual>
+      <collision>
+        <origin xyz="0.139742 -0.000605 0.009999" rpy="0 0 0"/>
+        <geometry>
+          <box size="0.279486 0.140791 0.111999"/>
+        </geometry>
+      </collision>
+    </link>
+  </xacro:if>
 
 
 
@@ -468,57 +478,57 @@
 
 
   <xacro:if value="$(arg use_pitch_joint_only)">
-      ## passive hand link
-      <link name="pitch_pipe_link">
-        <inertial>
-    <origin xyz="0.17942 0.02463 -0.00001"/>
-    <mass value="0.21857"/>
-    <inertia
-        ixx="0.0002180" ixy="0.0001083" ixz="-0.0000018"
-        iyy="0.0008801" iyz="0.0000001"
-        izz="0.0010463"/>
-        </inertial>
-        <visual>
-    <origin xyz="0 0 0" rpy="0 0 0"/>
-    <geometry>
-        <mesh filename="package://gimbalrotor/urdf/beetle/mesh/pitchjoint_asm.STL" scale="0.001 0.001 0.001"/>
-    </geometry>
-        </visual>
-        <collision>
-    <origin xyz="0.132000 0.023037 0.000000" rpy="0 0 0"/>
-    <geometry>
-      <box size="0.264001 0.108076 0.046968"/>
-    </geometry>
-        </collision>
-      </link>
-    </xacro:if>
+    ## passive hand link
+    <link name="pitch_pipe_link">
+      <inertial>
+        <origin xyz="0.17942 0.02463 -0.00001"/>
+        <mass value="0.21857"/>
+        <inertia
+          ixx="0.0002180" ixy="0.0001083" ixz="-0.0000018"
+          iyy="0.0008801" iyz="0.0000001"
+          izz="0.0010463"/>
+      </inertial>
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry>
+          <mesh filename="package://gimbalrotor/urdf/beetle/mesh/pitchjoint_asm.STL" scale="0.001 0.001 0.001"/>
+        </geometry>
+      </visual>
+      <collision>
+        <origin xyz="0.132000 0.023037 0.000000" rpy="0 0 0"/>
+        <geometry>
+          <box size="0.264001 0.108076 0.046968"/>
+        </geometry>
+      </collision>
+    </link>
+  </xacro:if>
 
 
-    <xacro:if value="$(arg use_pitch_joint_only)">
-      ## passive hand link
-      <link name="pitch_joint_only_hand_link">
-        <inertial>
-    <origin xyz="0.11044 -0.01072 0.00568"/>
-    <mass value="0.44939"/>
-    <inertia
-        ixx="0.0005461" ixy="-0.0001070" ixz="-0.0000464"
-        iyy="0.0030970" iyz="-0.0001004"
-        izz="0.0031924"/>
-        </inertial>
-        <visual>
-    <origin xyz="0.0270 0 0" rpy="0 0 0"/>
-    <geometry>
-        <mesh filename="package://gimbalrotor/urdf/beetle/mesh/perching_hand_pitch_asm.STL" scale="0.001 0.001 0.001"/>
-    </geometry>
-        </visual>
-        <collision>
-    <origin xyz="0.030000 0.003525 -0.030994" rpy="0 0 0"/>
-    <geometry>
-      <box size="0.112001 0.071551 0.117989"/>
-    </geometry>
-        </collision>
-      </link>
-    </xacro:if>
+  <xacro:if value="$(arg use_pitch_joint_only)">
+    ## passive hand link
+    <link name="pitch_joint_only_hand_link">
+      <inertial>
+        <origin xyz="${pitch_joint_only_hand_offset_x + 0.11044} -0.01072 0.00568"/>
+        <mass value="0.44939"/>
+        <inertia
+          ixx="0.0005461" ixy="-0.0001070" ixz="-0.0000464"
+          iyy="0.0030970" iyz="-0.0001004"
+          izz="0.0031924"/>
+      </inertial>
+      <visual>
+        <origin xyz="${pitch_joint_only_hand_offset_x} 0 0" rpy="0 0 0"/>
+        <geometry>
+          <mesh filename="package://gimbalrotor/urdf/beetle/mesh/perching_hand_pitch_asm.STL" scale="0.001 0.001 0.001"/>
+        </geometry>
+      </visual>
+      <collision>
+        <origin xyz="0.030000 0.003525 -0.030994" rpy="0 0 0"/>
+        <geometry>
+          <box size="0.112001 0.071551 0.117989"/>
+        </geometry>
+      </collision>
+    </link>
+  </xacro:if>
 
 
 
@@ -529,84 +539,84 @@
 
 
   <xacro:if value="$(arg use_roll_yaw_joint)">
-      ## passive hand link
-      <link name="yaw_pipe_link">
-        <inertial>
-    <origin xyz="0.17942 0.00006 0.02467"/>
-    <mass value="0.21857"/>
-    <inertia
-        ixx="0.0002174" ixy="0.0000003" ixz="0.0001068"
-        iyy="0.0010456" iyz="-0.0000004"
-        izz="0.0008804"/>
-        </inertial>
-        <visual>
-    <origin xyz="0 0 0" rpy="0 0 0"/>
-    <geometry>
-        <mesh filename="package://gimbalrotor/urdf/beetle/mesh/yawjoint_asm.STL" scale="0.001 0.001 0.001"/>
-    </geometry>
-        </visual>
-        <collision>
-    <origin xyz="0.132000 0.023037 0.000000" rpy="0 0 0"/>
-    <geometry>
-      <box size="0.264001 0.108076 0.046968"/>
-    </geometry>
-        </collision>
-      </link>
-    </xacro:if>
+    ## passive hand link
+    <link name="yaw_pipe_link">
+      <inertial>
+        <origin xyz="0.17942 0.00006 0.02467"/>
+        <mass value="0.21857"/>
+        <inertia
+          ixx="0.0002174" ixy="0.0000003" ixz="0.0001068"
+          iyy="0.0010456" iyz="-0.0000004"
+          izz="0.0008804"/>
+      </inertial>
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry>
+          <mesh filename="package://gimbalrotor/urdf/beetle/mesh/yawjoint_asm.STL" scale="0.001 0.001 0.001"/>
+        </geometry>
+      </visual>
+      <collision>
+        <origin xyz="0.132000 0.023037 0.000000" rpy="0 0 0"/>
+        <geometry>
+          <box size="0.264001 0.108076 0.046968"/>
+        </geometry>
+      </collision>
+    </link>
+  </xacro:if>
 
 
-    <xacro:if value="$(arg use_roll_yaw_joint)">
-      ## passive hand link
-      <link name="roll_joint_asm_link">
-        <inertial>
-    <origin xyz="0.02057 0.00000 -0.03110"/>
-    <mass value="0.28288"/>
-    <inertia
-        ixx="0.0003391" ixy="0.000000011" ixz="-0.0000543"
-        iyy="0.0004986" iyz="-0.00000003"
-        izz="0.0002507"/>
-        </inertial>
-        <visual>
-    <origin xyz="0.0270 0 0" rpy="0 0 0"/>
-    <geometry>
-        <mesh filename="package://gimbalrotor/urdf/beetle/mesh/roll_joint_asm_roll_yaw.STL" scale="0.001 0.001 0.001"/>
-    </geometry>
-        </visual>
-        <collision>
-    <origin xyz="0.030000 0.003525 -0.030994" rpy="0 0 0"/>
-    <geometry>
-      <box size="0.112001 0.071551 0.117989"/>
-    </geometry>
-        </collision>
-      </link>
-    </xacro:if>
+  <xacro:if value="$(arg use_roll_yaw_joint)">
+    ## passive hand link
+    <link name="roll_joint_asm_link">
+      <inertial>
+        <origin xyz="${roll_joint_asm_offset_x_inrollyaw + 0.02057} 0.00000 -0.03110"/>
+        <mass value="0.28288"/>
+        <inertia
+          ixx="0.0003391" ixy="0.000000011" ixz="-0.0000543"
+          iyy="0.0004986" iyz="-0.00000003"
+          izz="0.0002507"/>
+      </inertial>
+      <visual>
+        <origin xyz="${roll_joint_asm_offset_x_inrollyaw} 0 0" rpy="0 0 0"/>
+        <geometry>
+          <mesh filename="package://gimbalrotor/urdf/beetle/mesh/roll_joint_asm_roll_yaw.STL" scale="0.001 0.001 0.001"/>
+        </geometry>
+      </visual>
+      <collision>
+        <origin xyz="0.030000 0.003525 -0.030994" rpy="0 0 0"/>
+        <geometry>
+          <box size="0.112001 0.071551 0.117989"/>
+        </geometry>
+      </collision>
+    </link>
+  </xacro:if>
 
 
-    <xacro:if value="$(arg use_roll_yaw_joint)">
-      ## passive hand link
-      <link name="roll_hand_link">
-        <inertial>
-    <origin xyz="0.17702 -0.02352 0.00828"/>
-    <mass value="0.30806"/>
-    <inertia
-        ixx="0.0004461" ixy="0.0001357" ixz="-0.0001474"
-        iyy="0.0013111" iyz="-0.0000856"
-        izz="0.0013577"/>
-        </inertial>
-        <visual>
-    <origin xyz="0 0 0" rpy="0 0 0"/>
-    <geometry>
-        <mesh filename="package://gimbalrotor/urdf/beetle/mesh/perching_hand_roll_asm.STL" scale="0.001 0.001 0.001"/>
-    </geometry>
-        </visual>
-        <collision>
-    <origin xyz="0.139742 -0.000605 0.009999" rpy="0 0 0"/>
-    <geometry>
-      <box size="0.279486 0.140791 0.111999"/>
-    </geometry>
-        </collision>
-      </link>
-    </xacro:if>
+  <xacro:if value="$(arg use_roll_yaw_joint)">
+    ## passive hand link
+    <link name="roll_hand_link">
+      <inertial>
+        <origin xyz="0.17702 -0.02352 0.00828"/>
+        <mass value="0.30806"/>
+        <inertia
+          ixx="0.0004461" ixy="0.0001357" ixz="-0.0001474"
+          iyy="0.0013111" iyz="-0.0000856"
+          izz="0.0013577"/>
+      </inertial>
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry>
+          <mesh filename="package://gimbalrotor/urdf/beetle/mesh/perching_hand_roll_asm.STL" scale="0.001 0.001 0.001"/>
+        </geometry>
+      </visual>
+      <collision>
+        <origin xyz="0.139742 -0.000605 0.009999" rpy="0 0 0"/>
+        <geometry>
+          <box size="0.279486 0.140791 0.111999"/>
+        </geometry>
+      </collision>
+    </link>
+  </xacro:if>
 
 
 
@@ -827,7 +837,7 @@
 
 
 
-<!-- 
+  <!-- 
   <xacro:if value="$(arg use_pitch_joint_only)">
     <joint name="pitchpipe_joint" type="fixed">
       <child link="pitch_pipe_link"/>
