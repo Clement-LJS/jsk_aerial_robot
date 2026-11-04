@@ -1,0 +1,121 @@
+# Conditional URDF-seeded migration examples; CAD frames, placement and composition remain UNVERIFIED.
+# Saved source coordinates are independent of subsequent model/visual reloads.
+schema_version: 1
+units:
+  length: m
+  mass: kg
+  angle: rad
+  inertia: kg_m2
+records:
+  beetle_roll_yaw_roll_assembly:
+    variant: roll_yaw
+    link: roll_joint_asm_link
+    instance_id: roll_joint_asm_link
+    composition_status: unverified
+    constituents:
+    - roll_yaw_roll_assembly
+    overlaps_with: []
+    visual:
+      index: 0
+      mesh_uri: package://gimbalrotor/urdf/beetle/mesh/roll_joint_asm_roll_yaw.STL
+      mesh_scale:
+      - 0.001
+      - 0.001
+      - 0.001
+      mesh_sha256: 826c565921e9397b36608234c0099f36316a6edcfcb88b1e7d19c6e1332b99fd
+      origin_fingerprint: 764f83084eade40006ebf63236488ae925d2ee85c681e67b19e5ab831d5620be
+      covers_entire_mass_record: true
+    source:
+      kind: assumed_original_cad_values
+      status: assumed
+      assembly_revision: unknown
+      note: Seeded from local URDF 2026-11-04. Original CAD/STL frame equivalence
+        and whole-module composition require user verification.
+      mass_kg: 0.28288
+      cog_in_cad_m:
+      - 0.02057
+      - 0
+      - -0.0311
+      inertia_at_cog_kg_m2: null
+      inertia_axes_rpy_in_cad:
+      - 0
+      - 0
+      - 0
+    cad_to_mesh:
+      xyz_m:
+      - 0
+      - 0
+      - 0
+      rpy_rad:
+      - 0
+      - 0
+      - 0
+      status: assumed_same_frame
+    calibrated_cad_to_link:
+      xyz_m:
+      - 0.027
+      - 0
+      - 0
+      rpy_rad:
+      - 0
+      - 0
+      - 0
+      status: assumed_from_current_visual
+    allow_follow_current_visual_candidate: true
+    model_sha256_at_registration: 9fce409c2b657119f2b3783c5dab5ffea3ed5aac8aef216e51453f405050f2da
+  beetle_roll_yaw_hand:
+    variant: roll_yaw
+    link: roll_hand_link
+    instance_id: roll_hand_link
+    composition_status: unverified
+    constituents:
+    - roll_yaw_hand
+    overlaps_with: []
+    visual:
+      index: 0
+      mesh_uri: package://gimbalrotor/urdf/beetle/mesh/perching_hand_roll_asm.STL
+      mesh_scale:
+      - 0.001
+      - 0.001
+      - 0.001
+      mesh_sha256: bf7ce53dc619b70bcd1e750bb688aa130145064d50b347384a0ed4a61248af75
+      origin_fingerprint: 15a293522adbe2387159cd41ff6317c5c5c142b425fd7143570ce4e26fff4898
+      covers_entire_mass_record: true
+    source:
+      kind: assumed_original_cad_values
+      status: assumed
+      assembly_revision: unknown
+      note: Conditional URDF-seeded example; no independent CAD composition/frame
+        verification.
+      mass_kg: 0.30806
+      cog_in_cad_m:
+      - 0.17702
+      - -0.02352
+      - 0.00828
+      inertia_at_cog_kg_m2: null
+      inertia_axes_rpy_in_cad:
+      - 0
+      - 0
+      - 0
+    cad_to_mesh:
+      xyz_m:
+      - 0
+      - 0
+      - 0
+      rpy_rad:
+      - 0
+      - 0
+      - 0
+      status: assumed_same_frame
+    calibrated_cad_to_link:
+      xyz_m:
+      - 0
+      - 0
+      - 0
+      rpy_rad:
+      - 0
+      - 0
+      - 0
+      status: assumed_from_current_visual
+    allow_follow_current_visual_candidate: true
+    model_sha256_at_registration: 9fce409c2b657119f2b3783c5dab5ffea3ed5aac8aef216e51453f405050f2da

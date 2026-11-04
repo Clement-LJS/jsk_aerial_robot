@@ -1,0 +1,25 @@
+<launch>
+  <!-- Observer/preview only. No bringup, description writes, joint-state or TF publishers. -->
+  <arg name="instance" default="$(anon cog_scene)"/>
+  <arg name="preset" default="roll_yaw"/>
+  <arg name="pose_source" default="preview"/>
+  <arg name="model_source" default=""/>
+  <arg name="robot_description_param" default="/gimbalrotor/robot_description"/>
+  <arg name="tf_prefix" default="gimbalrotor"/>
+  <arg name="reference_frame" default="gimbalrotor/base_link"/>
+  <arg name="only_links" default="roll_joint_asm_link,roll_hand_link"/>
+  <arg name="show_candidate" default="false"/>
+  <arg name="reference_file" default="$(find gimbalrotor)/config/visualization/beetle_mass_reference.yaml"/>
+  <node pkg="gimbalrotor" type="cog_markers.py" name="markers" ns="$(arg instance)" output="screen">
+    <param name="preset" value="$(arg preset)"/>
+    <param name="scene_id" value="$(arg instance)"/>
+    <param name="pose_source" value="$(arg pose_source)"/>
+    <param name="model_source" value="$(arg model_source)"/>
+    <param name="robot_description_param" value="$(arg robot_description_param)"/>
+    <param name="tf_prefix" value="$(arg tf_prefix)"/>
+    <param name="reference_frame" value="$(arg reference_frame)"/>
+    <param name="only_links" value="$(arg only_links)"/>
+    <param name="show_candidate" value="$(arg show_candidate)"/>
+    <param name="reference_file" value="$(arg reference_file)"/>
+  </node>
+</launch>

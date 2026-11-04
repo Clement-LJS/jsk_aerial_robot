@@ -1,0 +1,32 @@
+schema_version: 1
+model: robots/beetle/gimbalrotor.urdf.xacro
+# Explicit mutually exclusive flags; do not rely on the production default variant.
+presets:
+  roll_yaw:
+    arguments: {use_roll_yaw_joint: 'true', use_pitch_joint_only: 'false', use_roll_joint: 'false', use_yaw_joint: 'false', use_hand: 'false', use_saw: 'true'}
+    initial_members: [roll_joint_asm_link]
+    groups:
+      roll_hand: [roll_joint_asm_link, roll_hand_link]
+      perching: [yaw_pipe_link, roll_joint_asm_link, roll_hand_link]
+  pitch_only:
+    arguments: {use_roll_yaw_joint: 'false', use_pitch_joint_only: 'true', use_roll_joint: 'false', use_yaw_joint: 'false', use_hand: 'false', use_saw: 'true'}
+    initial_members: [pitch_joint_only_hand_link]
+    groups: {perching: [pitch_pipe_link, pitch_joint_only_hand_link]}
+  pitch_roll:
+    arguments: {use_roll_yaw_joint: 'false', use_pitch_joint_only: 'false', use_roll_joint: 'true', use_yaw_joint: 'false', use_hand: 'false', use_saw: 'true'}
+    initial_members: [roll_joint_asm_link]
+    groups: {perching: [pitch_pipe_link, roll_joint_asm_link, roll_hand_link]}
+  pitch_yaw:
+    arguments: {use_roll_yaw_joint: 'false', use_pitch_joint_only: 'false', use_roll_joint: 'false', use_yaw_joint: 'true', use_hand: 'false', use_saw: 'true'}
+    initial_members: [yaw_hand_link]
+    groups: {perching: [pitch_pipe_link, inter_joint_junction_link, yaw_hand_link]}
+  basic:
+    arguments: {use_roll_yaw_joint: 'false', use_pitch_joint_only: 'false', use_roll_joint: 'false', use_yaw_joint: 'false', use_hand: 'false', use_saw: 'true'}
+    initial_members: [base_link]
+    groups: {base_and_saw: [base_link, saw]}
+# No heuristic small-mass filtering. Helper links remain in all-declared results.
+mass_policy:
+  all_declared: include_every_link_with_inertial
+  selected: explicit_unique_link_membership
+  known_helper_links: [root, fc, handbase, rotor_arm1, rotor_arm2, rotor_arm3, rotor_arm4]
+  automatic_exclusions: []

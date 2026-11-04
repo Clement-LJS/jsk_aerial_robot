@@ -83,7 +83,20 @@ install(DIRECTORY config plugins launch
   )
 
 catkin_install_python(PROGRAMS scripts/keyboard_command/keyboard_roll_yaw_perching.py
+  scripts/visualization/module_cog_viewer.py
+  scripts/visualization/cog_markers.py
+  scripts/urdf/urdf_inertia_markers.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})
+
+# Keep helper imports beside installed entry points; no setup.py/build is needed
+# for source-tree execution. Install the preset's Xacro and mesh resources too.
+install(DIRECTORY scripts/visualization/cog_tools
+  DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
+  FILES_MATCHING PATTERN "*.py")
+install(FILES scripts/visualization/README.md
+  DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/scripts/visualization)
+install(DIRECTORY robots urdf
+  DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION})
 
 if(CATKIN_ENABLE_TESTING)
   find_package(rostest REQUIRED)
