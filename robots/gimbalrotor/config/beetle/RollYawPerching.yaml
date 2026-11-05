@@ -74,7 +74,13 @@ navigation:
     cog_model_tolerance: 0.005
     # Only optional QP trajectory endpoints wait for measured settling.
     # Enable/relock capture current measurements without a zero-rate prerequisite.
-    settle_rate: 0.01
+    settle_rate: 0.01 # Legacy strict policy (settle_use_window=false).
+    # Trial hardware bounds: time-weighted RMS/current norms and signed mean-vector norms.
+    # Review on the real robot before deployment; these allow small nonzero motion.
+    settle_use_window: true
+    settle_body_rate: 0.05
+    settle_joint_rate: 0.03
+    settle_mean_rate: 0.02
     settle_time: 0.5
     settle_timeout: 10.0
     # Multilink-style independent absolute Float64 targets under perching/roll_yaw:

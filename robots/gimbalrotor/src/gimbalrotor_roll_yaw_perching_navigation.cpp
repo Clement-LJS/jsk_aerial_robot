@@ -66,6 +66,10 @@ void GimbalrotorRollYawPerchingNavigator::initialize(ros::NodeHandle nh,ros::Nod
   pn.param("body_tracking_tolerance",c.orientation_tolerance,c.orientation_tolerance);
   pn.param("settle_rate",c.settle_rate,c.settle_rate); pn.param("settle_time",c.settle_time,c.settle_time);
   pn.param("settle_timeout",c.settle_timeout,c.settle_timeout);
+  pn.param("settle_use_window",c.settle_use_window,c.settle_use_window);
+  pn.param("settle_body_rate",c.settle_body_rate,c.settle_body_rate);
+  pn.param("settle_joint_rate",c.settle_joint_rate,c.settle_joint_rate);
+  pn.param("settle_mean_rate",c.settle_mean_rate,c.settle_mean_rate);
   c.require_settled_on_enable=false; // Same measured-pose capture policy as multilink.
   pn.param("feedback_sync_tolerance",synchronization_tolerance_,synchronization_tolerance_);
   pn.param("cog_model_tolerance",cog_model_tolerance_,cog_model_tolerance_);

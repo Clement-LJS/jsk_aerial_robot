@@ -1,5 +1,6 @@
 #pragma once
 #include <gimbalrotor/roll_yaw_orientation_qp.h>
+#include <gimbalrotor/roll_yaw_settling.h>
 #include <array>
 #include <cstdint>
 #include <vector>
@@ -81,6 +82,8 @@ struct ExecutionConfig
 {
   double timeout=.15, future_tolerance=.02, pivot_tolerance=.01, hinge_tolerance=.03;
   double tracking_tolerance=.04, orientation_tolerance=.04, settle_rate=.01, settle_time=.5, settle_timeout=10;
+  bool settle_use_window=false;
+  double settle_body_rate=.05, settle_joint_rate=.03, settle_mean_rate=.02;
   bool require_settled_on_enable=false;
   bool feedbackConfigValid() const;
   bool settlingValid() const;
@@ -116,6 +119,8 @@ public:
   void reset();
   void hold(const std::string&);
 private:
+  void resetSettling();
+  SettlingWindow settling_window_;
   double last_time_=0, stable_since_=0, ready_since_=0, speed_=1;
   bool stopping_=false, cancel_=false, paused_align_=false;
 };

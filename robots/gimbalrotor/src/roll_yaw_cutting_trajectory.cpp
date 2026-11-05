@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <sstream>
 
 namespace roll_yaw
 {
@@ -241,7 +242,11 @@ bool ExecutionConfig::valid() const
 }
 bool ExecutionConfig::settlingValid() const
 {
-  for(double x:{settle_rate,settle_time,settle_timeout}) if(!std::isfinite(x)||x<=0) return false;
+  for(double x:{settle_time,settle_timeout}) if(!std::isfinite(x)||x<=0) return false;
+  if(settle_use_window) {
+    for(double x:{settle_body_rate,settle_joint_rate,settle_mean_rate})
+      if(!std::isfinite(x)||x<=0) return false;
+  } else if(!std::isfinite(settle_rate)||settle_rate<=0) return false;
   return settle_timeout>settle_time;
 }
 std::string feedbackRejection(const Feedback& s,const ExecutionConfig& config,const PlanningConfig& planning)
@@ -268,7 +273,7 @@ bool Executor::attach(const Kinematics& captured,const Reference& held,std::uint
     { reason="invalid explicit planner attachment: "+error; return false; }
   model=captured; target=held; session=identity; stage=Stage::CONTACT_LOCKED;
   hold("explicit body-orientation planning requested");
-  last_time_=now; progress=stable_since_=ready_since_=0; speed_=1;
+  last_time_=now; progress=0; resetSettling(); speed_=1;
   return true;
 }
 bool Executor::feedbackValid(const Feedback& s) const
@@ -291,11 +296,12 @@ bool Executor::capture(const Feedback& s,const Kinematics& m)
   model=std::move(next); target=held; ++session; plan=Plan();
   first_fault.clear();
   stage=Stage::CONTACT_LOCKED; reason="measured contact captured; N is locked body orientation";
-  last_time_=s.now; progress=stable_since_=ready_since_=0; stopping_=cancel_=false; speed_=1; return true;
+  last_time_=s.now; progress=0; resetSettling(); stopping_=cancel_=false; speed_=1; return true;
 }
 bool Executor::accept(Plan p)
 {
   if(!qp_planning||stage!=Stage::PLANNING||p.session!=session) return false;
+  resetSettling();
   if(!p.ok) { stage=Stage::CONTACT_LOCKED; reason=p.reason; return false; }
   if(p.align.knots.size()<2||(p.align.knots.front().eta-target.eta).norm()>1e-9) { fault("plan start no longer matches held target"); return false; }
   plan=std::move(p); progress=0; speed_=1; stopping_=cancel_=false;
@@ -309,25 +315,29 @@ bool Executor::command(const std::string& cmd,std::uint64_t id)
   if(cmd=="prepare"&&(!qp_planning||!planning.valid()||!config.valid()||!config.settlingValid()))
   { reason=qp_planning?"invalid QP planning configuration":"body-orientation request requires qp_planning=true"; return false; }
   if(cmd=="prepare"&&(stage==Stage::CONTACT_LOCKED||stage==Stage::COMPLETED_HOLD))
-  { plan=Plan(); stage=Stage::PLANNING; reason="preparing from held configuration"; return true; }
+  { plan=Plan(); resetSettling(); stage=Stage::PLANNING; reason="preparing from held configuration"; return true; }
   if(cmd=="align"&&stage==Stage::CONTACT_LOCKED&&plan.ok) {
-    stage=Stage::PRE_ALIGN; progress=0; speed_=1; stable_since_=ready_since_=0; return true;
+    stage=Stage::PRE_ALIGN; progress=0; speed_=1; resetSettling();
+    reason="aligning along validated path"; return true;
   }
   if(cmd=="start"&&stage==Stage::READY) {
     if(plan.cut.knots.empty()) { reason="alignment-only plan; prepare a pitch stroke to start"; return false; }
-    stage=Stage::EXECUTING; progress=0; speed_=1; stable_since_=ready_since_=0; return true;
+    stage=Stage::EXECUTING; progress=0; speed_=1; resetSettling();
+    reason="executing validated pitch stroke"; return true;
   }
   if((cmd=="pause"||cmd=="cancel")&&(stage==Stage::PRE_ALIGN||stage==Stage::EXECUTING))
-  { stopping_=true; cancel_=cmd=="cancel"; reason="decelerating along validated path"; return true; }
+  { stopping_=true; cancel_=cmd=="cancel"; resetSettling(); reason="decelerating along validated path"; return true; }
   if(cmd=="resume"&&stage==Stage::PAUSED) {
-    stage=paused_align_?Stage::PRE_ALIGN:Stage::EXECUTING; stopping_=false; return true;
+    stage=paused_align_?Stage::PRE_ALIGN:Stage::EXECUTING; stopping_=false; resetSettling();
+    reason=paused_align_?"resuming validated alignment":"resuming validated pitch stroke"; return true;
   }
   if(cmd=="cancel"&&(stage==Stage::PAUSED||stage==Stage::PLANNING||stage==Stage::CONTACT_LOCKED||stage==Stage::READY||stage==Stage::COMPLETED_HOLD))
-  { plan=Plan(); stage=Stage::COMPLETED_HOLD; reason="cancelled; holding contact"; return true; }
+  { plan=Plan(); resetSettling(); stage=Stage::COMPLETED_HOLD; reason="cancelled; holding contact"; return true; }
   reason="command rejected in current trajectory state"; return false;
 }
 void Executor::fault(const std::string& why)
 {
+  resetSettling();
   if(owns()) {
     // Preserve the initiating cause for state/UI; diagnostics retain the latest
     // observation in reason even if subsequent tracking checks also fail.
@@ -346,7 +356,9 @@ void Executor::hold(const std::string& why)
   fault(why); first_fault.clear(); stage=Stage::CONTACT_LOCKED;
 }
 void Executor::reset()
-{ stage=Stage::FREE_FLIGHT; ++session; plan=Plan(); first_fault.clear(); reason="perching disabled"; last_time_=0; }
+{ stage=Stage::FREE_FLIGHT; ++session; plan=Plan(); first_fault.clear(); reason="perching disabled"; last_time_=0; resetSettling(); }
+void Executor::resetSettling()
+{ stable_since_=ready_since_=0; settling_window_.reset(); }
 void Executor::tick(const Feedback& s)
 {
   if(!owns()) return;
@@ -388,6 +400,7 @@ void Executor::tick(const Feedback& s)
   // automatic alignment could enter READY before deceleration finished and leave
   // a pending cancel/disable stranded there.
   if(stopping_&&(speed_==0||progress>=path.duration())) {
+    resetSettling();
     paused_align_=stage==Stage::PRE_ALIGN; stage=cancel_?Stage::COMPLETED_HOLD:Stage::PAUSED;
     // A hold must not retain the final deceleration feed-forward indefinitely.
     target.velocity.setZero(); target.acceleration.setZero();
@@ -399,13 +412,41 @@ void Executor::tick(const Feedback& s)
   }
   if(progress>=path.duration()) {
     if(ready_since_==0) ready_since_=s.now;
-    const bool settled=s.joint_rate.tail<2>().norm()<config.settle_rate&&s.body_omega.norm()<config.settle_rate;
-    if(!settled) stable_since_=0; else if(stable_since_==0) stable_since_=s.now;
-    if(s.now-ready_since_>config.settle_timeout) { fault("settling timed out"); return; }
-    if(stable_since_>0&&s.now-stable_since_>=config.settle_time) {
+    bool qualified=false;
+    std::ostringstream detail;
+    if(config.settle_use_window) {
+      const auto stats=settling_window_.observe(s.now,
+        {{s.body_omega.x(),s.body_omega.y(),s.body_omega.z()}},
+        {{s.joint_rate[1],s.joint_rate[2]}},config.settle_time,config.timeout);
+      qualified=stats.qualifies(config.settle_body_rate,config.settle_joint_rate,config.settle_mean_rate);
+      detail<<"window "<<stats.observed<<"/"<<config.settle_time<<" s ("<<stats.status<<")";
+      if(stats.complete) {
+        detail<<"; body RMS="<<stats.body_rms<<" joint RMS="<<stats.joint_rms
+              <<"; body mean="<<stats.body_mean<<" joint mean="<<stats.joint_mean;
+        if(stats.body_rms>=config.settle_body_rate) detail<<"; body RMS exceeds bound";
+        if(stats.joint_rms>=config.settle_joint_rate) detail<<"; joint RMS exceeds bound";
+        if(stats.body_mean>=config.settle_mean_rate) detail<<"; body mean drift exceeds bound";
+        if(stats.joint_mean>=config.settle_mean_rate) detail<<"; joint mean drift exceeds bound";
+      }
+      detail<<"; current body="<<stats.body_current<<" joint="<<stats.joint_current
+            <<"; bounds body="<<config.settle_body_rate<<" joint="<<config.settle_joint_rate
+            <<" mean="<<config.settle_mean_rate<<" rad/s";
+      if(stats.body_current>=config.settle_body_rate) detail<<"; current body rate exceeds bound";
+      if(stats.joint_current>=config.settle_joint_rate) detail<<"; current joint rate exceeds bound";
+    } else {
+      const double body_rate=s.body_omega.norm(),joint_rate=s.joint_rate.tail<2>().norm();
+      const bool settled=joint_rate<config.settle_rate&&body_rate<config.settle_rate;
+      if(!settled) stable_since_=0; else if(stable_since_==0) stable_since_=s.now;
+      qualified=stable_since_>0&&s.now-stable_since_>=config.settle_time;
+      detail<<"strict quiet time "<<(stable_since_>0?s.now-stable_since_:0)<<"/"<<config.settle_time
+            <<" s; current body="<<body_rate<<" joint="<<joint_rate<<"; bound="<<config.settle_rate<<" rad/s";
+    }
+    if(s.now-ready_since_>config.settle_timeout) { fault("settling timed out: "+detail.str()); return; }
+    if(qualified) {
       stage=stage==Stage::PRE_ALIGN?Stage::READY:Stage::COMPLETED_HOLD;
       reason=stage==Stage::READY?"alignment settled; start with current session ID":"stroke complete; holding contact";
-    }
+      resetSettling();
+    } else reason="waiting for measured settling: "+detail.str();
   }
 }
 }
