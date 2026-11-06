@@ -7,27 +7,27 @@ controller:
   wrench_estimate_flag : true
 
   x:
-    p_gain: 10.0
+    p_gain: 8.0
     i_gain: 0.2
-    d_gain: 7.0 #10.0
+    d_gain: 6.0 #10.0
     limit_sum: 4.0
     limit_p: 12.0
     limit_i: 5.0
     limit_d: 12.0
 
   y:
-    p_gain: 7.0
-    i_gain: 0.2 #0.0
-    d_gain: 11.0 #11.0
+    p_gain: 6.5
+    i_gain: 0.1 #0.0
+    d_gain: 13.0 #11.0
     limit_sum: 4.0
     limit_p: 12.0
     limit_i: 5.0
     limit_d: 12.0
 
   z:
-    p_gain: 12.0
-    i_gain: 2.0
-    d_gain: 4.0
+    p_gain: 18.0
+    i_gain: 4.0
+    d_gain: 6.0
     limit_err_p: 1.0
     limit_sum: 25.0 # N for clamping thrust force
     limit_p: 25.0
@@ -36,9 +36,9 @@ controller:
     force_landing_descending_rate: -0.5
 
   roll:
-    p_gain: 25.0
-    i_gain: 3.0 #2.0 # or 0.3
-    d_gain: 20.0
+    p_gain: 25
+    i_gain: 1.0 #2.0 # or 0.3
+    d_gain: 26.0
     limit_sum: 20.0
     limit_p: 30.0
     limit_i: 5.0 # 0.6
@@ -58,16 +58,16 @@ controller:
     start_rp_integration_height: 0.01
 
   yaw:
-    p_gain: 15.0
-    i_gain: 1.0
-    d_gain: 6.0
+    p_gain: 12.0
+    i_gain: 0.5
+    d_gain: 9.0
     limit_err_p: 0.4
     limit_sum: 20.0
     limit_p: 20.0
     limit_i: 5.0
     limit_d: 20.0
 
-    need_d_control: true
+    need_d_control: false
 
   admittance:
     use_admittance: true
