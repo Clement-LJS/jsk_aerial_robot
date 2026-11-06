@@ -26,10 +26,12 @@ std::function<bool(const Vec&,Pose&)> articulatedCogModel(
   std::map<std::string,KDL::Segment> extra,std::string base,KDL::Rotation relative,
   unsigned roll_index,unsigned yaw_index)
 {
-  return [tree,joints,inertia,extra,base,relative,roll_index,yaw_index](const Vec& q,Pose& bg) mutable {
+  // KDL's solver owns its tree by value. Copying this closure therefore copies
+  // both the solver and joint buffer: workers never share mutable FK storage.
+  return [fk=KDL::TreeFkSolverPos_recursive(tree),joints,inertia,extra,base,relative,roll_index,yaw_index](const Vec& q,Pose& bg) mutable {
     if(!q.allFinite()||roll_index>=joints.rows()||yaw_index>=joints.rows()) return false;
     joints(roll_index)=q[1]; joints(yaw_index)=q[2];
-    KDL::TreeFkSolverPos_recursive fk(tree); KDL::Frame b;
+    KDL::Frame b;
     if(fk.JntToCart(joints,b,base)<0) return false;
     KDL::RigidBodyInertia total=KDL::RigidBodyInertia::Zero();
     for(const auto& item:inertia) {

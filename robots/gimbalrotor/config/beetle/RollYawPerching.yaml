@@ -10,6 +10,36 @@ navigation:
     # Common base lifecycle: enable/capture -> nominal target -> update/FK -> controller.
     # Manual targets always mean [passive alpha, active roll, active yaw].
     qp_planning: false
+    online_planning: false
+    prepare_deadline: 120.0 # steady-clock seconds; cooperative cancellation
+    online_period: 0.05
+    online_horizon: 0.5
+    online_deadline: 0.1
+    online_lookahead: 0.2
+    # Execution allowance, not overshoot or hardware-validated tuning.
+    # Must exceed admittance angle limit + reference_tracking_allowance.
+    reference_lead: 0.06
+    reference_tracking_allowance: 0.01
+    progress_filter_time: 0.15
+    goal_tolerance: 0.0087
+    progress_timeout: 30.0
+    admittance:
+      # Legacy starting values, NOT validated roll-yaw tuning. Runtime Bool only.
+      inertia: 0.40
+      damping: 5.0
+      stiffness: 4.5
+      torque_limit: 0.18
+      angle_limit: 0.0383972
+      rate_limit: 0.15
+      acceleration_limit: 0.1
+      reference_torque: 0.0
+      filter_time: 0.1
+      on_threshold: 0.04
+      off_threshold: 0.02
+      on_dwell: 0.1
+      off_dwell: 0.2
+      baseline_samples: 80
+      observer_gain: 10.0
     # Explicit setup: keyboard e -> z -> measured ready-HOLD -> b -> navigate.
     # Rezero uses only the configured passive hinge, with measured active joints frozen.
     pitch_rezero_target_pitch: 0.0

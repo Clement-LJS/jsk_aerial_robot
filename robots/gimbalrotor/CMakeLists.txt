@@ -8,6 +8,7 @@ find_package(catkin REQUIRED COMPONENTS
   aerial_robot_estimation
   aerial_robot_model
   aerial_robot_msgs
+  diagnostic_msgs
   geometry_msgs
   nav_msgs
   tf_conversions
@@ -28,6 +29,7 @@ catkin_package(
     aerial_robot_estimation
     aerial_robot_model
     aerial_robot_msgs
+    diagnostic_msgs
     geometry_msgs
     nav_msgs
     tf_conversions
@@ -58,7 +60,9 @@ target_link_libraries(gimbalrotor_robot_model ${catkin_LIBRARIES})
 add_library(roll_yaw_perching_core
   src/roll_yaw_perching_kinematics.cpp
   src/roll_yaw_orientation_qp.cpp
-  src/roll_yaw_cutting_trajectory.cpp)
+  src/roll_yaw_cutting_trajectory.cpp
+  src/roll_yaw_dynamics.cpp
+  src/roll_yaw_admittance.cpp)
 target_link_libraries(roll_yaw_perching_core ${catkin_LIBRARIES})
 
 add_library(gimbalrotor_navigation
@@ -83,6 +87,7 @@ install(DIRECTORY config plugins launch
   )
 
 catkin_install_python(PROGRAMS scripts/keyboard_command/keyboard_roll_yaw_perching.py
+  scripts/keyboard_command/roll_yaw_command.py
   scripts/visualization/module_cog_viewer.py
   scripts/visualization/cog_markers.py
   scripts/urdf/urdf_inertia_markers.py

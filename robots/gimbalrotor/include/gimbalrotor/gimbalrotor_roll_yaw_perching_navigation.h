@@ -6,7 +6,12 @@
 #include <geometry_msgs/Vector3Stamped.h>
 #include <std_msgs/UInt64.h>
 #include <std_msgs/String.h>
-#include <future>
+#include <geometry_msgs/WrenchStamped.h>
+#include <diagnostic_msgs/DiagnosticArray.h>
+#include <gimbalrotor/roll_yaw_worker.h>
+#include <limits>
+#include <gimbalrotor/roll_yaw_dynamics.h>
+#include <gimbalrotor/roll_yaw_admittance.h>
 
 namespace aerial_robot_navigation
 {
@@ -81,16 +86,64 @@ private:
   roll_yaw::PlanningConfig planning_config_;
   roll_yaw::ExecutionConfig feedback_config_;
   std::unique_ptr<roll_yaw::Executor> planner_;
-  std::future<roll_yaw::Plan> pending_;
+  roll_yaw::Worker<roll_yaw::Plan> prepare_worker_;
+  bool prepare_pending_=false;
+  std::uint64_t prepare_cancellations_=0;
+  std::string prepare_result_="not requested";
+  double prepare_started_=0,prepare_deadline_=120,prepare_wall_=0;
+  struct PlanningStatus {
+    std::atomic<int> interval{0},total{0}; std::atomic<bool> validating{false};
+    std::atomic<double> solve_seconds{0},validation_seconds{0};
+  };
+  std::shared_ptr<PlanningStatus> planning_status_=std::make_shared<PlanningStatus>();
   std::uint64_t producer_generation_=0, pending_generation_=0;
   roll_yaw::Mat neutral_=roll_yaw::Mat::Identity();
+
+  struct DynamicsResult {
+    roll_yaw::DynamicsTerms terms; std::string reason;
+    std::uint64_t generation=0,session=0; double stamp=0,submitted=0,wall=0;
+  };
+  struct OnlineResult {
+    roll_yaw::Path path; std::string reason; bool ok=false;
+    std::uint64_t generation=0,session=0; double begin=0,submitted=0,wall=0;
+    roll_yaw::Reference applied; roll_yaw::Feedback measured;
+  };
+  roll_yaw::Worker<DynamicsResult> dynamics_worker_;
+  roll_yaw::Worker<OnlineResult> online_worker_;
+  std::shared_ptr<roll_yaw::ArticulatedDynamics> dynamics_model_;
+  roll_yaw::MomentumObserver observer_;
+  roll_yaw::PitchAdmittance admittance_;
+  bool online_planning_=false,online_pending_=false,dynamics_pending_=false,torque_valid_=false;
+  bool compliance_configuration_valid_=false;
+  bool stroke_started_=false,last_command_accepted_=false;
+  std::shared_ptr<const roll_yaw::Path> online_source_;
+  double last_dynamics_stamp_=0,observer_started_=0;
+  double online_period_=.05,online_horizon_=.5,online_deadline_=.1,online_lookahead_=.2;
+  double last_online_=0,online_wall_=0,online_age_=0,dynamics_wall_=0,last_dynamics_=0;
+  double torque_stamp_=0,torque_receipt_=0,compliance_time_=0,control_pitch_=0;
+  std::uint64_t online_rejected_=0,online_accepted_=0,plan_id_=0;
+  std::string online_reason_="disabled",load_reason_="no computable input",admittance_reason_="disarmed";
+  roll_yaw::Vec servo_effort_=roll_yaw::Vec::Constant(std::numeric_limits<double>::quiet_NaN());
+  double effort_stamp_=0,effort_receipt_=0,body_receipt_=0,joint_receipt_=0,wrench_receipt_=0;
+  geometry_msgs::WrenchStamped input_wrench_;
+  struct ArticulationSample { double position=0,rate=0,stamp=0; };
+  std::map<std::string,ArticulationSample> articulation_samples_;
+  void admittanceCallback(const std_msgs::BoolConstPtr&);
+  void wrenchCallback(const geometry_msgs::WrenchStampedConstPtr&);
+  void updateDynamics(const roll_yaw::Feedback&);
+  void updateOnline(const roll_yaw::Feedback&);
+  void resetCompliance();
+  ros::Publisher status_pub_,task_pub_,compliance_pub_,ack_pub_;
+  std::string last_status_;
+  double last_diagnostics_=0,navigation_wall_=0;
 
   roll_yaw::Feedback measured_;
   roll_yaw::Pose cp_=roll_yaw::Pose::Identity();
   roll_yaw::Vec axis_=roll_yaw::Vec::Zero();
   std::string roll_,yaw_,contact_,prefix_,world_,body_frame_;
   std::string joint_failure_="no joint feedback", body_failure_="no body feedback";
-  std::uint64_t joint_ignored_stamps_=0, body_ignored_stamps_=0;
+  std::uint64_t joint_ignored_stamps_=0, body_ignored_stamps_=0,joint_invalid_messages_=0,body_invalid_messages_=0;
+  double last_joint_message_stamp_=0,last_body_message_stamp_=0;
   bool configuration_valid_=false, joint_valid_=false, body_valid_=false;
   double synchronization_tolerance_=.05, cog_model_tolerance_=.005;
   std::vector<ros::Subscriber> subscriptions_;

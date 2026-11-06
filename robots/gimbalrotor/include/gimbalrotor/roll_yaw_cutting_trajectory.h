@@ -1,6 +1,7 @@
 #pragma once
 #include <gimbalrotor/roll_yaw_orientation_qp.h>
 #include <gimbalrotor/roll_yaw_settling.h>
+#include <gimbalrotor/roll_yaw_task.h>
 #include <array>
 #include <cstdint>
 #include <vector>
@@ -21,6 +22,9 @@ struct PlanningConfig
   double alignment_rate=.04, alignment_acceleration=.02, max_duration=180;
   double cog_speed_limit=.1, cog_acceleration_limit=.2;
   int scaling_attempts=5;
+  // Worker-local cooperative budget/progress hooks; never call into navigation.
+  std::function<bool()> cancelled;
+  std::function<void(int,int,bool)> report;
   bool mechanismValid() const;
   bool valid() const;
 };
@@ -36,7 +40,7 @@ private:
   double distance_,sign_,speed_,ramp_,feed_;
 };
 Desired cuttingOrientation(const Mat& neutral,const Request&,double theta,double rate,double acceleration);
-struct Knot { double t=0; Vec eta=Vec::Zero(), velocity=Vec::Zero(); };
+struct Knot { double t=0; Vec eta=Vec::Zero(), velocity=Vec::Zero(), acceleration=Vec::Zero(); };
 struct Reference
 {
   double t=0, orientation_error=0;
@@ -59,6 +63,9 @@ struct Plan
   std::uint64_t session=0;
   int scale_attempt=0;
   std::string reason;
+  Request goal;
+  Mat neutral=Mat::Identity();
+  double wall_seconds=0;
   Kinematics model;
   Path align,cut;
 };
@@ -66,6 +73,8 @@ bool samplePath(const Kinematics&,const Path&,double time,Reference&);
 // Solver-free mechanism validation and FK shared by nominal and QP targets.
 bool mechanismAllowed(const Kinematics&,const Vec&,const PlanningConfig&,std::string&);
 bool mechanismReference(const Kinematics&,const Vec&,const Vec&,const Vec&,Reference&);
+bool continuation(const Kinematics&,const Path&,double begin,double horizon,const PlanningConfig&,Path&,std::string&,
+                  const Vec& measured_seed_error=Vec::Zero());
 Plan prepare(const Kinematics&,const Vec& initial,const Mat& neutral,const Request&,const PlanningConfig&);
 
 enum class Stage { FREE_FLIGHT, CONTACT_LOCKED, PLANNING, PRE_ALIGN, READY, EXECUTING,
@@ -78,6 +87,8 @@ struct Feedback
   std::string invalid_reason;
   Pose body=Pose::Identity(); Vec eta=Vec::Zero(), joint_rate=Vec::Zero(), body_omega=Vec::Zero();
 };
+bool nominalMeasurementSeed(const Kinematics&,const Feedback&,const Reference& nominal,const Reference& applied,
+                            const PlanningConfig&,Vec& error,std::string& reason);
 struct ExecutionConfig
 {
   double timeout=.15, future_tolerance=.02, pivot_tolerance=.01, hinge_tolerance=.03;
@@ -85,6 +96,8 @@ struct ExecutionConfig
   bool settle_use_window=false;
   double settle_body_rate=.05, settle_joint_rate=.03, settle_mean_rate=.02;
   bool require_settled_on_enable=false;
+  double reference_lead=.06, reference_tracking_allowance=.01, progress_filter_time=.15, goal_tolerance=.0087;
+  double progress_timeout=30;
   bool feedbackConfigValid() const;
   bool settlingValid() const;
   bool valid() const;
@@ -105,7 +118,16 @@ public:
   Reference target;
   Estimate measured;
   Plan plan;
+  Path online_path; double online_begin=0,online_stamp=0,online_activation_timeout=.5;
+  bool online_started=false;
+  unsigned online_expired=0;
   double progress=0;
+  TaskProgress task;
+  double planned_pitch=0, goal_error=0, goal_orientation_error=0;
+  bool path_end_commanded=false, goal_reached=false, progress_lag=false;
+  Reference applied; bool applied_valid=false;
+  SettlingStatistics settling;
+  double settling_elapsed=0;
   bool owns() const { return stage!=Stage::FREE_FLIGHT; }
   bool feedbackValid(const Feedback&) const;
   std::string feedbackRejection(const Feedback&) const;
@@ -122,6 +144,7 @@ private:
   void resetSettling();
   SettlingWindow settling_window_;
   double last_time_=0, stable_since_=0, ready_since_=0, speed_=1;
+  double lag_since_=0,settling_stamp_=0;
   bool stopping_=false, cancel_=false, paused_align_=false;
 };
 }

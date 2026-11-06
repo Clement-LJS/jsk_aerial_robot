@@ -46,6 +46,7 @@ protected:
   ros::Publisher rpy_gain_pub_;                  // for spinal
   ros::Publisher torque_allocation_matrix_inv_pub_; // for spinal
   ros::Publisher gimbal_dof_pub_;                // for spinal
+  ros::Publisher roll_yaw_input_pub_; // command/model estimate; existing observer output unchanged
 
   boost::shared_ptr<GimbalrotorRobotModel> gimbalrotor_robot_model_;
 

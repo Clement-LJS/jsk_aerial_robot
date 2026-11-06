@@ -34,6 +34,7 @@ namespace aerial_robot_control
     rpy_gain_pub_ = nh_.advertise<spinal::RollPitchYawTerms>("rpy/gain", 1);
     torque_allocation_matrix_inv_pub_ = nh_.advertise<spinal::TorqueAllocationMatrixInv>("torque_allocation_matrix_inv", 1);
     gimbal_dof_pub_ = nh_.advertise<std_msgs::UInt8>("gimbal_dof", 1);
+    roll_yaw_input_pub_ = nh_.advertise<geometry_msgs::WrenchStamped>("perching/roll_yaw/command_wrench_estimate", 1);
   }
 
   void GimbalrotorController::reset()
@@ -97,6 +98,22 @@ void GimbalrotorController::controlCore()
       target_wrench_acc_cog.tail(3) = Eigen::Vector3d(target_ang_acc_x, target_ang_acc_y, target_ang_acc_z) + gyro;
 
     setTargetWrenchAccCog(target_wrench_acc_cog);
+    // Fully actuated FC allocation: translation is already CoG-expressed,
+    // using the total PID result (including its accumulated hover support). Estimate the BODY rotor
+    // resultant about the instantaneous CoG. FC torque/rotor telemetry is absent;
+    // this is an input estimate, never a measured wrench or net external wrench.
+    if(!underactuate_ && gimbal_calc_in_fc_ && roll_yaw_input_pub_.getNumSubscribers()) {
+      Eigen::Matrix3d rotation; tf::matrixTFToEigen(uav_rot, rotation);
+      const Eigen::Vector3d force = rotation * (robot_model_->getMass() * target_wrench_acc_cog.head<3>());
+      const Eigen::Vector3d torque = rotation * (inertia * target_wrench_acc_cog.tail<3>() + gyro);
+      if(force.allFinite() && torque.allFinite()) {
+        geometry_msgs::WrenchStamped msg;
+        msg.header.stamp.fromSec(estimator_->getImuLatestTimeStamp()); msg.header.frame_id="world";
+        msg.wrench.force.x=force.x(); msg.wrench.force.y=force.y(); msg.wrench.force.z=force.z();
+        msg.wrench.torque.x=torque.x(); msg.wrench.torque.y=torque.y(); msg.wrench.torque.z=torque.z();
+        roll_yaw_input_pub_.publish(msg);
+      }
+    }
     
     pid_msg_.roll.total.at(0) = target_ang_acc_x;
     pid_msg_.roll.p_term.at(0) = pid_controllers_.at(ROLL).getPTerm();

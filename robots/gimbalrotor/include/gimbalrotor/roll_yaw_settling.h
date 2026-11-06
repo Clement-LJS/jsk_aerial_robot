@@ -53,6 +53,9 @@ public:
       }
     }
     window_=window;
+    if(samples_.size()>=4096) {
+      reset(); out.status="settling sample capacity exceeded; collecting fresh window"; return out;
+    }
     samples_.push_back(sample);
     const double begin=now-window;
     // Retain the sample just before the left edge for exact linear clipping.
