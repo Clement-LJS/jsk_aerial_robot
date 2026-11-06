@@ -16,7 +16,8 @@ bool Request::valid() const
   for(double x:{yaw,roll,pitch_start,pitch_end,rate,acceleration}) if(!std::isfinite(x)) return false;
   return rate>0 && acceleration>0 && std::abs(yaw)<=M_PI && std::abs(roll)<M_PI/2 &&
     std::abs(pitch_start)<M_PI && std::abs(pitch_end)<M_PI &&
-    (align_only || std::abs(pitch_end-pitch_start)>1e-8);
+    (align_only || std::abs(pitch_end-pitch_start)>1e-8)&&
+    (!body_pitch_jog||(align_only&&yaw==0&&roll==0&&pitch_start!=0&&pitch_end==0));
 }
 bool PlanningConfig::mechanismValid() const
 {
@@ -120,12 +121,13 @@ bool jointBounds(const Path& path,const PlanningConfig& c,std::string& error)
         (axis<0?"":std::string(axis==0?"alpha":axis==1?"roll":"yaw")+": ")+why; return false;
     };
     const auto p=controls(path.knots[k-1],path.knots[k]); std::array<Vec,5> v;
+    for(const auto& q:p) if(!q.allFinite()) return failed("nonfinite polynomial controls");
     for(const auto& q:p) for(int axis=0;axis<3;++axis)
       if(q[axis]<c.limits.lower[axis]-1e-12||q[axis]>c.limits.upper[axis]+1e-12)
         return failed("interpolated position limit",axis);
     for(int i=0;i<5;++i) {
       v[i]=5*(p[i+1]-p[i])/dt;
-      for(int axis=0;axis<3;++axis) if(std::abs(v[i][axis])>c.limits.velocity[axis]*.5+1e-9)
+      for(int axis=0;axis<3;++axis) if(!std::isfinite(v[i][axis])||std::abs(v[i][axis])>c.limits.velocity[axis]*.5+1e-9)
         return failed("interpolated velocity reserve exceeded; time scaling required",axis);
     }
     for(int i=0;i<4;++i) if(( (4*(v[i+1]-v[i])/dt).cwiseAbs().array()>c.limits.acceleration.array()*.5+1e-9).any())
@@ -308,15 +310,53 @@ bool mechanismPath(const Kinematics& model,const Reference& from,const Vec& goal
   if(!config.limits.valid()||!from.eta.allFinite()||!from.velocity.allFinite()||!from.acceleration.allFinite())
     { error="invalid manual state/rate bounds"; return false; }
   if(!mechanismAllowed(model,goal,config,error)) return false;
-  const Vec distance=(goal-from.eta).cwiseAbs();
-  double duration=std::max(.1,std::max((2*distance.cwiseQuotient(config.limits.velocity)).maxCoeff(),
-    (8*distance.cwiseQuotient(config.limits.acceleration)).array().sqrt().maxCoeff()));
-  // Only scalar polynomial bounds here. No trajectory FK, lambda/model copies,
-  // worker submission, IK or sampled validator on any manual command route.
-  for(int attempt=0;attempt<6;++attempt,duration*=1.5) {
-    path.knots={{0,from.eta,from.velocity,from.acceleration},{duration,goal,Vec::Zero(),Vec::Zero()}};
-    if(jointBounds(path,config,error)) return cachePathTravel(path);
+  // Every Bernstein inequality is quadratic in positive duration: position
+  // controls directly, velocity controls multiplied by T, acceleration by T^2.
+  // Their real roots partition T >= 0.1 into constant-feasibility intervals.
+  // Test boundaries and one interior point per interval, including the final
+  // unbounded interval. This is finite work even when feasibility is nonmonotone.
+  using Polynomial=std::array<long double,3>; // constant, linear, quadratic
+  std::vector<double> boundaries{.1};
+  auto roots=[&](Polynomial p) {
+    auto add=[&](long double t) {
+      if(std::isfinite(t)&&t>.1L&&t<std::numeric_limits<double>::max()/4)
+        boundaries.push_back(static_cast<double>(t));
+    };
+    if(p[2]==0) { if(p[1]!=0) add(-p[0]/p[1]); return; }
+    const long double discriminant=p[1]*p[1]-4*p[2]*p[0];
+    if(discriminant<0) return;
+    const long double q=-.5L*(p[1]+std::copysign(std::sqrt(discriminant),p[1]));
+    if(q==0) add(-p[1]/(2*p[2]));
+    else { add(q/p[2]); add(p[0]/q); }
+  };
+  for(int axis=0;axis<3;++axis) {
+    const long double q=from.eta[axis],v=from.velocity[axis],a=from.acceleration[axis],g=goal[axis];
+    const std::array<Polynomial,6> p{{{q,0,0},{q,v/5,0},{q,2*v/5,a/20},{g,0,0},{g,0,0},{g,0,0}}};
+    for(const auto& b:p) {
+      roots({b[0]-config.limits.lower[axis],b[1],b[2]});
+      roots({b[0]-config.limits.upper[axis],b[1],b[2]});
+    }
+    for(int i=0;i<5;++i) for(int sign:{-1,1})
+      roots({5*(p[i+1][0]-p[i][0]),5*(p[i+1][1]-p[i][1])+sign*.5L*config.limits.velocity[axis],
+             5*(p[i+1][2]-p[i][2])});
+    for(int i=0;i<4;++i) for(int sign:{-1,1})
+      roots({20*(p[i+2][0]-2*p[i+1][0]+p[i][0]),20*(p[i+2][1]-2*p[i+1][1]+p[i][1]),
+             20*(p[i+2][2]-2*p[i+1][2]+p[i][2])+sign*.5L*config.limits.acceleration[axis]});
   }
+  std::sort(boundaries.begin(),boundaries.end());
+  boundaries.erase(std::unique(boundaries.begin(),boundaries.end()),boundaries.end());
+  auto feasible=[&](double duration) {
+    path.knots={{0,from.eta,from.velocity,from.acceleration},{duration,goal,Vec::Zero(),Vec::Zero()}};
+    return jointBounds(path,config,error)&&cachePathTravel(path);
+  };
+  // No FK sampling, worker, or offline-planning settings on this manual route.
+  for(std::size_t i=0;i<boundaries.size();++i) {
+    if(feasible(boundaries[i])) { error.clear(); return true; }
+    const double interior=i+1<boundaries.size()?boundaries[i]+.5*(boundaries[i+1]-boundaries[i]):
+      boundaries[i]+std::max(1.0,boundaries[i]);
+    if(feasible(interior)) { error.clear(); return true; }
+  }
+  error="no feasible smooth manual duration within Bernstein position/rate/acceleration reserves";
   path=Path(); return false;
 }
 bool validatedMechanismPath(const Kinematics& model,const Reference& from,const Vec& goal,
@@ -341,6 +381,30 @@ bool validatedMechanismPath(const Kinematics& model,const Reference& from,const 
   }
   path=Path(); return false;
 }
+namespace
+{
+bool signedProxyMotion(const Kinematics& model,const Path& path,const PlanningConfig& c,
+                       double direction,double& drop,std::string& error)
+{
+  Reference ref;
+  if(!samplePath(model,path,0,ref)) { error="invalid saw-origin proxy start"; return false; }
+  const double start_z=(ref.body*c.saw_point).z(); double previous_z=start_z;
+  const int samples=std::max(2,static_cast<int>(std::ceil(path.duration()/(c.dt/4))));
+  for(int i=1;i<=samples;++i) {
+    if(c.cancelled&&c.cancelled()) { error="proxy validation cancelled"; return false; }
+    if(!samplePath(model,path,path.duration()*i/samples,ref)) { error="invalid saw-origin proxy sample"; return false; }
+    const double z=(ref.body*c.saw_point).z();
+    if(direction*(z-previous_z)>1e-8) {
+      error=std::string(direction>0?"upward":"downward")+" saw-origin proxy motion opposes request at sample="+std::to_string(i)+
+        "; requested sign retained; choose another extent/alignment"; return false;
+    }
+    previous_z=z;
+  }
+  drop=start_z-previous_z;
+  if(direction*drop<=1e-6) { error="no meaningful requested-direction saw-origin proxy displacement"; return false; }
+  return true;
+}
+}
 Plan prepare(const Kinematics& model,const Vec& initial,const Mat& neutral,const Request& request,const PlanningConfig& c)
 {
   Plan out; out.model=model; out.goal=request; out.neutral=neutral; out.reason="invalid request/configuration";
@@ -350,8 +414,11 @@ Plan prepare(const Kinematics& model,const Vec& initial,const Mat& neutral,const
       logSO3(body.linear().transpose()*neutral).norm()>c.orientation_tolerance)) {
     out.reason="cut must start at measured R0; no implicit alignment allowed"; return out;
   }
-  if(!request.align_only&&!c.saw_point_valid) {
-    out.reason="downward feed UNVERIFIED: missing rigid saw-link origin in controlled body frame"; return out;
+  if((!request.align_only||request.body_pitch_jog)&&!c.saw_point_valid) {
+    out.reason="signed feed UNVERIFIED: missing rigid saw-link origin in controlled body frame"; return out;
+  }
+  if(request.body_pitch_jog&&logSO3(body.linear().transpose()*neutral).norm()>1e-9) {
+    out.reason="local pitch jog must start at applied body orientation"; return out;
   }
   const Mat end=cuttingOrientation(neutral,request,request.pitch_start,0,0).rotation;
   const Vec delta=logSO3(body.linear().transpose()*end);
@@ -368,7 +435,10 @@ Plan prepare(const Kinematics& model,const Vec& initial,const Mat& neutral,const
     };
     if(!buildPath(model,initial,time,align,c,out.align,out.reason)) continue;
     if(request.align_only) {
-      out.ok=true; out.reason="body alignment geometry prepared"; return out;
+      if(request.body_pitch_jog&&!signedProxyMotion(model,out.align,c,request.pitch_start>0?1:-1,out.proxy_drop,out.reason)) {
+        out.align=Path(); return out;
+      }
+      out.ok=true; out.reason=request.body_pitch_jog?"body-local pitch jog geometry prepared":"body alignment geometry prepared"; return out;
     }
     Stroke stroke(request.pitch_end-request.pitch_start,request.rate/scale,request.acceleration/(scale*scale));
     auto cut=[neutral,request,stroke](double t) {
@@ -376,25 +446,8 @@ Plan prepare(const Kinematics& model,const Vec& initial,const Mat& neutral,const
       return cuttingOrientation(neutral,request,request.pitch_start+theta,v,a);
     };
     if(!buildPath(model,out.align.knots.back().eta,stroke.duration(),cut,c,out.cut,out.reason)) continue;
-    // Check the actual coordinated proxy trajectory, including interpolation.
-    // A curved path is allowed; sustained upward travel is not a downward feed.
-    const double start_z=(body*c.saw_point).z(); double previous_z=start_z;
-    const int samples=std::max(2,static_cast<int>(std::ceil(out.cut.duration()/(c.dt/4))));
-    bool downward=true;
-    for(int i=1;i<=samples;++i) {
-      if(c.cancelled&&c.cancelled()) { out.reason="proxy validation cancelled"; return out; }
-      Reference ref;
-      if(!samplePath(model,out.cut,out.cut.duration()*i/samples,ref)) { downward=false; break; }
-      const double z=(ref.body*c.saw_point).z();
-      if(z>previous_z+1e-8) {
-        out.reason="upward saw-origin proxy motion at sample="+std::to_string(i)+
-          "; requested sign retained; choose another extent/alignment"; downward=false; break;
-      }
-      previous_z=z;
-    }
-    out.proxy_drop=start_z-previous_z;
-    if(!downward||out.proxy_drop<=1e-6) {
-      if(downward) out.reason="no downward saw-origin proxy displacement";
+    // Ordinary cuts remain downward-only, independently of their angle sign.
+    if(!signedProxyMotion(model,out.cut,c,1,out.proxy_drop,out.reason)) {
       out.align.knots.clear(); out.cut.knots.clear(); return out;
     }
     out.ok=true; out.reason="geometry prepared: R0 * Ry(d); saw-origin drop="+

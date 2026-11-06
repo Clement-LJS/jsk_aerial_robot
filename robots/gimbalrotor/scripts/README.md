@@ -22,11 +22,11 @@ Start the keyboard in a second terminal:
 
 ```bash
 source ~/ros/jsk_aerial_robot_ws/devel/setup.bash
-rosrun gimbalrotor keyboard_roll_yaw_perching.py
+rosrun gimbalrotor keyboard_roll_yaw_perching.py _body_pitch_step_deg:=0.2
 ```
 
-Tap a paired motion key for a small step (default 0.2 degrees); there are no
-numeric destination prompts or per-key planning transactions.
+Tap a paired motion key for a small step (default 0.2 degrees). Mechanism keys
+update independent destinations; body-local pitch keys submit finite asynchronous jogs.
 
 | Key | Action |
 | --- | --- |
@@ -35,6 +35,7 @@ numeric destination prompts or per-key planning transactions.
 | `j`, `l` | Active yaw joint − / + |
 | `a`, `f` | Active roll joint − / + |
 | `i`, `k` | Passive-hinge alpha + / −, relative to the current lock |
+| `o`, `u` | One coordinated body-local pitch jog down (+) / up (−); wait for completion |
 | `z` | Explicit body pitch rezero with measured roll/yaw joints frozen |
 | `b` | Final relock after fresh rezero ready/not-active/not-failed feedback |
 | Space | Brake all mechanism/body motion together, then hold contact; discard the cut |
@@ -84,8 +85,11 @@ sending, so reversing a key at a limit immediately changes the destination.
 
 Accepted destinations now use a bounded C2 mechanism interpolation from the
 applied reference. Its joint position/speed/acceleration bounds cover whole
-polynomial intervals using analytic Bernstein bounds. Each key performs an
-endpoint FK/attitude check; it does not sample a whole path or submit planning
+polynomial intervals using analytic Bernstein bounds. Each mechanism key performs an
+algebraic duration search using the applied position, velocity and acceleration:
+the quadratic bound roots partition feasible durations, including reversal and
+near-zero-displacement cases where longer durations are not always feasible.
+It also performs an endpoint FK/attitude check; it does not sample a whole path or submit planning
 work. Each update samples only the next reference, checks joint, attitude and CoG
 rate/acceleration limits before publication, and shares that FK between body,
 CoG and both servos. Automatic alignment and cut preparation (including the
@@ -99,6 +103,74 @@ Reference motion retains acceleration limits when reversing a moving joint; phys
 rostopic pub -1 /gimbalrotor/perching/roll_yaw/yaw_target std_msgs/Float64 'data: -0.3'
 rostopic pub -1 /gimbalrotor/perching/roll_yaw/alpha_target std_msgs/Float64 'data: 0.05'
 ```
+
+The separate `body_pitch_delta` (`std_msgs/Float64`) input requests **one relative
+angular increment in radians**, from the coherent held applied body orientation
+at admission: `R_des(t) = R_start * Ry(theta(t))`. Keyboard `o` sends positive
+`~body_pitch_step_deg`, and `u` sends negative; this parameter defaults to 0.2°
+and must be finite, positive and at most 1°. `~pitch_step_deg` still controls
+passive alpha (`i/k`). Positive body-local +Y rotation is downward in the normal
+operating alignment; passive-alpha sign is different because of the mounting yaw.
+All three mechanism coordinates can change together. Body and CoG translations
+follow the fixed-pivot FK; this is neither a world-Z depth nor a world-Euler pitch command.
+
+Each jog uses the existing offline alignment worker, full geometric/derivative
+checks, tracking governor and measured settling. Both signs require meaningful
+saw-origin displacement in the requested vertical direction and a sampled path
+that does not reverse that direction. Incompatible alignment/extent is rejected
+without flipping the angle. This checks the rigid saw-origin proxy, not physical
+tooth clearance, contact force or collision. Ordinary prepared cuts remain downward-only.
+Nonfinite increments or `abs(delta) >= pi` are rejected; zero is a reported no-op.
+Existing joint, body/CoG, singularity, rate and acceleration limits also apply.
+
+Jogs require fresh valid HOVER contact, idle setup, a held reference and the normal
+quiet preparation window. **They are discrete one-shot commands.** A request while
+manual motion, automatic motion, a paused path, stopping or preparation is busy
+is rejected without cancelling that motion or retaining a future jog. Wait for
+completion, or press Space and then resend. No separate prepare/start is needed.
+`command_ack` reports `action=body_pitch_delta`, the session, acceptance and reason,
+with phases `scheduled`, `moving`, `failed`, `cancelled`, `rejected`, `noop` or
+`complete`. Only `complete` means the measured endpoint settled; it includes the
+requested delta and measured joint/orientation errors. The keyboard displays these
+acknowledgements without blocking safety keys. `state` and diagnostics also report
+preparation, execution, feedback pause and completion. The next jog is relative
+to its new admitted start; no angular backlog is accumulated.
+
+Space/stop/cancel invalidates pending planning or brakes the active path and holds
+contact. If feedback disappears while braking, cleanup finishes at the already
+applied pose with zero command derivatives, discarding the old goal and compliance
+baseline. Observation loss during jog preparation cancels the job. During execution
+it pauses with the original path retained; restore feedback and explicitly `resume`
+or stop. Disable/relock also invalidate pending results. Completion leaves a hold,
+not a prepared cutting stroke; `start` cannot repeat the jog. Subsequent body-yaw/
+roll commands reconstruct their lock-relative alignment, and subsequent cut
+preparation captures the newly measured orientation as R0.
+
+Jogs are geometric manual navigation: they never enable or tare admittance, and
+acceptance clears any old prepared-cut compliance state. For compliant cutting:
+align/jog → prepare cut → measured READY → explicit unloaded tare → baseline ready
+→ enable admittance → start. No wrench or tare is required for a geometric jog.
+
+These examples are for an already-configured ROS environment with the normal
+robot stack running (namespace defaults shown):
+
+```bash
+rosrun gimbalrotor keyboard_roll_yaw_perching.py _body_pitch_step_deg:=0.2
+# e -> z -> wait ready-HOLD -> b. j/l yaw, a/f roll, i/k alpha.
+# o: downward local-pitch jog; u: upward. Wait for completion. Space stops.
+rostopic pub -1 /gimbalrotor/perching/roll_yaw/body_pitch_delta std_msgs/Float64 'data: 0.0872664626'
+# After completion: -5 degrees from the new admitted start.
+rostopic pub -1 /gimbalrotor/perching/roll_yaw/body_pitch_delta std_msgs/Float64 'data: -0.0872664626'
+rostopic echo /gimbalrotor/perching/roll_yaw/state
+rostopic echo /gimbalrotor/perching/roll_yaw/command_ack
+rosrun gimbalrotor roll_yaw_command.py stop
+# Restore coherent feedback before resuming a paused jog:
+rosrun gimbalrotor roll_yaw_command.py resume
+```
+
+Keyboard `~robot_namespace` defaults to `/gimbalrotor`; `~debug_prefix` defaults
+to `perching/roll_yaw` relative to that namespace (an absolute prefix is also
+accepted). Match the navigator's configured `debug_prefix` when overriding it.
 
 Numeric **body alignment** uses two separate `std_msgs/Float64` topics:
 `body_yaw_target` and `body_roll_target`. Let N be the measured controlled-body

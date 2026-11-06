@@ -18,6 +18,7 @@ struct Request
 {
   double yaw=0, roll=0, pitch_start=0, pitch_end=0, rate=.03, acceleration=.02;
   bool align_only=false;
+  bool body_pitch_jog=false; // align-only pitch_start is a signed increment from applied R0
   bool valid() const;
 };
 struct PlanningConfig

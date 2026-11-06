@@ -41,6 +41,7 @@ private:
   void jointCallback(const sensor_msgs::JointStateConstPtr&);
   void bodyCallback(const nav_msgs::OdometryConstPtr&);
   void bodyAlignmentCallback(const std_msgs::Float64ConstPtr&,int axis);
+  void bodyPitchCallback(const std_msgs::Float64ConstPtr&);
   roll_yaw::Request alignment_request_;
   bool body_alignment_valid_=false;
   void mechanismTargetCallback(const std_msgs::Float64ConstPtr&,int axis);
@@ -51,6 +52,7 @@ private:
   void publishJointTarget();
   void invalidatePlanner();
   void stopMotion(const std::string&);
+  void completeStop(const std::string&);
   void faultHold(const std::string&);
   void request(const std::string&,std::uint64_t,int axis=-1,double value=0);
   void diagnostics();

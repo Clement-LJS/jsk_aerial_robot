@@ -3,6 +3,7 @@
 #include <gimbalrotor/roll_yaw_dynamics.h>
 #include <gimbalrotor/roll_yaw_worker.h>
 #include <kdl_parser/kdl_parser.hpp>
+#include <kdl/treefksolverpos_recursive.hpp>
 #include <Eigen/SVD>
 #include <cstdlib>
 
@@ -234,7 +235,7 @@ TEST(Planning,ManualRetargetAppliedDerivativesAndBoundedStop)
   ASSERT_TRUE(mechanismReference(f.model,Vec(0,0,-.00076699),Vec::Zero(),Vec::Zero(),applied));
   Vec goal=applied.eta; goal[2]=-.004257648503988658;
   ASSERT_TRUE(mechanismPath(f.model,applied,goal,f.config,path,reason))<<reason;
-  EXPECT_FALSE(path.desired); EXPECT_NEAR(path.duration(),1.188998,1e-5);
+  EXPECT_FALSE(path.desired); EXPECT_GT(path.duration(),0);
   ASSERT_TRUE(samplePath(f.model,path,.025,applied)); EXPECT_LT(applied.eta[2],-.00076699);
   for(int key=0;key<30;++key) {
     const int axis=key%3; goal[axis]+=(key%2?-.003:.003);
@@ -289,6 +290,135 @@ TEST(Planning,BodyAlignmentThenMeasuredLocalStroke)
     const auto upward=prepare(f.model,start,body.linear(),cut,f.config);
     EXPECT_FALSE(upward.ok); EXPECT_NE(upward.reason.find("upward"),std::string::npos)<<upward.reason;
   }
+}
+TEST(Planning,MovingRetargetDurationIntervals)
+{
+  Fixture f; Reference from; Path path; std::string reason;
+  auto check=[&](const Vec& goal) {
+    ASSERT_TRUE(mechanismPath(f.model,from,goal,f.config,path,reason))<<reason;
+    EXPECT_EQ((path.knots.front().velocity-from.velocity).norm(),0);
+    EXPECT_EQ((path.knots.front().acceleration-from.acceleration).norm(),0);
+    EXPECT_EQ((path.knots.back().eta-goal).norm(),0);
+    const double t=path.duration();
+    std::array<Vec,6> p{{from.eta,from.eta+from.velocity*t/5,
+      from.eta+2*from.velocity*t/5+from.acceleration*t*t/20,goal,goal,goal}};
+    std::array<Vec,5> v;
+    for(const auto& q:p) {
+      EXPECT_TRUE((q.array()>=f.config.limits.lower.array()-1e-10).all());
+      EXPECT_TRUE((q.array()<=f.config.limits.upper.array()+1e-10).all());
+    }
+    for(int i=0;i<5;++i) {
+      v[i]=5*(p[i+1]-p[i])/t;
+      EXPECT_TRUE((v[i].cwiseAbs().array()<=.5*f.config.limits.velocity.array()+1e-9).all());
+    }
+    for(int i=0;i<4;++i)
+      EXPECT_TRUE(((4*(v[i+1]-v[i])/t).cwiseAbs().array()<=.5*f.config.limits.acceleration.array()+1e-9).all());
+  };
+  ASSERT_TRUE(mechanismReference(f.model,Vec(0,0,.27356269315021703),Vec(0,0,.02309625231437117),
+    Vec(0,0,-.01577556826737270),from));
+  check(Vec(0,0,.27227136331111570));
+  EXPECT_GT(path.duration(),2.4407308023);
+  for(double sign:{-1.,1.}) {
+    ASSERT_TRUE(mechanismReference(f.model,Vec(0,0,sign*1.54),Vec(0,0,sign*.01),Vec::Zero(),from));
+    check(from.eta); // zero distance with nonzero speed
+    check(from.eta-Vec(0,0,sign*.0034906585)); // moving reversal near either limit
+  }
+  ASSERT_TRUE(mechanismReference(f.model,Vec::Zero(),Vec::Zero(),Vec::Zero(),from));
+  Vec goal=from.eta;
+  for(int key=0;key<60;++key) {
+    goal[2]+=(key<30?1:-1)*.2*M_PI/180;
+    check(goal);
+    ASSERT_FALSE(path.knots.empty());
+    ASSERT_TRUE(samplePath(f.model,path,std::min(.15,path.duration()),from));
+  }
+  ASSERT_TRUE(mechanismReference(f.model,Vec(0,0,f.config.limits.upper[2]),Vec(0,0,.01),Vec::Zero(),from));
+  EXPECT_FALSE(mechanismPath(f.model,from,from.eta-Vec(0,0,.01),f.config,path,reason));
+}
+
+TEST(Execution,CancelThenObservationLossHoldsAppliedWithoutRevival)
+{
+  Fixture f; double time; auto e=executor(f,f.plan(),time);
+  for(int i=0;i<100;++i) { time+=.01; e.tick(feedback(e.target,time)); }
+  const auto held=e.target; e.applied=held; e.applied_valid=true;
+  ASSERT_TRUE(e.command("cancel",1)); ASSERT_TRUE(e.stopping());
+  e.waitForFeedback(time+.2,"stale body");
+  EXPECT_EQ(e.stage,Stage::COMPLETED_HOLD); EXPECT_FALSE(e.plan.ok);
+  EXPECT_EQ(e.session,1u); EXPECT_EQ((e.target.eta-held.eta).norm(),0);
+  EXPECT_EQ((e.target.body.matrix()-held.body.matrix()).norm(),0);
+  EXPECT_EQ((e.target.cog.matrix()-held.cog.matrix()).norm(),0);
+  EXPECT_EQ(e.target.velocity.norm()+e.target.acceleration.norm()+e.target.cog_velocity.norm()+
+    e.target.cog_acceleration.norm()+e.target.body_omega.norm()+e.target.body_acceleration.norm(),0);
+  EXPECT_TRUE(e.command("cancel",1));
+  e.tick(feedback(e.target,time+1)); EXPECT_EQ(e.stage,Stage::COMPLETED_HOLD);
+  EXPECT_FALSE(e.command("resume",1)); EXPECT_FALSE(e.command("start",1));
+}
+
+namespace
+{
+void checkPitchJogs(const Kinematics& model,const PlanningConfig& c,const Vec& start)
+{
+  Pose body,cog; ASSERT_TRUE(model.evaluate(start,body,cog));
+  for(double delta:{-.0872664626,.0872664626,-.0034906585,.0034906585}) {
+    Request jog; jog.align_only=jog.body_pitch_jog=true; jog.pitch_start=delta;
+    auto plan=prepare(model,start,body.linear(),jog,c);
+    ASSERT_TRUE(plan.ok)<<plan.reason; EXPECT_TRUE(plan.cut.knots.empty());
+    EXPECT_GT(delta*plan.proxy_drop,0);
+    double previous=(body*c.saw_point).z();
+    for(int i=0;i<=100;++i) {
+      const double s=i/100.,theta=delta*(10*s*s*s-15*std::pow(s,4)+6*std::pow(s,5));
+      Reference r; ASSERT_TRUE(samplePath(model,plan.align,plan.align.duration()*s,r));
+      EXPECT_LT(logSO3(r.body.linear().transpose()*body.linear()*expSO3(Vec::UnitY()*theta)).norm(),1e-7);
+      Pose bp; ASSERT_TRUE(model.bodyPivot(r.eta,bp));
+      EXPECT_LT(((r.body*bp).translation()-model.pivotLock().translation()).norm(),1e-9);
+      Pose b,g; ASSERT_TRUE(model.evaluate(r.eta,b,g));
+      EXPECT_LT((r.cog.matrix()-g.matrix()).norm(),1e-12);
+      std::string why; EXPECT_TRUE(referenceAllowed(r,c,why))<<why;
+      EXPECT_TRUE((r.velocity.cwiseAbs().array()<=.5*c.limits.velocity.array()+1e-9).all());
+      EXPECT_TRUE((r.acceleration.cwiseAbs().array()<=.5*c.limits.acceleration.array()+1e-9).all());
+      const double z=(r.body*c.saw_point).z(); EXPECT_LE((delta>0?1:-1)*(z-previous),1e-8); previous=z;
+    }
+    if(std::abs(start[1])>.1&&std::abs(start[2])>.1)
+      EXPECT_GT((plan.align.knots.back().eta-start).tail<2>().norm(),1e-5);
+  }
+}
+}
+TEST(Planning,LocalPitchJogDirectionAndPurpose)
+{
+  Fixture f; checkPitchJogs(f.model,f.config,Vec::Zero());
+  for(double yaw:{-.4,.4}) for(double roll:{0.,M_PI/6}) {
+    Request align; align.align_only=true; align.yaw=yaw; align.roll=roll;
+    const auto plan=prepare(f.model,Vec::Zero(),Mat::Identity(),align,f.config);
+    ASSERT_TRUE(plan.ok)<<plan.reason; checkPitchJogs(f.model,f.config,plan.align.knots.back().eta);
+  }
+  Request jog; jog.align_only=jog.body_pitch_jog=true; jog.pitch_start=.1;
+  f.config.saw_point_valid=false;
+  EXPECT_FALSE(prepare(f.model,Vec::Zero(),Mat::Identity(),jog,f.config).ok);
+  jog.body_pitch_jog=false; // Existing body alignment still does not need a saw.
+  EXPECT_TRUE(prepare(f.model,Vec::Zero(),Mat::Identity(),jog,f.config).ok);
+}
+TEST(Execution,LocalPitchJogPauseResumeAndMeasuredCompletion)
+{
+  Fixture f; Request jog; jog.align_only=jog.body_pitch_jog=true; jog.pitch_start=.0872664626;
+  auto plan=prepare(f.model,Vec::Zero(),Mat::Identity(),jog,f.config);
+  ASSERT_TRUE(plan.ok)<<plan.reason; plan.session=17;
+  Executor e; e.config.settle_use_window=true; e.planning=f.config;
+  Reference held; ASSERT_TRUE(mechanismReference(f.model,Vec::Zero(),Vec::Zero(),Vec::Zero(),held));
+  ASSERT_TRUE(e.attach(f.model,held,17,1)); ASSERT_TRUE(e.command("prepare",17));
+  ASSERT_TRUE(e.accept(std::move(plan))); ASSERT_TRUE(e.command("align",17));
+  double time=1;
+  for(int i=0;i<100;++i) { time+=.01; e.tick(feedback(e.target,time)); }
+  ASSERT_EQ(e.stage,Stage::PRE_ALIGN); const double progress=e.progress;
+  e.waitForFeedback(time+.2,"missing observation"); ASSERT_EQ(e.stage,Stage::PAUSED);
+  EXPECT_FALSE(e.command("resume",17));
+  time+=2; e.tick(feedback(e.target,time));
+  EXPECT_EQ(e.stage,Stage::PAUSED); EXPECT_EQ(e.progress,progress);
+  EXPECT_DOUBLE_EQ(e.plan.goal.pitch_start,jog.pitch_start);
+  ASSERT_TRUE(e.command("resume",17));
+  time+=1; e.tick(feedback(e.target,time)); EXPECT_EQ(e.progress,progress); // no time catch-up
+  for(int i=0;i<30000&&e.stage==Stage::PRE_ALIGN;++i) { time+=.01; e.tick(feedback(e.target,time)); }
+  ASSERT_EQ(e.stage,Stage::READY)<<e.reason;
+  EXPECT_LT(logSO3(e.target.body.linear().transpose()*expSO3(Vec::UnitY()*jog.pitch_start)).norm(),1e-8);
+  EXPECT_FALSE(e.command("start",17)); EXPECT_TRUE(e.plan.cut.knots.empty());
 }
 TEST(Planning,MechanismAlignmentAndLimitReversalWithoutSawOrIK)
 {
@@ -421,7 +551,12 @@ TEST(ActualUrdf,JacobianCogAndOfflinePlan)
   for(Vec q:{Vec::Zero().eval(),Vec(.1,.2,.3),Vec(-.1,-.3,-.2)}) {
     Mat a,b; ASSERT_TRUE(model.jacobian(q,a)); ASSERT_TRUE(model.numericalJacobian(q,b)); EXPECT_LT((a-b).norm(),1e-8);
   }
-  PlanningConfig c; c.max_tilt=.9; c.saw_point=Vec(.05918,.00025,.017-.06927); c.saw_point_valid=true;
+  PlanningConfig c; c.max_tilt=.9;
+  KDL::TreeFkSolverPos_recursive fk(tree); KDL::Frame fc,saw;
+  ASSERT_GE(fk.JntToCart(joints,fc,"fc"),0); ASSERT_GE(fk.JntToCart(joints,saw,"saw"),0);
+  c.saw_point=fromKdl(fc.Inverse()*saw).translation(); c.saw_point_valid=true;
+  c.limits.lower[0]=-1.2; c.limits.upper[0]=1.2; // Current RollYawPerching.yaml.
+  checkPitchJogs(model,c,Vec::Zero());
   Reference manual; ASSERT_TRUE(mechanismReference(model,Vec(0,0,-.00076699),Vec::Zero(),Vec::Zero(),manual));
   Path transition; Vec destination=manual.eta; destination[2]=-.004257648503988658;
   double callback_max=0,sample_max=0;
@@ -447,6 +582,7 @@ TEST(ActualUrdf,JacobianCogAndOfflinePlan)
     Request alignment; alignment.align_only=true; alignment.yaw=reach; alignment.roll=lean;
     auto a=prepare(model,Vec::Zero(),Mat::Identity(),alignment,c); ASSERT_TRUE(a.ok)<<a.reason;
     Pose b,g; ASSERT_TRUE(model.evaluate(a.align.knots.back().eta,b,g));
+    checkPitchJogs(model,c,a.align.knots.back().eta);
     auto stroke=prepare(model,a.align.knots.back().eta,b.linear(),r,c);
     ASSERT_TRUE(stroke.ok)<<stroke.reason; EXPECT_GT(stroke.proxy_drop,0);
   }

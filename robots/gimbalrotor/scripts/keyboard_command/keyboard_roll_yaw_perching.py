@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Small absolute mechanism targets with local receipt-time freshness; only the navigator drives actuators."""
+"""Absolute mechanism targets and finite body-local pitch jogs; only the navigator drives actuators."""
 import math
 import os
 import re
@@ -19,6 +19,7 @@ HELP = """
 ROLL / YAW PERCHING — small mechanism steps (default 0.2 degrees)
   j / l  active yaw joint - / +       a / f  active roll joint - / +
   i / k  passive hinge alpha + / - (lock-relative, not world Euler pitch)
+  o / u  one body-local pitch jog down (+) / up (-), default 0.2 degrees
   SPACE  brake along the applied path, then hold contact
   e / d  enable / disable             z / b  pitch rezero / relock
   r / t  arm / take off               g / h  land / HALT MOTORS
@@ -34,7 +35,14 @@ The body reference/measurement is published separately; no passive actuator exis
 Body alignment uses separate body_yaw_target/body_roll_target Float64 topics.
 Cut commands use prepare/start/stop with current session; wait for measured READY before start.
 During an automatic motion, a manual key requests braking and is rejected: retry after stop complete.
-Each key updates only its own accumulated nominal destination, like multilink.
+Mechanism keys update only their own accumulated nominal destination, like multilink.
+o/u are discrete coordinated jogs about applied body +Y; wait for measured completion.
+Busy jog requests are rejected, never accumulated or used to cancel the active jog.
+body_pitch_delta is a relative increment in radians; ~body_pitch_step_deg is separate
+from passive ~pitch_step_deg. Watch command_ack for scheduling, failure and completion.
+Feedback loss pauses a jog: restore feedback, then use roll_yaw_command.py resume.
+Jogs are geometric only: no admittance/tare. Prepare a cut, reach READY, tare, enable,
+then start for compliant cutting. Space cancels preparation or motion and holds.
 Other destinations survive quick axis changes. Space holds without zeroing joints.
 Targets clamp to navigator effective limits; reversal at a limit takes one step.
 Quitting preserves contact hold and restores the terminal. No saw command is sent.
@@ -67,9 +75,10 @@ class Keyboard:
         self.relock_pending = None
         self.had_feedback = False
         self.ns = rospy.get_param('~robot_namespace', '/gimbalrotor').rstrip('/')
-        self.prefix = self.ns + '/perching/roll_yaw'
+        debug_prefix = rospy.get_param('~debug_prefix', 'perching/roll_yaw').rstrip('/')
+        self.prefix = debug_prefix if debug_prefix.startswith('/') else self.ns + '/' + debug_prefix
         self.steps = {}
-        for axis in ('yaw', 'roll', 'pitch'):
+        for axis in ('yaw', 'roll', 'pitch', 'body_pitch'):
             step = float(rospy.get_param('~' + axis + '_step_deg', .2))
             if not math.isfinite(step) or not 0 < step <= 1:
                 raise ValueError('~{}_step_deg must be positive and <= 1 degree.'.format(axis))
@@ -78,6 +87,7 @@ class Keyboard:
             'roll': rospy.Publisher(self.prefix + '/roll_target', Float64, queue_size=1),
             'pitch': rospy.Publisher(self.prefix + '/alpha_target', Float64, queue_size=1),
             'yaw': rospy.Publisher(self.prefix + '/yaw_target', Float64, queue_size=1),
+            'body_pitch': rospy.Publisher(self.prefix + '/body_pitch_delta', Float64, queue_size=1),
             'stop': rospy.Publisher(self.prefix + '/cancel', UInt64, queue_size=1),
             'rezero': rospy.Publisher(self.prefix + '/pitch_rezero', Empty, queue_size=1),
             'relock': rospy.Publisher(self.ns + '/perching/relock', Empty, queue_size=1),
@@ -86,6 +96,7 @@ class Keyboard:
         for action, topic in (('arm', 'start'), ('takeoff', 'takeoff'), ('land', 'land'), ('halt', 'halt')):
             self.pubs[action] = rospy.Publisher(self.ns + '/teleop_command/' + topic, Empty, queue_size=1)
         self.subs = [
+            rospy.Subscriber(self.prefix + '/command_ack', String, self.ack_callback, queue_size=10),
             rospy.Subscriber(self.prefix + '/state', String, self.state_callback, queue_size=1),
             rospy.Subscriber(self.prefix + '/session', UInt64, self.session_callback, queue_size=1),
             rospy.Subscriber(self.prefix + '/nominal_angles', Vector3Stamped, self.angles_callback, queue_size=1),
@@ -99,6 +110,12 @@ class Keyboard:
         for bound in ('lower', 'upper'):
             self.subs.append(rospy.Subscriber(self.prefix + '/position_' + bound, Vector3Stamped,
                                              self.limits_callback, callback_args=bound, queue_size=1))
+
+    def ack_callback(self, msg):
+        session = re.search(r'\bsession=(\d+)\b', msg.data)
+        with self.lock:
+            if session and int(session[1]) == self.session and msg.data.startswith('action=body_pitch_delta '):
+                print('\nNavigator: ' + msg.data, flush=True)
 
     def state_callback(self, msg):
         stage, _, reason = msg.data.partition(': ')
@@ -300,15 +317,15 @@ class Keyboard:
             print('Measured body WORLD RPY [deg]: {:+.3f}, {:+.3f}, {:+.3f}'.format(
                 *map(math.degrees, s['body_rpy'])), flush=True)
         print('Input: ' + (self.movement_rejection(s) or 'available; navigator validates limits/contact feedback'), flush=True)
-        print('Step [deg]: yaw={:.3f}, roll={:.3f}, pitch={:.3f}{}'.format(
-            *(math.degrees(self.steps[a]) for a in ('yaw', 'roll', 'pitch')),
+        print('Step [deg]: yaw={:.3f}, roll={:.3f}, alpha={:.3f}, body-local pitch jog={:.3f}{}'.format(
+            *(math.degrees(self.steps[a]) for a in ('yaw', 'roll', 'pitch', 'body_pitch')),
             '' if self.fresh(s) else ' | feedback stale'), flush=True)
 
     def tick(self):
         s = self.snapshot()
         fresh = self.fresh(s)
-        if self.had_feedback and not fresh:
-            self.manual()  # best effort; navigator independently faults on feedback loss
+        if self.had_feedback and not fresh and s['stage'] == 'CONTACT_LOCKED':
+            self.manual()  # Manual hold only; automatic paths retain explicit pause/resume.
         self.had_feedback = fresh
         if self.enable_pending:
             old_session, started = self.enable_pending
@@ -354,6 +371,12 @@ class Keyboard:
             axis, sign = {'j': ('yaw', -1), 'l': ('yaw', 1), 'a': ('roll', -1),
                           'f': ('roll', 1), 'i': ('pitch', 1), 'k': ('pitch', -1)}[key]
             self.manual(axis, sign)
+        elif key in ('o', 'u'):
+            rejection = self.movement_rejection(self.snapshot())
+            if rejection:
+                raise RuntimeError(rejection)
+            self.publish('body_pitch', Float64(self.steps['body_pitch'] * (1 if key == 'o' else -1)))
+            print('\nBody-local pitch jog sent; awaiting navigator acknowledgement (no input backlog).', flush=True)
         elif key in ('z', 'b'):
             s = self.snapshot()
             if not self.fresh(s) or not self.has_angles(s) or s['flight'] != 5:

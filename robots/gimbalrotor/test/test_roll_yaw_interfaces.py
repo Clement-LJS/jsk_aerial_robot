@@ -1,6 +1,7 @@
 """Offline ROS message/launch checks; no node or ROS master is started."""
 import importlib.util
 import io
+import math
 from pathlib import Path
 import struct
 import unittest
@@ -79,6 +80,51 @@ class Interfaces(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             k.manual('roll', 1)
         k.pubs['roll'].publish.assert_not_called()
+
+    def test_body_pitch_keys_are_separate_relative_inputs(self):
+        k = self.make_keyboard()
+        original = list(k.commanded)
+        k.key('o')
+        self.assertAlmostEqual(k.pubs['body_pitch'].publish.call_args[0][0].data, math.radians(.2))
+        k.key('u')
+        self.assertAlmostEqual(k.pubs['body_pitch'].publish.call_args[0][0].data, -math.radians(.2))
+        self.assertEqual(k.commanded, original)
+        self.assertEqual(k.pending_axes, [False] * 3)
+        for axis in ('pitch', 'roll', 'yaw', 'stop'):
+            k.pubs[axis].publish.assert_not_called()
+        k.state_callback(keyboard.String('PRE_ALIGN: body-local pitch jog moving'))
+        k.key('o')  # Navigator rejects busy; publication never requests takeover.
+        k.pubs['stop'].publish.assert_not_called()
+        k.had_feedback = True
+        k.state_time = time.monotonic() - 2
+        with patch.object(k, 'show_status'):
+            k.tick()
+        k.pubs['stop'].publish.assert_not_called()  # Preserve automatic pause/resume.
+        k.key(' ')
+        k.pubs['stop'].publish.assert_called_once()
+
+    def test_body_pitch_parameter_namespace_and_acknowledgements(self):
+        params = {'~robot_namespace': '/other', '~debug_prefix': 'custom',
+                  '~body_pitch_step_deg': .4, '~pitch_step_deg': .1}
+        with patch.object(keyboard.rospy, 'get_param', side_effect=lambda key, default: params.get(key, default)), \
+             patch.object(keyboard.rospy, 'Publisher', return_value=MagicMock()) as publisher, \
+             patch.object(keyboard.rospy, 'Subscriber', return_value=MagicMock()):
+            k = keyboard.Keyboard()
+        self.assertEqual(k.prefix, '/other/custom')
+        self.assertAlmostEqual(k.steps['body_pitch'], math.radians(.4))
+        self.assertAlmostEqual(k.steps['pitch'], math.radians(.1))
+        self.assertIn('/other/custom/body_pitch_delta', [c.args[0] for c in publisher.call_args_list])
+        k.session = 123
+        with patch('builtins.print') as output:
+            k.ack_callback(keyboard.String('action=body_pitch_delta session=122 accepted=false phase=rejected reason=busy'))
+            output.assert_not_called()
+            k.ack_callback(keyboard.String('action=body_pitch_delta session=123 accepted=false phase=rejected reason=busy'))
+            self.assertIn('reason=busy', output.call_args.args[0])
+        for invalid in (0, -1, 1.1, float('nan'), float('inf')):
+            params['~body_pitch_step_deg'] = invalid
+            with patch.object(keyboard.rospy, 'get_param', side_effect=lambda key, default: params.get(key, default)):
+                with self.assertRaises(ValueError):
+                    keyboard.Keyboard()
 
     def load_launch(self, simulation):
         config = roslaunch.config.ROSLaunchConfig()
