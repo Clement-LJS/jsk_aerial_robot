@@ -9,6 +9,9 @@ navigation:
   roll_yaw_perching:
     # Common base lifecycle: enable/capture -> nominal target -> update/FK -> controller.
     # Manual targets always mean [passive alpha, active roll, active yaw].
+    # Finite manual body-Y jog: one endpoint IK + bounded joint interpolation.
+    # Larger commands are rejected; full cuts use request/pitch_increment below.
+    body_pitch_jog_max_delta: 0.0174532925199433 # rad (1 degree); inherited by simulation
     prepare_deadline: 120.0 # steady-clock seconds; cooperative cancellation
     # Execution allowance, not overshoot or hardware-validated tuning.
     # Limits the nominal feed lead over measured progress.
@@ -16,7 +19,7 @@ navigation:
     soft_tracking_fraction: 0.6 # 0.024 rad soft vs 0.04 rad hard, body AND joints
     resume_fraction: 0.5 # release latched hold below half the soft errors
     max_execution_step: 0.05 # seconds; nominal navigation 40 Hz
-    preparation_tolerance: 0.03 # rad measured-to-hinge consistency, NOT IK solver error
+    preparation_tolerance: 0.03 # rad live start consistency; strictly below body/joint hard tracking limits
     preparation_quiet_time: 0.3 # seconds: fresh RMS/current/mean-rate window before prepare
     progress_filter_time: 0.15
     goal_tolerance: 0.0087
@@ -107,7 +110,7 @@ navigation:
     tracking_tolerance: 0.04
     body_tracking_tolerance: 0.04
     cog_model_tolerance: 0.005
-    # Orientation trajectory endpoints wait for measured settling.
+    # Automatic orientation endpoints wait for measured settling; manual jogs report reference_complete.
     # Enable/relock capture current measurements without a zero-rate prerequisite.
     settle_rate: 0.01 # Legacy strict policy (settle_use_window=false).
     # Trial hardware bounds: time-weighted RMS/current norms and signed mean-vector norms.

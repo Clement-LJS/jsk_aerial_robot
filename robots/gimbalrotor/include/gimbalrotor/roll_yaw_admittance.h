@@ -20,7 +20,7 @@ public:
   int samples=0;
   void reset();
   void observe(double torque,double stamp,bool no_cut);
-  bool step(double dt,bool input_fresh,bool relief_only=false);
+  bool step(double dt,bool input_fresh,bool relief_only=false,double available_relief=-1);
 private:
   double sum_=0,stamp_=0,on_=0,off_=0;
 };

@@ -7,13 +7,13 @@ namespace roll_yaw
 bool pathInteractionTorque(const Kinematics& model,const Vec& q,double direction,double min_singular,
                            const Vec& force,const Vec& moment,const Vec& point,double& torque)
 {
-  Mat j; Pose body,cog,bp,gp,bm,gm;
+  Mat j; Pose body,bp,bm;
   if((direction!=1&&direction!=-1)||!force.allFinite()||!moment.allFinite()||!point.allFinite()||
-     !model.jacobian(q,j)||!model.evaluate(q,body,cog)) return false;
+     !model.jacobian(q,j)||!model.evaluateBody(q,body)) return false;
   Eigen::JacobiSVD<Mat> svd(j,Eigen::ComputeFullU|Eigen::ComputeFullV);
   if(svd.singularValues().minCoeff()<min_singular) return false;
   const Vec tangent=svd.solve(direction*Vec::UnitY()); constexpr double h=1e-5;
-  if(!model.evaluate(q+h*tangent,bp,gp)||!model.evaluate(q-h*tangent,bm,gm)) return false;
+  if(!model.evaluateBody(q+h*tangent,bp)||!model.evaluateBody(q-h*tangent,bm)) return false;
   const Vec linear=(bp.translation()-bm.translation())/(2*h);
   const Vec angular=body.linear()*(direction*Vec::UnitY());
   const Vec about_body=moment+(point-body.translation()).cross(force);

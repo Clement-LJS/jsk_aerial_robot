@@ -25,16 +25,18 @@ void PitchAdmittance::observe(double torque,double stamp,bool no_cut)
   filtered+=(1-std::exp(-dt/config.filter_time))*(torque-bias-config.reference_torque-filtered);
   if(!enabled) { contact=false; on_=off_=0; return; }
   if(!contact) {
-    off_=0; on_=std::abs(filtered)>config.on_threshold?on_+dt:0;
+    off_=0; on_=-filtered>config.on_threshold?on_+dt:0;
     if(on_>=config.on_dwell) { contact=true; on_=0; }
   } else {
-    on_=0; off_=std::abs(filtered)<config.off_threshold?off_+dt:0;
+    on_=0; off_=-filtered<config.off_threshold?off_+dt:0;
     if(off_>=config.off_dwell) { contact=false; off_=0; }
   }
 }
-bool PitchAdmittance::step(double dt,bool fresh,bool relief_only)
+bool PitchAdmittance::step(double dt,bool fresh,bool relief_only,double available_relief)
 {
   if(!config.valid()||!std::isfinite(dt)||dt<=0||dt>.15) return false;
+  const double negative_limit=available_relief<0?config.angle_limit:std::min(config.angle_limit,available_relief);
+  if(!std::isfinite(negative_limit)||negative_limit<0||offset < -negative_limit-1e-9) return false;
   if(!fresh) { contact=false; on_=off_=0; }
   const double torque=enabled&&fresh&&contact?std::clamp(filtered,-config.torque_limit,relief_only?0.0:config.torque_limit):0;
   const double proposed=relief_only&&enabled&&!fresh?0:(config.inertia*rate+dt*(torque-config.stiffness*offset))/
@@ -49,10 +51,12 @@ bool PitchAdmittance::step(double dt,bool fresh,bool relief_only)
     const double b=a*(dt+.15);
     return std::max(0.0,(-b+std::sqrt(std::max(0.0,b*b-4*a*dt*old+8*a*gap)))*.5);
   };
-  v=std::clamp(v,-safe(config.angle_limit+offset,-rate),safe((relief_only?0.0:config.angle_limit)-offset,rate));
-  acceleration=(v-rate)/dt; offset+=.5*(rate+v)*dt; rate=v;
-  return std::isfinite(offset)&&std::abs(offset)<=config.angle_limit+1e-9&&
-    std::abs(acceleration)<=config.acceleration_limit+1e-7;
+  v=std::clamp(v,-safe(negative_limit+offset,-rate),safe((relief_only?0.0:config.angle_limit)-offset,rate));
+  const double next_acceleration=(v-rate)/dt,next_offset=offset+.5*(rate+v)*dt;
+  if(!std::isfinite(next_offset)||next_offset < -negative_limit-1e-9||
+     next_offset>(relief_only?0.0:config.angle_limit)+1e-9||
+     std::abs(next_acceleration)>config.acceleration_limit+1e-7) return false;
+  acceleration=next_acceleration; offset=next_offset; rate=v; return true;
 }
 bool compliantReference(const Kinematics& m,const Reference& nominal,const Reference& previous,
   double delta,double rate,double acceleration,double dt,const PlanningConfig& config,Reference& out,std::string& reason)

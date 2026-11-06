@@ -18,24 +18,25 @@ inline bool taskPitch(const Mat& pre,const Mat& body,double previous,double& pit
 }
 struct TaskProgress
 {
-  double raw=0, filtered=0, distance=0, cross_track=0, stamp=0;
+  // distance retains the historical reporting API; current/upper_distance govern motion.
+  double raw=0, filtered=0, distance=0, current=0, upper_distance=0, cross_track=0, stamp=0;
   bool valid=false;
   void reset(double start) { *this=TaskProgress(); raw=filtered=start; }
   bool observe(const Mat& pre,const Mat& body,double time,double start,double end,double filter_time,double tolerance)
   {
-    if(time<=stamp) return valid;
+    if(time<=stamp) return true; // no new observation; preserve validity without inventing progress
     double pitch,residual;
     if(!taskPitch(pre,body,raw,pitch,residual)) { valid=false; return false; }
     const double dt=time-stamp;
     raw=pitch; cross_track=residual;
     filtered=stamp>0?filtered+(1-std::exp(-dt/filter_time))*(raw-filtered):raw;
-    stamp=time; valid=true;
-    if(residual<=tolerance) {
-      const double sign=end>=start?1:-1;
-      // Require agreement of raw and filtered samples; reverse motion does not
-      // rewind the nominal path. Completion still uses raw measured orientation.
-      distance=std::max(distance,std::clamp(std::min(sign*(raw-start),sign*(filtered-start)),0.0,std::abs(end-start)));
-    }
+    stamp=time; valid=residual<=tolerance;
+    const double sign=end>=start?1:-1;
+    // Current conservative agreement drives both forward and reverse lead.
+    // Historical best is reporting/timeout data only, never feed permission.
+    current=std::min(sign*(raw-start),sign*(filtered-start));
+    upper_distance=std::max(sign*(raw-start),sign*(filtered-start));
+    if(valid) distance=std::max(distance,std::clamp(current,0.0,std::abs(end-start)));
     return true;
   }
 };

@@ -42,6 +42,21 @@ private:
   void bodyCallback(const nav_msgs::OdometryConstPtr&);
   void bodyAlignmentCallback(const std_msgs::Float64ConstPtr&,int axis);
   void bodyPitchCallback(const std_msgs::Float64ConstPtr&);
+  bool admitPitchJog(double);
+  void finishPitchJog(const std::string& phase,const std::string& why);
+  std::string preparationRejection(const roll_yaw::Feedback&,const roll_yaw::Reference&) const;
+  void advancePreparedConnection();
+  struct PitchJog {
+    bool active=false;
+    std::uint64_t session=0;
+    roll_yaw::Pose start=roll_yaw::Pose::Identity();
+    roll_yaw::Mat endpoint=roll_yaw::Mat::Identity();
+    double delta=0,progress=0;
+    std::string phase="idle";
+  } jog_;
+  double body_pitch_jog_max_delta_=0.0174532925199433, jog_admission_wall_=0;
+  bool connection_pending_=false;
+  double connection_wait_started_=0;
   roll_yaw::Request alignment_request_;
   bool body_alignment_valid_=false;
   void mechanismTargetCallback(const std_msgs::Float64ConstPtr&,int axis);

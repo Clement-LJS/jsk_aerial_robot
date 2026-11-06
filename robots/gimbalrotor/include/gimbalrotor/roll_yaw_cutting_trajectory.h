@@ -18,7 +18,7 @@ struct Request
 {
   double yaw=0, roll=0, pitch_start=0, pitch_end=0, rate=.03, acceleration=.02;
   bool align_only=false;
-  bool body_pitch_jog=false; // align-only pitch_start is a signed increment from applied R0
+  bool body_pitch_jog=false; // legacy offline library request; navigator small jogs bypass prepare()
   bool valid() const;
 };
 struct PlanningConfig
@@ -81,7 +81,7 @@ struct Plan
   Path align,cut;
   Reference submission, applied_start;
   bool submission_valid=false;
-  Reference measured_start; bool measured_start_valid=false; // measured READY, not submission
+  Reference measured_start; bool measured_start_valid=false; // measured READY for diagnostics, not plan identity
   double proxy_drop=0; // world Z start minus end, metres; origin is not tooth contact
 };
 bool cachePathTravel(Path&);
@@ -95,6 +95,10 @@ bool referenceAllowed(const Reference&,const PlanningConfig&,std::string&);
 // Cheap manual construction; automatic connections must use the validated helper.
 bool validatedMechanismPath(const Kinematics&,const Reference&,const Vec&,const PlanningConfig&,Path&,std::string&);
 bool mechanismPath(const Kinematics&,const Reference&,const Vec&,const PlanningConfig&,Path&,std::string&);
+// Fixed-size manual jog geometry check; caller supplies already evaluated body FK.
+bool localPitchSample(const Kinematics&,const Vec&,const Pose& body,const Pose& start,
+                      const Pose& previous,double delta,double previous_pitch,
+                      const PlanningConfig&,double& pitch,std::string&);
 bool inverseOrientation(const Kinematics&,const Mat&,const Vec& seed,const PlanningConfig&,Vec&,std::string&);
 Plan prepare(const Kinematics&,const Vec& initial,const Mat& neutral,const Request&,const PlanningConfig&);
 
@@ -145,11 +149,16 @@ public:
   Plan plan;
   double progress=0, nominal_progress=0;
   // Negative scalar relief, radians increasing into the cut. No off-path IK.
-  double relief=0; bool interaction_hold=false;
+  double relief=0; bool interaction_hold=false, resisting_load=false;
+  bool relief_enabled=false, relief_limited=false;
+  double relief_angle_limit=.0383972, relief_rate_limit=.15, relief_acceleration_limit=.1;
+  double applied_relief=0, relief_available=0;
+  double phaseSpeed() const { return speed_; }
   bool stopping() const { return stopping_; }
   TaskProgress task;
   double planned_pitch=0, goal_error=0, goal_orientation_error=0;
   bool path_end_commanded=false, goal_reached=false, progress_lag=false;
+  bool reference_updated=false; // this tick accepted a coherent scalar/reference proposal
   Reference applied; bool applied_valid=false;
   SettlingStatistics settling;
   double settling_elapsed=0;
@@ -171,7 +180,7 @@ private:
   void resetSettling();
   SettlingWindow settling_window_;
   double last_time_=0, stable_since_=0, ready_since_=0, speed_=1;
-  double lag_since_=0,settling_stamp_=0;
+  double lag_since_=0,settling_stamp_=0, best_forward_=0;
   bool governor_hold_=false, feedback_waiting_=false;
   bool stopping_=false, cancel_=false, paused_align_=false, motion_clock_pending_=false;
 };

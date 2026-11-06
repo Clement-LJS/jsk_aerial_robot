@@ -41,6 +41,7 @@ public:
                  std::function<bool(const Vec&, Pose&)> body_cog, std::string& error);
   bool bodyPivot(const Vec& eta, Pose& bp) const;
   bool lock(const Pose& measured_body, const Vec& measured_eta);
+  bool evaluateBody(const Vec& eta, Pose& body) const;
   bool evaluate(const Vec& eta, Pose& body, Pose& cog) const;
   bool jacobian(const Vec& eta, Mat& j) const;
   bool numericalJacobian(const Vec& eta, Mat& j, double h=1e-6) const;

@@ -104,68 +104,51 @@ rostopic pub -1 /gimbalrotor/perching/roll_yaw/yaw_target std_msgs/Float64 'data
 rostopic pub -1 /gimbalrotor/perching/roll_yaw/alpha_target std_msgs/Float64 'data: 0.05'
 ```
 
-The separate `body_pitch_delta` (`std_msgs/Float64`) input requests **one relative
-angular increment in radians**, from the coherent held applied body orientation
-at admission: `R_des(t) = R_start * Ry(theta(t))`. Keyboard `o` sends positive
-`~body_pitch_step_deg`, and `u` sends negative; this parameter defaults to 0.2°
-and must be finite, positive and at most 1°. `~pitch_step_deg` still controls
-passive alpha (`i/k`). Positive body-local +Y rotation is downward in the normal
-operating alignment; passive-alpha sign is different because of the mounting yaw.
-All three mechanism coordinates can change together. Body and CoG translations
-follow the fixed-pivot FK; this is neither a world-Z depth nor a world-Euler pitch command.
+The separate `body_pitch_delta` (`std_msgs/Float64`) input requests one small
+relative rotation about the held applied body +Y: `R_goal = R_start * Ry(delta)`.
+Keyboard `o/u` sends positive/negative `~body_pitch_step_deg` (default 0.2°).
+`i/k` remains passive alpha. The navigator's `body_pitch_jog_max_delta` defaults
+to 1° in radians. Larger or nonfinite increments are rejected; zero is a no-op.
 
-Each jog uses the existing offline alignment worker, full geometric/derivative
-checks, tracking governor and measured settling. Both signs require meaningful
-saw-origin displacement in the requested vertical direction and a sampled path
-that does not reverse that direction. Incompatible alignment/extent is rejected
-without flipping the angle. This checks the rigid saw-origin proxy, not physical
-tooth clearance, contact force or collision. Ordinary prepared cuts remain downward-only.
-Nonfinite increments or `abs(delta) >= pi` are rejected; zero is a reported no-op.
-Existing joint, body/CoG, singularity, rate and acceleration limits also apply.
+Admission performs one bounded endpoint IK and constructs the existing two-knot
+manual mechanism interpolation. All three coordinates may change. The endpoint
+matches the requested SO(3) rotation; intermediate joint interpolation is a small
+approximation to pure body-Y rotation. Nine body-only samples check limits,
+singularity, signed pitch, off-axis error and URDF saw-origin direction. Each
+actual next candidate repeats these geometry checks and the normal articulated
+CoG/rate/acceleration checks before coherent body/CoG/joint publication.
+This is a geometric proxy, not a physical tooth-clearance or force guarantee.
 
-Jogs require fresh valid HOVER contact, idle setup, a held reference and the normal
-quiet preparation window. **They are discrete one-shot commands.** A request while
-manual motion, automatic motion, a paused path, stopping or preparation is busy
-is rejected without cancelling that motion or retaining a future jog. Wait for
-completion, or press Space and then resend. No separate prepare/start is needed.
-`command_ack` reports `action=body_pitch_delta`, the session, acceptance and reason,
-with phases `scheduled`, `moving`, `failed`, `cancelled`, `rejected`, `noop` or
-`complete`. Only `complete` means the measured endpoint settled; it includes the
-requested delta and measured joint/orientation errors. The keyboard displays these
-acknowledgements without blocking safety keys. `state` and diagnostics also report
-preparation, execution, feedback pause and completion. The next jog is relative
-to its new admitted start; no angular backlog is accumulated.
+Jogs require fresh synchronized HOVER/contact feedback, an idle held reference
+and sufficient live soft tracking allowance for the whole step. They do not use
+the offline worker, automatic quiet window or measured settling transaction.
+Busy keys are rejected without queuing or cancelling an active command. The
+keyboard suppresses repeated pitch keys while fresh status says a jog is busy.
 
-Space/stop/cancel invalidates pending planning or brakes the active path and holds
-contact. If feedback disappears while braking, cleanup finishes at the already
-applied pose with zero command derivatives, discarding the old goal and compliance
-baseline. Observation loss during jog preparation cancels the job. During execution
-it pauses with the original path retained; restore feedback and explicitly `resume`
-or stop. Disable/relock also invalidate pending results. Completion leaves a hold,
-not a prepared cutting stroke; `start` cannot repeat the jog. Subsequent body-yaw/
-roll commands reconstruct their lock-relative alignment, and subsequent cut
-preparation captures the newly measured orientation as R0.
+`command_ack` reports `moving`, `reference_complete`, `cancelled`, `failed`,
+`rejected` or `noop`. **Reference completion means the commanded endpoint was
+reached, not that the measured body accurately executed the increment.** Applied
+pitch, measured pitch and measured endpoint error are reported separately.
+The keyboard reconciles the accepted nominal vector before later joint steps.
 
-Jogs are geometric manual navigation: they never enable or tare admittance, and
-acceptance clears any old prepared-cut compliance state. For compliant cutting:
-align/jog → prepare cut → measured READY → explicit unloaded tare → baseline ready
-→ enable admittance → start. No wrench or tare is required for a geometric jog.
+Space brakes then cancels; a mechanism-key takeover requests the same stop and
+rejects that key, so retry after stop completion. Feedback loss cancels the finite
+jog at the last coherent applied reference; send a fresh jog after recovery.
+Disable/relock/fault clears ownership. A completed jog cannot be replayed with
+`start` or `resume`. Automatic cuts retain explicit measured READY/start/resume.
+Jogs neither need nor enable tare/admittance; accepting one clears an inactive
+prepared cut and its compliance ownership.
 
-These examples are for an already-configured ROS environment with the normal
-robot stack running (namespace defaults shown):
+Examples for an already-running robot stack (namespace defaults shown):
 
 ```bash
 rosrun gimbalrotor keyboard_roll_yaw_perching.py _body_pitch_step_deg:=0.2
 # e -> z -> wait ready-HOLD -> b. j/l yaw, a/f roll, i/k alpha.
-# o: downward local-pitch jog; u: upward. Wait for completion. Space stops.
-rostopic pub -1 /gimbalrotor/perching/roll_yaw/body_pitch_delta std_msgs/Float64 'data: 0.0872664626'
-# After completion: -5 degrees from the new admitted start.
-rostopic pub -1 /gimbalrotor/perching/roll_yaw/body_pitch_delta std_msgs/Float64 'data: -0.0872664626'
-rostopic echo /gimbalrotor/perching/roll_yaw/state
+# +0.2 degrees, then -0.2 degrees after reference completion:
+rostopic pub -1 /gimbalrotor/perching/roll_yaw/body_pitch_delta std_msgs/Float64 'data: 0.0034906585'
+rostopic pub -1 /gimbalrotor/perching/roll_yaw/body_pitch_delta std_msgs/Float64 'data: -0.0034906585'
 rostopic echo /gimbalrotor/perching/roll_yaw/command_ack
 rosrun gimbalrotor roll_yaw_command.py stop
-# Restore coherent feedback before resuming a paused jog:
-rosrun gimbalrotor roll_yaw_command.py resume
 ```
 
 Keyboard `~robot_namespace` defaults to `/gimbalrotor`; `~debug_prefix` defaults
@@ -199,7 +182,8 @@ received while a worker is busy are rejected, never queued for later execution.
 Both numeric body alignment and the preparation connection require valid geometry
 and fresh coherent body/joint feedback. Watch `command_ack`
 (`std_msgs/String`) for `JOB_ACCEPTED`, then `action=prepare_result` with
-`plan_ready=true` and `motion_active=true`; this still means motion is in progress.
+`plan_ready=true`; `motion_active=true` means the connection is moving, while
+`phase=waiting` retains geometry until live readiness returns.
 Wait for `READY: MOTION_COMPLETE` on `state` before sending the second axis.
 A denied/failed transaction reports `plan_ready=false`; correct its reason and
 resend that numeric target. It does not retain the failed axis value. A busy or
@@ -210,14 +194,17 @@ For a cut, first finish either keyboard/mechanism or numeric body alignment.
 `prepare` captures fresh measured body orientation R0 and active-joint feedback
 at the existing locked pivot. Small measurement inconsistencies are reconciled
 with numerical IK only within `preparation_tolerance` (0.03 rad). Numerical IK
-convergence remains much tighter. The worker compares later measurements with
-the submission measurement using `goal_tolerance` (0.0087 rad), so an unchanged
-accepted tracking offset is not treated as new movement. It also checks the same
-lock/generation and unchanged applied reference. A validated connection begins
-at the held command and reaches the reconciled cut start without a jump. Even a
-zero-distance connection waits for measured settling before READY. The actual
-measured READY posture is retained for start/invalidation. There is no default
-realignment to lock-neutral.
+convergence remains much tighter. Plan identity uses the lock/generation and
+unchanged coherent applied reference, including held derivatives. The captured
+measurement defines the cut frame; it is not compared with later noisy samples
+using final-goal tolerance. A validated connection starts at the held command
+and reaches the fixed reconciled cut start without a jump. If current quiet or
+preparation tracking readiness is missing, the computed connection waits up to
+`settle_timeout` without another worker call. Even a zero-distance connection
+waits for measured endpoint settling before READY. READY/start use current
+tracking against that fixed prepared reference and `preparation_tolerance`;
+`goal_tolerance` remains the measured endpoint criterion. Start is explicit.
+There is no default realignment to lock-neutral.
 The requested motion is **R0 * Ry(d)**: a signed body-local pitch increment,
 not world Euler pitch, passive alpha, a powered pitch joint, or linear depth.
 The fixed saw-link origin is resolved from the actual controlled body frame
@@ -263,19 +250,21 @@ Temporary missing/stale feedback, derivative bootstrap and body/joint timestamp
 skew hold the last coherent reference with all command derivatives zero. Rejected
 packets retain the accepted measurement and its original timestamp; empty joint
 velocity arrays require two advancing fresh samples. The timeout remains 0.15 s
-and synchronization tolerance 0.05 s. Manual destinations and contact identity
-survive this wait: coherent contact/tracking checks precede a fresh bounded
+and synchronization tolerance 0.05 s. Ordinary joint destinations and contact identity
+survive this wait (finite local-pitch jogs are cancelled): coherent contact/tracking checks precede a fresh bounded
 transition from the held reference, without catching up elapsed outage time.
 Stop/cancel/disable override pending movement. Moving automatic paths enter
 `PAUSED`, retain the original goal, and require explicit `resume` after fresh
 quiet/contact checks. Pending preparation is cancelled if its coherent start is
-lost; READY still requires its original measured-start checks. Rezero never
+lost. A computed plan retains its fixed applied start while transient quiet/tracking
+readiness is missing, up to `settle_timeout`, without replanning. READY/start
+compare live measurements with the fixed prepared start using `preparation_tolerance`. Rezero never
 counts the gap as settling and retains its original timeout. An observation
 hold zeros feedforwards immediately; it is not an acceleration-continuous physical
 stop. Actual geometry, hard tracking, bounds and clock faults remain latched.
 A fault requires resolving the cause and recapturing contact. A lock change, accepted manual target, or
-movement beyond `goal_tolerance` from measured READY (or loss of cut-start
-geometry consistency) invalidates the cut. Manual takeover during automatic
+a changed applied cut-start reference invalidates the cut. Measured readiness
+fluctuations within hard contact/tracking limits withhold start without discarding geometry. Manual takeover during automatic
 motion first brakes: wait for stop complete and retry the key/target. Independent
 axis destinations and immediate reversal at a limit are preserved.
 Prepared plans are never reused across sessions. Completion requires measured
@@ -332,22 +321,30 @@ the baseline and disables admittance. Prepare therefore resets the previous cut'
 compliance state. Enabling requires a READY cut, valid source configuration,
 completed baseline and a fresh synchronized projected source.
 
-This is constrained path admittance/feed relief: resistance produces a bounded
-nonpositive correction that slows or holds forward penetration. It does not
-actively retract or unload a blade. A request behind current progress causes
-bounded braking/hold, not an achieved reverse displacement. Body, articulated
-CoG and both active joints use the same effective phase and scaled derivatives.
-`offset_rad` is internal requested relief; `effective_offset_rad` and
-`effective_phase_s` describe the applied response, separately from
-`nominal_phase_s`, measured progress and the original goal. Saturation and the
-blockage governor cap demand backlog. Clearing resistance or disabling releases
-smoothly within speed/acceleration and measured-lead bounds.
+Enabled admittance uses resisting external work along the geometric forward
+stroke tangent, independent of the current velocity sign. Assisting work cannot
+increase feed. Resistance freezes nominal feed and drives a bounded negative
+stroke-angle offset. The executor brakes through zero and can retreat along the
+same prepared path, within stroke endpoints, relief angle/rate/acceleration and
+current measured tracking bounds. This reduces commanded penetration; physical
+unloading of a jammed blade or calibrated force regulation is not established.
 
-Enabled stale/invalid wrench input brakes/holds and retains the goal and
-correction; it is not zero resistance. Recovery before `progress_timeout` (30 s)
-may continue smoothly. Sustained blockage/input loss brakes to PAUSED; after
-restoring the condition use explicit `resume`. Stop/cancel and manual takeover
-clear correction after bounded stopping. Relock/reset clears it immediately.
+Body, articulated CoG and both active joints share the accepted signed phase.
+Velocity scales with phase speed; acceleration retains both squared-speed and
+phase-acceleration terms, including at a zero crossing. `offset_rad` is requested
+relief; `effective_offset_rad` reports applied phase relative to the nominal
+schedule. Current measured progress, separately from its historical maximum,
+limits forward and reverse lead. Clearing resistance or disabling admittance
+releases the correction with bounded motion, without changing the original goal.
+
+Enabled stale/invalid wrench input brakes to PAUSED and requires explicit valid
+resume. Tracking protection remains active with admittance disabled. Lack of
+meaningful net measured forward improvement times out to PAUSED; relief cycles
+cannot keep resetting that timeout. PAUSED freezes progress and scalar integration,
+while fresh wrench observation can continue. Disable while paused does not resume.
+Stop/cancel and manual takeover clear compliance after bounded stopping;
+feedback loss during cancellation completes cleanup at the held reference.
+Relock/reset/fault invalidates the associated tare and correction.
 The roll–yaw launch selects the ordinary `gimbalrotor_controller`, so the older
 perching-admittance controller cannot inject a second correction.
 
@@ -370,7 +367,8 @@ Common blocking reasons and recovery:
 | Missing/stale session, HOVER/contact/feedback invalid | Restore coherent feedback/contact; recapture after a fault; helper rereads integer session |
 | Quiet window incomplete, moving/stopping or worker busy | Wait for status/completion; resend (no queued commands) |
 | IK/limits/singularity/attitude/CoG/downward-proxy failure | Choose a reachable alignment/feed within existing bounds; prepare again; no automatic sign reversal |
-| Measurement/applied start changed during prepare, prepared start moved | Hold/settle and reprepare; resend denied numeric axis |
+| Prepared, waiting for live readiness | Hold; the same connection begins once readiness passes, or expires at `settle_timeout` |
+| Applied start/session changed | Reprepare; old geometry is invalidated |
 | Invalid admittance configuration/source, wrong frame/point, no baseline | Validate source/convention, explicitly tare at quiet no-cut READY, wait baseline, then enable |
 | Enabled wrench stale or tracking blockage | Restore source/remove blockage; explicit resume after PAUSED; goal remains pending |
 | Hard tracking/contact/clock fault, settling timeout | Resolve the reported cause, recapture contact and prepare again; do not weaken hard limits |

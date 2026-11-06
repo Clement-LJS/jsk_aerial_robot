@@ -75,13 +75,19 @@ bool Kinematics::lock(const Pose& body,const Vec& eta)
   if(!poseValid(body)||!bodyPivot(eta,bp)||std::abs(eta[0])>1e-12) return false;
   lock_=body*bp; locked_=true; return true;
 }
+bool Kinematics::evaluateBody(const Vec& eta,Pose& body) const
+{
+  Pose bp;
+  if(!locked_||!bodyPivot(eta,bp)) return false;
+  Pose hinge=Pose::Identity(); hinge.linear()=expSO3(axis_*eta[0]);
+  body=lock_*hinge*bp.inverse();
+  return poseValid(body)&&((body*bp).translation()-lock_.translation()).norm()<1e-9;
+}
 bool Kinematics::evaluate(const Vec& eta,Pose& body,Pose& cog) const
 {
-  Pose bp,bg;
-  if(!locked_||!bodyPivot(eta,bp)||!cog_(eta,bg)||!poseValid(bg)) return false;
-  Pose hinge=Pose::Identity(); hinge.linear()=expSO3(axis_*eta[0]);
-  body=lock_*hinge*bp.inverse(); cog=body*bg;
-  return poseValid(body)&&poseValid(cog)&&((body*bp).translation()-lock_.translation()).norm()<1e-9;
+  Pose bg;
+  if(!evaluateBody(eta,body)||!cog_(eta,bg)||!poseValid(bg)) return false;
+  cog=body*bg; return poseValid(cog);
 }
 bool Kinematics::jacobian(const Vec& eta,Mat& j) const
 {
@@ -97,10 +103,10 @@ bool Kinematics::jacobian(const Vec& eta,Mat& j) const
 bool Kinematics::numericalJacobian(const Vec& eta,Mat& j,double h) const
 {
   if(!std::isfinite(h)||h<=0) return false;
-  Pose b,g; if(!evaluate(eta,b,g)) return false;
+  Pose b; if(!evaluateBody(eta,b)) return false;
   for(int i=0;i<3;++i) {
     Vec ep=eta,em=eta; ep[i]+=h; em[i]-=h; Pose p,m;
-    if(!evaluate(ep,p,g)||!evaluate(em,m,g)) return false;
+    if(!evaluateBody(ep,p)||!evaluateBody(em,m)) return false;
     j.col(i)=(logSO3(b.linear().transpose()*p.linear())-logSO3(b.linear().transpose()*m.linear()))/(2*h);
   }
   return j.allFinite();
