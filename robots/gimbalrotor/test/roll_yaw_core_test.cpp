@@ -30,11 +30,11 @@ struct Fixture
     EXPECT_TRUE(model.configure(chain,"joint_roll","joint_yaw",cp,Vec::UnitY(),
       articulatedCogModel(tree,joints,inertia,{},"body",KDL::Rotation::Identity(),1,0),error))<<error;
     EXPECT_TRUE(model.lock(Pose::Identity(),Vec::Zero()));
-    config.max_tilt=.9;
+    config.max_tilt=.9; config.saw_point=Vec(.05918,.00025,.017); config.saw_point_valid=true;
   }
   Plan plan(double start=0,double end=.1745329252) const
   {
-    Request request; request.pitch_start=start; request.pitch_end=end;
+    Request request; request.pitch_end=end-start;
     auto result=prepare(model,Vec::Zero(),Mat::Identity(),request,config);
     EXPECT_TRUE(result.ok)<<result.reason; result.session=1; return result;
   }
@@ -44,15 +44,20 @@ Feedback feedback(const Reference& reference,double now)
   Feedback f; f.now=f.body_stamp=f.joint_stamp=now; f.hover=f.valid=true;
   f.body=reference.body; f.eta=reference.eta; f.joint_rate=reference.velocity; f.body_omega=reference.body_omega; return f;
 }
-Executor executor(const Fixture& fixture,Plan plan)
+Executor executor(const Fixture& fixture,Plan plan,double& time,bool start=true)
 {
-  Executor e; e.qp_planning=true; e.planning=fixture.config; e.config.settle_use_window=true;
+  Executor e; e.planning=fixture.config; e.config.settle_use_window=true;
   Reference first; EXPECT_TRUE(mechanismReference(fixture.model,Vec::Zero(),Vec::Zero(),Vec::Zero(),first));
   EXPECT_TRUE(e.attach(fixture.model,first,1,1)); EXPECT_TRUE(e.command("prepare",1)); EXPECT_TRUE(e.accept(std::move(plan)));
+  EXPECT_EQ(e.stage,Stage::CONTACT_LOCKED);
+  EXPECT_FALSE(e.command("start",1));
   EXPECT_TRUE(e.command("align",1));
-  double time=1;
+  EXPECT_EQ(e.stage,Stage::PRE_ALIGN);
+  time=1;
   for(int i=0;i<30000&&e.stage==Stage::PRE_ALIGN;++i) { time+=.01; e.tick(feedback(e.target,time)); }
-  EXPECT_EQ(e.stage,Stage::READY)<<e.reason; EXPECT_TRUE(e.command("start",1));
+  EXPECT_EQ(e.stage,Stage::READY)<<e.reason;
+  EXPECT_TRUE(e.plan.measured_start_valid);
+  if(start) EXPECT_TRUE(e.command("start",1));
   return e;
 }
 }
@@ -96,15 +101,11 @@ TEST(Kinematics,FixedPivotJacobianSignAndCopyIsolation)
   f.model.evaluate(Vec(.1,.3,.2),a,b); copy.evaluate(Vec(-.1,-.4,.1),c,d);
   f.model.evaluate(Vec(.1,.3,.2),c,d); EXPECT_LT((b.matrix()-d.matrix()).norm(),1e-12);
 }
-TEST(Execution,MeasuredGoalBothDirectionsAndNonzeroStart)
+TEST(Execution,MeasuredPositiveGoal)
 {
   Fixture f;
-  for(double direction:{-1.,1.}) {
-    auto e=executor(f,f.plan(direction*.03,direction*.1745329252));
-    double time=feedback(e.target,1).now; // attach clock is recovered from the alignment target duration below
-    time=1+e.plan.align.duration()+e.config.settle_time+.03;
-    // Alignment loop samples at .01; use the next strictly increasing time.
-    time=std::ceil(time*100)/100;
+  for(double direction:{1.}) {
+    double time; auto e=executor(f,f.plan(0,direction*.1745329252),time);
     for(int i=0;i<30000&&e.stage==Stage::EXECUTING;++i) { time+=.01; e.tick(feedback(e.target,time)); }
     EXPECT_EQ(e.stage,Stage::COMPLETED_HOLD)<<e.reason;
     EXPECT_TRUE(e.goal_reached); EXPECT_TRUE(e.path_end_commanded);
@@ -114,10 +115,10 @@ TEST(Execution,MeasuredGoalBothDirectionsAndNonzeroStart)
 }
 TEST(Execution,BlockedRobotConsumesFiniteLeadWithoutSuccess)
 {
-  Fixture f; auto e=executor(f,f.plan());
+  Fixture f; double time; auto e=executor(f,f.plan(),time);
   // Isolate progress governor from the independent physical tracking fault.
   e.config.tracking_tolerance=e.config.orientation_tolerance=.2; e.config.progress_timeout=100;
-  const Reference stationary=e.target; double time=1+e.plan.align.duration()+e.config.settle_time+.04;
+  const Reference stationary=e.target;
   double last=0;
   for(int i=0;i<2500&&e.stage==Stage::EXECUTING;++i) {
     time+=.01; e.tick(feedback(stationary,time));
@@ -129,14 +130,13 @@ TEST(Execution,BlockedRobotConsumesFiniteLeadWithoutSuccess)
 }
 TEST(Execution,NominalTenControlNineMeasuredNineIsPending)
 {
-  Fixture f; auto e=executor(f,f.plan()); const double goal=e.plan.goal.pitch_end;
+  Fixture f; double time; auto e=executor(f,f.plan(),time); const double goal=e.plan.goal.pitch_end;
   e.progress=e.plan.cut.duration(); ASSERT_TRUE(samplePath(e.model,e.plan.cut,e.progress,e.target));
   Reference effective;
   std::string reason;
   ASSERT_TRUE(compliantReference(e.model,e.target,e.target,-M_PI/180,0,0,1,e.planning,effective,reason))<<reason;
   e.applied=effective; e.applied_valid=true;
   e.config.tracking_tolerance=e.config.orientation_tolerance=.005; // nominal/effective gap is intentionally larger
-  double time=1+e.plan.align.duration()+e.config.settle_time+.04;
   for(int i=0;i<100;++i) { time+=.01; e.tick(feedback(effective,time)); }
   EXPECT_EQ(e.stage,Stage::EXECUTING)<<e.reason; EXPECT_FALSE(e.goal_reached);
   EXPECT_TRUE(e.path_end_commanded); EXPECT_EQ(e.plan.goal.pitch_end,goal);
@@ -146,57 +146,42 @@ TEST(Execution,NominalTenControlNineMeasuredNineIsPending)
   EXPECT_EQ(e.plan.goal.pitch_end,goal);
   const auto first=e.first_fault; e.fault("later feedback gap"); EXPECT_EQ(e.first_fault,first);
 }
-TEST(Planning,CancellationAndC2Continuation)
+TEST(Planning,Cancellation)
 {
   Fixture f; auto config=f.config; config.cancelled=[]{return true;}; Request request; request.pitch_end=.17;
   EXPECT_FALSE(prepare(f.model,Vec::Zero(),Mat::Identity(),request,config).ok);
-  auto plan=f.plan(); Path refreshed; std::string reason;
-  ASSERT_TRUE(continuation(f.model,plan.cut,1.0,.5,f.config,refreshed,reason))<<reason;
-  for(double t:{0.,refreshed.duration()}) {
-    Reference a,b; ASSERT_TRUE(samplePath(f.model,refreshed,t,a)); ASSERT_TRUE(samplePath(f.model,plan.cut,1+t,b));
-    EXPECT_LT((a.eta-b.eta).norm(),1e-12); EXPECT_LT((a.velocity-b.velocity).norm(),1e-9);
-    EXPECT_LT((a.acceleration-b.acceleration).norm(),1e-8);
-  }
-  EXPECT_EQ(plan.goal.pitch_end,.1745329252);
-}
-TEST(Planning,MeasuredSeedRemovesComplianceWithoutChangingGoal)
-{
-  Fixture f; Reference nominal,effective; std::string reason;
-  ASSERT_TRUE(mechanismReference(f.model,Vec(.1,.2,.3),Vec::Zero(),Vec::Zero(),nominal));
-  ASSERT_TRUE(compliantReference(f.model,nominal,nominal,-M_PI/180,0,0,1,f.config,effective,reason))<<reason;
-  Vec seed;
-  ASSERT_TRUE(nominalMeasurementSeed(f.model,feedback(effective,2),nominal,effective,f.config,seed,reason))<<reason;
-  EXPECT_LT(seed.norm(),1e-7);
-  Reference moved;
-  ASSERT_TRUE(mechanismReference(f.model,effective.eta+Vec(.001,0,0),Vec::Zero(),Vec::Zero(),moved));
-  ASSERT_TRUE(nominalMeasurementSeed(f.model,feedback(moved,2),nominal,effective,f.config,seed,reason))<<reason;
-  EXPECT_GT(seed.norm(),.0005);
 }
 TEST(Execution,CoordinatedComplianceReleaseAndMeasuredCompletion)
 {
-  Fixture f; auto e=executor(f,f.plan()); Reference applied=e.target;
+  Fixture f; double time; auto e=executor(f,f.plan(),time); Reference applied=e.target;
   PitchAdmittance a; a.baseline_ready=true; a.enabled=true;
-  double time=1+e.plan.align.duration()+e.config.settle_time+.04,end_at=0;
+  double end_at=0;
   const double original=e.plan.goal.pitch_end;
   for(int i=0;i<5000&&e.stage==Stage::EXECUTING;++i) {
-    time+=.01; e.applied=applied; e.applied_valid=true; e.tick(feedback(applied,time));
-    ASSERT_NE(e.stage,Stage::FAULT_HOLD)<<e.reason;
-    if(e.path_end_commanded&&end_at==0) end_at=time;
+    time+=.01;
+    if(a.offset<-.02&&end_at==0) end_at=time;
     if(end_at>0&&time-end_at<1) EXPECT_FALSE(e.goal_reached);
     if(end_at>0&&time-end_at>=1) a.enabled=false;
     a.observe(-.1,time,false);
-    Reference next; std::string reason;
-    ASSERT_TRUE(advanceCompliance(e.model,e.target,applied,.01,true,e.planning,a,next,reason))<<reason;
+    ASSERT_TRUE(a.step(.01,true,true));
+    e.relief=std::min(0.0,a.offset);
+    e.applied=applied; e.applied_valid=true;
+    const double progress=e.progress;
+    e.tick(feedback(applied,time));
+    ASSERT_NE(e.stage,Stage::FAULT_HOLD)<<e.reason;
+    EXPECT_GE(e.progress,progress); // Relief slows/holds the same path, never retracts.
+    const auto& next=e.target;
     Pose bp; ASSERT_TRUE(e.model.bodyPivot(next.eta,bp));
     EXPECT_LT(((next.body*bp).translation()-e.model.pivotLock().translation()).norm(),1e-9);
     EXPECT_EQ(e.plan.goal.pitch_end,original); applied=next;
   }
+  EXPECT_GT(end_at,0); EXPECT_FALSE(a.enabled);
   EXPECT_TRUE(e.goal_reached)<<e.reason;
   EXPECT_EQ(e.stage,Stage::COMPLETED_HOLD);
 }
 TEST(Execution,StaleFeedbackWrongSessionAndDuplicateSettlingSamples)
 {
-  Fixture f; auto e=executor(f,f.plan());
+  Fixture f; double time; auto e=executor(f,f.plan(),time);
   EXPECT_FALSE(e.command("pause",2));
   auto stale=feedback(e.target,20); stale.body_stamp=19;
   e.tick(stale); EXPECT_EQ(e.stage,Stage::FAULT_HOLD); EXPECT_NE(e.first_fault.find("stale"),std::string::npos);
@@ -207,15 +192,55 @@ TEST(Execution,StaleFeedbackWrongSessionAndDuplicateSettlingSamples)
   auto repeated=window.observe(1,{{0,0,0}},{{0,0}},.5,.15);
   EXPECT_FALSE(repeated.complete);
 }
-TEST(Execution,LateContinuationExpiresBeforeActivation)
+TEST(Planning,BodyAlignmentThenMeasuredLocalStroke)
 {
-  Fixture f; auto e=executor(f,f.plan()); std::string reason;
-  ASSERT_TRUE(continuation(f.model,e.plan.cut,.2,.5,e.planning,e.online_path,reason))<<reason;
-  e.online_begin=.2; e.online_stamp=0;
-  const double time=1+e.plan.align.duration()+e.config.settle_time+.05;
-  e.tick(feedback(e.target,time));
-  EXPECT_TRUE(e.online_path.knots.empty()); EXPECT_EQ(e.online_expired,1u);
-  EXPECT_EQ(e.stage,Stage::EXECUTING); EXPECT_FALSE(e.goal_reached);
+  Fixture f;
+  for(double yaw:{-.4,.4}) for(double roll:{0.,M_PI/6}) {
+    Request alignment; alignment.align_only=true; alignment.yaw=yaw; alignment.roll=roll;
+    auto aligned=prepare(f.model,Vec::Zero(),Mat::Identity(),alignment,f.config);
+    ASSERT_TRUE(aligned.ok)<<aligned.reason;
+    const Vec start=aligned.align.knots.back().eta; Pose body,cog;
+    ASSERT_TRUE(f.model.evaluate(start,body,cog));
+    EXPECT_LT(logSO3(body.linear().transpose()*expSO3(Vec::UnitZ()*yaw)*expSO3(Vec::UnitX()*roll)).norm(),1e-8);
+    Request cut; cut.pitch_end=.12;
+    const auto plan=prepare(f.model,start,body.linear(),cut,f.config);
+    ASSERT_TRUE(plan.ok)<<plan.reason; EXPECT_GT(plan.proxy_drop,0);
+    EXPECT_LT((plan.cut.knots.front().eta-start).norm(),1e-8);
+    for(int i=0;i<=100;++i) {
+      Reference r; ASSERT_TRUE(samplePath(f.model,plan.cut,plan.cut.duration()*i/100,r));
+      EXPECT_LT(r.orientation_error,1e-7);
+      Pose bp; ASSERT_TRUE(f.model.bodyPivot(r.eta,bp));
+      EXPECT_LT(((r.body*bp).translation()-f.model.pivotLock().translation()).norm(),1e-9);
+      EXPECT_LE((r.velocity.cwiseQuotient(f.config.limits.velocity)).cwiseAbs().maxCoeff(),1);
+      EXPECT_LE((r.acceleration.cwiseQuotient(f.config.limits.acceleration)).cwiseAbs().maxCoeff(),1);
+    }
+    cut.pitch_end=-.12;
+    const auto upward=prepare(f.model,start,body.linear(),cut,f.config);
+    EXPECT_FALSE(upward.ok); EXPECT_NE(upward.reason.find("upward"),std::string::npos)<<upward.reason;
+  }
+}
+TEST(Planning,MechanismAlignmentAndLimitReversalWithoutSawOrIK)
+{
+  Fixture f; f.config.saw_point_valid=false; f.config.min_singular_value=100;
+  Reference held; ASSERT_TRUE(mechanismReference(f.model,Vec::Zero(),Vec::Zero(),Vec::Zero(),held));
+  Vec goal(0,.2,.3); Path path; std::string reason;
+  ASSERT_TRUE(mechanismPath(f.model,held,goal,f.config,path,reason))<<reason;
+  Reference end; ASSERT_TRUE(samplePath(f.model,path,path.duration(),end));
+  EXPECT_LT((end.eta-goal).norm(),1e-10);
+  f.config.limits.upper[2]=.3; goal[2]-=.01;
+  ASSERT_TRUE(mechanismPath(f.model,end,goal,f.config,path,reason))<<reason;
+  Reference reversed; ASSERT_TRUE(samplePath(f.model,path,path.duration(),reversed));
+  EXPECT_LT(reversed.eta[2],end.eta[2]); EXPECT_NEAR(reversed.eta[1],goal[1],1e-12);
+  f.config.min_singular_value=.05; f.config.saw_point_valid=true;
+  Request cut; cut.pitch_end=.1;
+  EXPECT_TRUE(prepare(f.model,reversed.eta,reversed.body.linear(),cut,f.config).ok);
+}
+TEST(Execution,GeometricReadinessAndPreparedMovement)
+{
+  Fixture f; double time; auto e=executor(f,f.plan(),time,false);
+  Reference moved; ASSERT_TRUE(mechanismReference(f.model,Vec(.015,0,0),Vec::Zero(),Vec::Zero(),moved));
+  e.tick(feedback(moved,time+.01)); EXPECT_FALSE(e.plan.ok); EXPECT_EQ(e.stage,Stage::CONTACT_LOCKED);
+  EXPECT_NE(e.reason.find("prepared start moved"),std::string::npos);
 }
 TEST(Admittance,BaselineDistinctContactSignsLimitsAndSmoothRelease)
 {
@@ -325,9 +350,17 @@ TEST(ActualUrdf,JacobianCogAndOfflinePlan)
   for(Vec q:{Vec::Zero().eval(),Vec(.1,.2,.3),Vec(-.1,-.3,-.2)}) {
     Mat a,b; ASSERT_TRUE(model.jacobian(q,a)); ASSERT_TRUE(model.numericalJacobian(q,b)); EXPECT_LT((a-b).norm(),1e-8);
   }
-  PlanningConfig c; c.max_tilt=.9; Request r; r.yaw=M_PI/6; r.pitch_end=M_PI/18;
+  PlanningConfig c; c.max_tilt=.9; c.saw_point=Vec(.05918,.00025,.017-.06927); c.saw_point_valid=true;
+  Request r; r.pitch_end=M_PI/18;
   const double start=steadySeconds(); auto plan=prepare(model,Vec::Zero(),Mat::Identity(),r,c);
   ASSERT_TRUE(plan.ok)<<plan.reason; std::cout<<"Current URDF offline prepare wall seconds: "<<steadySeconds()-start<<"\n";
+  for(double reach:{-.4,.4}) for(double lean:{0.,M_PI/6}) {
+    Request alignment; alignment.align_only=true; alignment.yaw=reach; alignment.roll=lean;
+    auto a=prepare(model,Vec::Zero(),Mat::Identity(),alignment,c); ASSERT_TRUE(a.ok)<<a.reason;
+    Pose b,g; ASSERT_TRUE(model.evaluate(a.align.knots.back().eta,b,g));
+    auto stroke=prepare(model,a.align.knots.back().eta,b.linear(),r,c);
+    ASSERT_TRUE(stroke.ok)<<stroke.reason; EXPECT_GT(stroke.proxy_drop,0);
+  }
   ArticulatedDynamics dynamics(model,tree,inertia,{},"fc",roll,yaw,Vec(0,0,-9.80665));
   KDL::JntArray rates(joints.rows());
   const double began=steadySeconds(); auto t=dynamics.evaluate(Vec(.1,.2,.3),Vec(.01,.02,-.01),joints,rates,Vec::Zero(),Vec::Zero(),Vec::Zero(),.05,{});

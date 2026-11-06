@@ -1,7 +1,7 @@
 # Gazebo-only overrides, loaded after RollYawPerching.yaml and Servo.yaml.
 navigation:
   roll_yaw_perching:
-    # Optional QP endpoint settling only; enable/relock capture without a rate gate.
+    # Orientation path endpoint settling only; enable/relock capture without a rate gate.
     # Stationary simulated IMU rate noise exceeds the hardware 0.01 rad/s value.
     settle_use_window: false # Retain continuous strict settling in Gazebo.
     settle_rate: 0.08

@@ -1,4 +1,4 @@
-**Last updated:** 2026-11-03
+**Last updated:** 2026-11-06
 
 **Documented branch:** `develop/pochitab_passiveperching/main`  
 
@@ -37,7 +37,7 @@ numeric destination prompts or per-key planning transactions.
 | `i`, `k` | Passive-hinge alpha + / −, relative to the current lock |
 | `z` | Explicit body pitch rezero with measured roll/yaw joints frozen |
 | `b` | Final relock after fresh rezero ready/not-active/not-failed feedback |
-| Space | Cancel the target producer and hold the applied reference |
+| Space | Brake all mechanism/body motion together, then hold contact; discard the cut |
 | `g`, `h` | Land, HALT motors |
 | `s`, `?` | Status, help |
 | `q`, Ctrl+C | Request stop, retain contact hold, restore terminal and quit |
@@ -63,7 +63,7 @@ analytic endpoint solver or Stroke-based rezero controller.
 
 The navigator **inherits the base relock callback**, as multilink does: enabled +
 HOVER → reset old setup/targets → capture current measured joints/body → publish a
-new base lock identity. It adds no stationary-body, completed-motion, or QP-stage
+new base lock identity. It adds no stationary-body, completed-motion, or planner-stage
 gate. Invalid measurements reject capture with an explicit reason. General relock
 is available on `perching/relock` (`Empty`), including while moving. The keyboard's
 `b` is specifically the multilink final-setup operation: it requires fresh rezero
@@ -72,62 +72,232 @@ cause before retrying. These keyboard checks are distinct from general navigator
 relock policy. Successful relock refreshes every nominal baseline without zeroing
 the active servos.
 
-```yaml
-navigation:
-  roll_yaw_perching:
-    qp_planning: false
+Mechanism `Float64` topics under `/gimbalrotor/perching/roll_yaw` are
+`alpha_target`, `roll_target`, and `yaw_target`. Values are absolute radians in the
+lock-relative passive coordinate or calibrated URDF servo coordinates. They are
+**not body Euler angles**. Each changes only its own accepted destination; quick
+axis changes retain the others. Effective configured/URDF bounds are published as
+`position_lower`/`position_upper`. Nominal and applied feedback (`nominal_angles`,
+`target_angles`) use `Vector3Stamped` wire order **[roll, alpha, yaw]**. Internal
+kinematics use **[alpha, roll, yaw]**. The keyboard clamps its accumulator before
+sending, so reversing a key at a limit immediately changes the destination.
+
+Accepted destinations now use a bounded C2 mechanism interpolation from the
+applied reference. Its joint position/speed/acceleration bounds cover whole
+polynomial intervals; body/CoG limits are sampled along it. All axes share FK.
+The navigator rejects a transition that cannot satisfy those bounds. Small steps
+remain available without offline IK, a saw proxy, thrust assessment, or admittance.
+Physical movement still obeys acceleration limits when reversing a moving joint.
+
+```bash
+# Absolute servo yaw and passive alpha, radians (not body yaw/pitch):
+rostopic pub -1 /gimbalrotor/perching/roll_yaw/yaw_target std_msgs/Float64 'data: -0.3'
+rostopic pub -1 /gimbalrotor/perching/roll_yaw/alpha_target std_msgs/Float64 'data: 0.05'
 ```
 
-Missing/false selects direct FK. Roll/yaw are URDF joint angles and pitch is the
-passive hinge coordinate; positive joint motion can produce negative body rotation.
-The keyboard accumulates independent nominal destinations and sends `Float64`
-commands under `perching/roll_yaw`: `alpha_target`, `roll_target`, `yaw_target`.
-Each callback changes only its own coordinate. Quick `j`, `a`, `i` taps preserve
-all three destinations, even before feedback catches up. Navigator `nominal_angles`
-reports accepted destinations; `target_angles` reports applied references (both
-`Vector3Stamped`, x=roll, y=alpha, z=yaw). Restart/relock read nominal feedback;
-rejected/clamped commands reconcile with it. Manual output follows multilink's
-bounded nominal → final → FK flow, with zero-rate hold references and no per-key
-quintic interpolation, lookahead limit, or endpoint-tracking gate. Joint/tilt limits
-and physical contact/feedback checks still apply. Velocity/acceleration trajectory
-caps apply to the optional QP producer; rezero uses its configured feedback rate cap.
+Numeric **body alignment** uses two separate `std_msgs/Float64` topics:
+`body_yaw_target` and `body_roll_target`. Let N be the measured controlled-body
+orientation at the current enable/relock. The target is
+`N * Rz(yaw) * Rx(roll) * Ry(beta)`; all rotations are right-handed and in radians.
+These are absolute intrinsic Z-X-Y alignment values relative to N, not world ZYX
+Euler angles or servo angles. On the first body command after mechanism navigation
+or hold, the untouched values and beta are extracted from the current measured
+orientation relative to N. Subsequent accepted body commands retain the other
+accepted values, including beta. Relock establishes a new N. All three mechanism
+coordinates may change to reach the body orientation; no extra actuator publisher
+is created. A body roll of 30 degrees does not establish an exact blade-plane angle.
 
-The existing full-vector `perching/roll_yaw/target` interface remains available for
-intentional complete nominal updates, with frame ID
-`perching_lock_<base lock timestamp in nanoseconds>`. Ordinary keys use independent
-topics so untouched coordinates cannot be overwritten. Space uses
-`perching/roll_yaw/cancel` (`UInt64` base lock identity), holds the applied reference,
-and never zeros joints or returns to the old lock. Local monotonic receipt time
-provides keyboard freshness; multilink itself uses local ROS receipt times. Remote
-lock stamps are identities, not clocks to subtract. Navigator command callbacks
-validate current onboard feedback without comparing laptop command timestamps;
-onboard estimator/joint source-time checks remain intact.
+```bash
+# Send one, wait for its asynchronous result, then send the other:
+rostopic pub -1 /gimbalrotor/perching/roll_yaw/body_yaw_target std_msgs/Float64 'data: -0.4'
+rostopic echo /gimbalrotor/perching/roll_yaw/state
+rostopic pub -1 /gimbalrotor/perching/roll_yaw/body_roll_target std_msgs/Float64 'data: 0.5235987756'
+```
 
-With `qp_planning: true`, explicit `prepare`, `align`, `start`, `pause`, `resume`,
-and `cancel` topics under `perching/roll_yaw` accept the current `UInt64` session.
-`navigation/roll_yaw_perching/request` specifies the existing lock-relative **body**
-orientation request in radians. This optional planner feeds the same FK/output
-path. Manual key meanings do not change. A manual input invalidates the optional
-producer and updates the requested nominal coordinate immediately, preserving the
-other destinations. No QP state or per-key transaction gates manual navigation. Failed plans hold with a reason and never fall back to another
-motion. QP-only settings cannot invalidate ordinary FK capture/navigation.
+These commands solve an offline orientation path and automatically run its
+alignment portion. `command_ack` reports admission/rejection, not completed
+planning or motion. `state` and `diagnostics_status` report the eventual result;
+`READY` after body alignment means the measured endpoint has settled. Requests
+received while a worker is busy are rejected, never queued for later execution.
+Both numeric body alignment and the preparation connection require valid geometry
+and fresh coherent body/joint feedback. Watch `command_ack`
+(`std_msgs/String`) for `JOB_ACCEPTED`, then `action=prepare_result` with
+`plan_ready=true` and `motion_active=true`; this still means motion is in progress.
+Wait for `READY: MOTION_COMPLETE` on `state` before sending the second axis.
+A denied/failed transaction reports `plan_ready=false`; correct its reason and
+resend that numeric target. It does not retain the failed axis value. A busy or
+stopping request is rejected for retry, not queued. There is no public `align`
+command to recover a denied automatic alignment.
 
-The common hooks are base enable/disable/relock/reset and measured lock identity, the shared
-recursive state lock, `applyManualPitchDelta`, and the base update's virtual
-`applyActivePerchingTarget`. Roll–yaw retains its own passive-hinge FK, articulated
-CoG conversion and named active-joint output. The optional QP executor exists only
-for an explicit planning request; ordinary navigation owns its nominal/final
-targets independently. Rezero ports multilink's trigger, feedback update, frozen-joint
-checks, ready/failed HOLD and final-relock keyboard workflow.
-The legacy pitch topic and pitch-only `uav/nav` position command mean absolute
-lock-relative alpha; independent translations/body roll/yaw are rejected while
-perched. Normal, multilink and pitch-only implementations and key mappings are
-unchanged, including pitch-only servo set/freeze/unfreeze and unperch/release.
-No passive actuator or saw command is published.
+For a cut, first finish either keyboard/mechanism or numeric body alignment.
+`prepare` captures fresh measured body orientation R0 and active-joint feedback
+at the existing locked pivot. Small measurement inconsistencies are reconciled
+with numerical IK only within `preparation_tolerance` (0.03 rad). Numerical IK
+convergence remains much tighter. The worker compares later measurements with
+the submission measurement using `goal_tolerance` (0.0087 rad), so an unchanged
+accepted tracking offset is not treated as new movement. It also checks the same
+lock/generation and unchanged applied reference. A validated connection begins
+at the held command and reaches the reconciled cut start without a jump. Even a
+zero-distance connection waits for measured settling before READY. The actual
+measured READY posture is retained for start/invalidation. There is no default
+realignment to lock-neutral.
+The requested motion is **R0 * Ry(d)**: a signed body-local pitch increment,
+not world Euler pitch, passive alpha, a powered pitch joint, or linear depth.
+The fixed saw-link origin is resolved from the actual controlled body frame
+(`fc` for beetle); it is only a downward-motion proxy, not an identified tooth
+contact. Preparation rejects upward proxy travel and never reverses the request.
+Curved proxy motion is allowed. Both active joints can move during feed.
 
-Validation for this revision: catkin package build and offline FK/QP/keyboard
-checks. These do not establish simulated or hardware flight performance; earlier
-large-destination keyboard flight results do not validate this revised workflow.
+```bash
+rosparam set /gimbalrotor/navigation/roll_yaw_perching/request/pitch_increment 0.1745329252
+rosparam set /gimbalrotor/navigation/roll_yaw_perching/request/pitch_rate 0.03
+rosparam set /gimbalrotor/navigation/roll_yaw_perching/request/pitch_acceleration 0.02
+rosrun gimbalrotor roll_yaw_command.py prepare
+# Wait for measured READY and read command_ack / diagnostics_status.
+# Optional no-cut tare / admittance enable goes HERE (see below).
+rosrun gimbalrotor roll_yaw_command.py start
+rosrun gimbalrotor roll_yaw_command.py pause
+# Wait for PAUSED; restore source/clear blockage before explicit resume.
+rosrun gimbalrotor roll_yaw_command.py resume
+rosrun gimbalrotor roll_yaw_command.py stop
+```
+
+Automatic alignment and cutting use geometric preparation, coordinated path
+limits and measured feedback guards. They do not predict thrust allocation,
+battery-dependent capacity or current-gimbal gravity support. No additional
+voltage sample or opt-in is required for trajectory approval. READY reports
+measured geometric settling, not verified thrust feasibility.
+
+Existing firmware mechanical-angle/raw-position clamps and motor PWM limits,
+servo profiles and controller allocation remain unchanged. Downstream clipping
+does not guarantee that the requested body wrench can be produced after clipping;
+existing body/joint tracking guards still respond when execution cannot follow
+its references.
+
+`prepare`, `start`, `pause`, `resume`, `stop`, and `cancel` accept `std_msgs/UInt64`
+on the matching topics under `/gimbalrotor/perching/roll_yaw`, containing the exact
+current `/session` value. The script reads that ID as an integer and checks the
+acknowledgement. `pause` decelerates on the existing path; `resume` continues it.
+`stop`/`cancel` and Space brake on the same scalar path for body, CoG and joints,
+then discard the plan and report `stop complete`. An already-held stop completes
+immediately. They do not command zero thrust or zero joint angles. A fault requires resolving
+the cause and recapturing contact. A lock change, accepted manual target, or
+movement beyond `goal_tolerance` from measured READY (or loss of cut-start
+geometry consistency) invalidates the cut. Manual takeover during automatic
+motion first brakes: wait for stop complete and retry the key/target. Independent
+axis destinations and immediate reversal at a limit are preserved.
+Prepared plans are never reused across sessions. Completion requires measured
+endpoint orientation and mechanism tracking plus the configured settling window,
+not merely elapsed time. `task_pitch` plots nominal/measured/applied local pitch;
+the final requested goal remains separate in diagnostics.
+
+Optional admittance uses this sequence:
+**align → prepare → measured READY → explicit no-cut tare → baseline ready →
+enable → start**. Ordinary cutting with admittance disabled needs no wrench
+or tare.
+
+The configured built-in `estimated_external_wrench` is a
+`geometry_msgs/WrenchStamped`: force in world coordinates (N), moment in world
+coordinates about the CoG (N·m), timestamp from the IMU. The software convention
+is wrench ON the robot: `wrench_scale: 1`, `wrench_sign: +1`. These conventions
+are not physical calibration. This momentum observer uses model mass/inertia
+and commanded input; perch reaction, model error and actuator error contaminate
+it. `command_wrench_estimate`, pivot reaction alone and tracking error are not
+isolated saw-force inputs. The articulated observer remains diagnostic only.
+
+The built-in source defaults are `external_wrench_topic: estimated_external_wrench`,
+`wrench_frame: world`, `wrench_point: cog`, `wrench_sign: 1.0`, and
+`wrench_scale: 1.0`. No calibration acknowledgement parameter is required.
+For a custom source explicitly configure its frame (`world`/`body`), moment point
+(`cog`/`body`/`world_origin`), sign (+1 or -1), positive finite SI scale and timing.
+Restart if changing the subscribed topic; explicit tare rereads the numerical
+conventions and discards the previous baseline. Invalid configuration, frame,
+values, nonadvancing/stale timestamps or unsynchronized input cannot provide a
+usable baseline or enable admittance.
+The projection shifts the moment once and uses the signed articulated body
+translation/rotation tangent, not the old fixed pivot-Y projection.
+
+```bash
+# After prepare reaches measured READY, physically remove all cutting contact:
+rostopic pub -1 /gimbalrotor/perching/roll_yaw/admittance_tare std_msgs/Empty '{}'
+rostopic echo /gimbalrotor/perching/roll_yaw/diagnostics_status
+# Wait for baseline_ready=true (80 distinct fresh, synchronized, quiet samples).
+rostopic pub -1 /gimbalrotor/perching/admittance_enable std_msgs/Bool 'data: true'
+# Check admittance_enabled=true and its status, then:
+rosrun gimbalrotor roll_yaw_command.py start
+# Disable explicitly; correction recovers with bounded path speed/acceleration:
+rostopic pub -1 /gimbalrotor/perching/admittance_enable std_msgs/Bool 'data: false'
+```
+
+Tare works while disabled and at measured READY for a prepared cut. It asserts
+**no cutting contact**; it is never automatic during a cut. Quiet/contact failure
+or source gaps restart collection. A new
+preparation, lock, stopped/cancelled motion or changed tare convention clears
+the baseline and disables admittance. Prepare therefore resets the previous cut's
+compliance state. Enabling requires a READY cut, valid source configuration,
+completed baseline and a fresh synchronized projected source.
+
+This is constrained path admittance/feed relief: resistance produces a bounded
+nonpositive correction that slows or holds forward penetration. It does not
+actively retract or unload a blade. A request behind current progress causes
+bounded braking/hold, not an achieved reverse displacement. Body, articulated
+CoG and both active joints use the same effective phase and scaled derivatives.
+`offset_rad` is internal requested relief; `effective_offset_rad` and
+`effective_phase_s` describe the applied response, separately from
+`nominal_phase_s`, measured progress and the original goal. Saturation and the
+blockage governor cap demand backlog. Clearing resistance or disabling releases
+smoothly within speed/acceleration and measured-lead bounds.
+
+Enabled stale/invalid wrench input brakes/holds and retains the goal and
+correction; it is not zero resistance. Recovery before `progress_timeout` (30 s)
+may continue smoothly. Sustained blockage/input loss brakes to PAUSED; after
+restoring the condition use explicit `resume`. Stop/cancel and manual takeover
+clear correction after bounded stopping. Relock/reset clears it immediately.
+The roll–yaw launch selects the ordinary `gimbalrotor_controller`, so the older
+perching-admittance controller cannot inject a second correction.
+
+Settings are read at these points (all under
+`/gimbalrotor/navigation/roll_yaw_perching` unless stated otherwise):
+
+| When | Settings/data |
+| --- | --- |
+| Initialization | Geometry, topics/frames, mechanism/attitude/feedback/governor/settling limits, planning bounds/deadline, rezero settings, admittance dynamics/contact gains and sample count |
+| Enable/relock | Immutable URDF/inertia/extra-module snapshot, mechanism-limit intersection and captured contact; payload/geometry changes require recapture |
+| Prepare / numeric body target | `request/*` for cuts is read outside the navigation mutex; model, measured/applied start and generation are captured together under the state lock |
+| Explicit tare | `wrench_frame`, `wrench_point`, `wrench_sign`, `wrench_scale`; discards old baseline and requires new samples |
+| Start / resume | Fresh body/joint/quiet/start checks and enabled interaction freshness; no sampled path re-solve |
+| Every active update | Feedback/contact/tracking guards, source age/synchronization, applied progress; held PLANNING/READY time is not integrated as motion |
+
+Common blocking reasons and recovery:
+
+| Reported reason | Ordinary recovery |
+| --- | --- |
+| Missing/stale session, HOVER/contact/feedback invalid | Restore coherent feedback/contact; recapture after a fault; helper rereads integer session |
+| Quiet window incomplete, moving/stopping or worker busy | Wait for status/completion; resend (no queued commands) |
+| IK/limits/singularity/attitude/CoG/downward-proxy failure | Choose a reachable alignment/feed within existing bounds; prepare again; no automatic sign reversal |
+| Measurement/applied start changed during prepare, prepared start moved | Hold/settle and reprepare; resend denied numeric axis |
+| Invalid admittance configuration/source, wrong frame/point, no baseline | Validate source/convention, explicitly tare at quiet no-cut READY, wait baseline, then enable |
+| Enabled wrench stale or tracking blockage | Restore source/remove blockage; explicit resume after PAUSED; goal remains pending |
+| Hard tracking/contact/clock fault, settling timeout | Resolve the reported cause, recapture contact and prepare again; do not weaken hard limits |
+
+The default lead/soft/hard hierarchy remains 0.018 / 0.024 / 0.04 rad. At the
+0.05 s maximum moving step, the reserved half-rates give 0.00375 rad maximum
+single-joint travel and 0.00875 rad summed body-rotation bound, below the
+0.016 rad soft-to-hard margin. The governor additionally reserves discrete
+braking distance. `manual_callback_wall_s` and `navigation_wall_s` report observed
+costs; source checks and standalone timing do not establish real-time guarantees.
+
+The legacy full-vector `target` interface still takes wire order [roll, alpha,
+yaw] and `header.frame_id=perching_lock_<session>`. Legacy `manual_pitch_delta`
+and pitch-only `uav/nav` mean lock-relative alpha. All inputs require enabled
+HOVER/contact and fresh coherent onboard pose/joint feedback. Keyboard freshness
+uses local receipt time; remote timestamps identify locks, not clock offsets.
+Only active roll/yaw are sent to `joints_ctrl`; body and articulated CoG references
+flow through the existing flight controller. No saw command is sent.
+
+No flight/cutting outcome or hardware calibration follows from the offline
+checks. Commission the pivot, model assumptions, actuator tracking and
+optional observer source before physical operation.
 
 ### `keyboard_changerpy.py`
 

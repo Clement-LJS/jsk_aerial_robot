@@ -16,6 +16,7 @@ void PitchAdmittance::observe(double torque,double stamp,bool no_cut)
 {
   if(!std::isfinite(torque)||!std::isfinite(stamp)||stamp<=stamp_) return;
   const double dt=stamp_>0?stamp-stamp_:0; stamp_=stamp;
+  if(!baseline_ready&&dt>.15) { sum_=0; samples=0; }
   if(!baseline_ready&&!enabled&&no_cut) {
     sum_+=torque; ++samples;
     if(samples>=config.baseline_samples) { bias=sum_/samples; baseline_ready=true; }
@@ -31,22 +32,24 @@ void PitchAdmittance::observe(double torque,double stamp,bool no_cut)
     if(off_>=config.off_dwell) { contact=false; off_=0; }
   }
 }
-bool PitchAdmittance::step(double dt,bool fresh)
+bool PitchAdmittance::step(double dt,bool fresh,bool relief_only)
 {
   if(!config.valid()||!std::isfinite(dt)||dt<=0||dt>.15) return false;
   if(!fresh) { contact=false; on_=off_=0; }
-  const double torque=enabled&&fresh&&contact?std::clamp(filtered,-config.torque_limit,config.torque_limit):0;
-  const double proposed=(config.inertia*rate+dt*(torque-config.stiffness*offset))/
+  const double torque=enabled&&fresh&&contact?std::clamp(filtered,-config.torque_limit,relief_only?0.0:config.torque_limit):0;
+  const double proposed=relief_only&&enabled&&!fresh?0:(config.inertia*rate+dt*(torque-config.stiffness*offset))/
     (config.inertia+dt*config.damping+dt*dt*config.stiffness);
   double v=std::clamp(proposed,rate-config.acceleration_limit*dt,rate+config.acceleration_limit*dt);
   v=std::clamp(v,-config.rate_limit,config.rate_limit);
   // Braking distance prevents hitting the angle clamp at nonzero velocity.
   const double a=config.acceleration_limit;
   auto safe=[&](double gap,double old) {
-    const double ad=a*dt;
-    return std::max(0.0,(-ad+std::sqrt(std::max(0.0,ad*ad-4*ad*old+8*a*gap)))*.5);
+    // Include the final partial-speed discrete step, which a continuous
+    // v^2/(2a) envelope omits. Future scalar steps are bounded by 0.15 s.
+    const double b=a*(dt+.15);
+    return std::max(0.0,(-b+std::sqrt(std::max(0.0,b*b-4*a*dt*old+8*a*gap)))*.5);
   };
-  v=std::clamp(v,-safe(config.angle_limit+offset,-rate),safe(config.angle_limit-offset,rate));
+  v=std::clamp(v,-safe(config.angle_limit+offset,-rate),safe((relief_only?0.0:config.angle_limit)-offset,rate));
   acceleration=(v-rate)/dt; offset+=.5*(rate+v)*dt; rate=v;
   return std::isfinite(offset)&&std::abs(offset)<=config.angle_limit+1e-9&&
     std::abs(acceleration)<=config.acceleration_limit+1e-7;
@@ -60,7 +63,7 @@ bool compliantReference(const Kinematics& m,const Reference& nominal,const Refer
   for(int i=0;i<8;++i) {
     if(!m.evaluate(q,body,cog)||!m.jacobian(q,j)) { reason="compliant FK/Jacobian unavailable"; return false; }
     Eigen::JacobiSVD<Mat> svd(j,Eigen::ComputeFullU|Eigen::ComputeFullV);
-    if(svd.singularValues().minCoeff()<config.qp.min_singular_value) { reason="compliant singularity"; return false; }
+    if(svd.singularValues().minCoeff()<config.min_singular_value) { reason="compliant singularity"; return false; }
     const Vec error=logSO3(body.linear().transpose()*desired);
     if(error.norm()<1e-9) break;
     Vec step=svd.solve(error); if(step.norm()>.1) step*=.1/step.norm(); q+=step;

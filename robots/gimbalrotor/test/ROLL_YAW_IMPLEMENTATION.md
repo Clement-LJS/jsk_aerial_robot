@@ -1,329 +1,191 @@
-# Local roll–yaw QP, measured progress and pitch admittance
+# Coordinated local-pitch cutting: local implementation audit
 
-Implemented against the clean local checkout on `develop/pochitab_passiveperching/main`,
-HEAD `b39dfeed04c47d82d11aa4645cf6bd9314418337`. All source changes are inside
-`robots/gimbalrotor`. No branch/worktree changes, commits, pushes, remote operations,
-dependency installations, deployment, ROS node launches or hardware operation were performed.
+Current workflow correction: predictive thrust assessment/readiness and its opt-in
+were removed. Accepted geometry plans automatically connect and wait for measured
+READY. Optional external-wrench admittance uses prepare → READY → no-cut tare →
+baseline ready → enable → start, with actual source validation and no calibration
+acknowledgement. The checks/files below record the earlier implementation audit,
+not a validation run of this correction.
 
-The accompanying task document prohibited tests/builds, while the user's direct
-request explicitly required them. The direct request was followed: the existing
-`/opt/ros/one/setup.bash` and workspace `devel/setup.bash` were sourced in child
-shells, and isolated CMake build/devel/install destinations were placed under
-`/tmp`. The existing workspace build/devel directories were only read. No
-`ros_env` helper, catkin workspace configuration or flight/simulation launch was run.
+Date: 2026-11-06. Starting branch: `develop/pochitab_passiveperching/main`.
+Starting HEAD: `729c8fc1386ec1d116c189cce49bafbaef829bff`, exactly the supplied
+reference; the checkout was clean. No branch change, commit, push, remote access,
+ROS environment setup, catkin build, deployment, or running robot was used.
 
-**What was verified in the original sources.** The checked-out revision matches
-the document. The original executor completed on elapsed path time plus rate
-settling; it did not test the original measured pitch endpoint. Its CoG callback
-constructed a KDL tree solver per evaluation. The original wrapper launch lacked
-the advertised `qp_planning` and `online_planning` arguments. These gaps are addressed.
-The existing hardware settling values, simulation overrides, geometry, PID gains,
-FC allocation, feedback tolerances and URDF remain intact. The settling history now
-has a 4096-sample capacity bound; exceeding it restarts qualification rather than
-certifying an incomplete window.
+## Checked conventions and corrections
 
-The frame audit used the local navigation, cutting trajectory, QP, kinematics,
-ordinary controller, legacy perching admittance controller, base momentum observer,
-admittance core, servo bridge, model inertia aggregation, launch files and beetle
-URDF/configuration. No code was imported from `motion_planning`; that reference
-was not present in the local ROS tree and was not fetched.
+The body-to-contact chain is fixed mounting → yaw → roll → hand → configured
+pivot. FK reverses it from the fixed perch, inserting the passive hinge before
+active roll/yaw. `Kinematics::evaluate` computes
+`T_WB = T_WP_lock * Rot(axis, alpha) * inverse(T_BP(roll,yaw))`, then
+`T_WG = T_WB * T_BG(alpha,roll,yaw)` using the copied articulated inertia model.
+The pivot position is invariant even when both active joints move. The analytic
+body angular Jacobian has negative active-joint axes because this chain is
+inverted. Alpha is lock-relative passive rotation, not body Euler pitch.
+The nominal mounting yaw is 3.142, not exactly pi; the existing model retains it.
+Near neutral, positive alpha decreases body pitch; positive local-body-Y feed
+moves the forward saw-origin proxy downward. This sign is calculated along each
+requested path rather than assumed globally.
 
-**Goal, progress and reference ownership.** `Plan::goal` and `Plan::neutral` capture
-the request and lock convention. Preparing a new plan keeps the topic arm state,
-baseline and compliance separate and starts from the held *nominal* reference.
-Preparation is rejected while an existing trajectory is active. It does not use
-the compliant endpoint as the new request. Alignment, measured settling, READY
-and explicit start are retained. Explicit cancel abandons the producer and holds
-the applied pose; it never reports physical success.
+The controlled beetle body is `fc`, whose origin is 0.06927 m above `base_link`
+with the same orientation. The saw origin in `base_link` is
+[0.05918, 0.00025, 0.01700] m. Its `fc` coordinate is therefore
+[0.05918, 0.00025, -0.05227] m in this URDF. The implementation resolves the fixed
+transform through the actual model, not hard-coded offsets. This is not a blade
+center or tooth contact calibration. Body roll is not a certified blade-plane
+inclination. No straight vertical cut or world-fixed blade plane is required.
 
-For the body measurement, `R_pre = N Rz(yaw) Rx(roll)`. The Y twist of
-`R_preᵀ R_WB_measured` is unwrapped continuously; a degenerate twist is rejected.
-Raw pitch, filtered pitch and full swing/SO(3) residual are distinct. The maximum
-of the conservative directed raw/filtered progress is retained, so noise or
-temporary reversal cannot rewind execution. Goal checks always use raw measured
-orientation, not this monotonic history. Nonzero starts and both directions are
-covered by the tests.
+`getCogDesireOrientation()` is the model's controlled CoG convention. The copied
+articulated mass distribution sets CoG position; its orientation is not replaced
+by principal inertia axes. Servo.yaml already supplies yaw `angle_sgn=-1`, roll
+angle scale 0.001534, and the shared offset. The navigator uses URDF joint radians
+and does not apply those hardware conversions a second time. URDF roll/yaw travel
+is ±pi/2 and velocity 0.1 rad/s; configured bounds are intersected with them.
+Configured acceleration caps and the passive range are assumptions to validate
+on hardware, not evidence of motor capabilities.
 
-The offline path is sampled using measured progress plus a finite lead. Phase
-speed and acceleration are bounded, including braking distance before consuming
-the lead. The lead is `0.06 rad` (3.438 degrees), the maximum compliance offset is
-`0.0383972 rad` (2.2 degrees), and the explicit normal tracking allowance is
-`0.01 rad` (0.573 degrees). Configuration must satisfy
-`lead > maximum_offset + tracking_allowance`. The separate goal tolerance is
-`0.0087 rad` (0.498 degrees). These are implementation starting values, not approved
-hardware tuning. Existing tracking faults can stop a blocked robot before it uses
-all the lead; those guards were not widened. Lag has a 30-second timeout.
+## Implemented flow
 
-`path_end_commanded` means the nominal path was exhausted. `GOAL_REACHED` requires
-fresh measured pitch and full orientation within goal tolerance, endpoint joint
-agreement, existing pivot/hinge checks, and measured settling. The hardware
-bounded-window thresholds remain body RMS/current `0.05 rad/s`, joint RMS/current
-`0.03 rad/s`, mean drift `0.02 rad/s`, duration `0.5 s`, timeout `10 s`. Duplicate
-measurement stamps do not add settling time. Nominal +10 degrees, control +9 and
-measured +9 remains goal-pending and eventually times out under persistent load.
-No automatic nominal overshoot compensates for admittance.
+1. Enable/relock captures the measured pivot/session through the existing base
+   lifecycle. HOVER, coherent timestamped pose/joints, bounded mechanism state,
+   pivot/hinge residuals, and articulated-CoG consistency protect the outputs.
+2. Keyboard and mechanism-topic targets retain independent nominal destinations.
+   A non-IK C2 mechanism transition respects joint bounds and sampled body/CoG
+   limits. Its applied configuration produces all body/CoG derivatives and the
+   active-joint commands. Rezero, final relock, hold, and key signs are retained.
+3. Separate numeric body topics request `N Rz(yaw) Rx(roll) Ry(beta)`, with N the
+   current lock's measured body orientation. Values are absolute intrinsic Z-X-Y
+   coordinates relative to N. Untouched accepted body coordinates persist;
+   beta and untouched values initially come from the measured posture. An
+   offline damped-Jacobian IK path commands coordinated body/servo alignment.
+4. Cut preparation captures fresh measured R0 and active joints. It reconciles
+   small orientation/joint inconsistency only within configured tolerances and
+   rejects larger inconsistency. A noisy aerial robot need not have zero rates:
+   existing body/joint rate thresholds and endpoint settling settings are used.
+   Preparation never changes to default yaw/roll. The cut is `R0 Ry(d)`.
+5. Successive IK samples use the previous solution, nearest-seed angle wrapping,
+   convergence and singularity checks, joint bounds and branch-step limits.
+   Quintic interpolation uses Jacobian-derived velocity/acceleration. Bernstein
+   control-point bounds cover the entire joint polynomial intervals. Body tilt,
+   CoG/FC attitude, CoG derivatives, orientation/rate error and saw-origin world-Z
+   direction are sampled at dt/4 or finer. These nonlinear sampled checks are
+   not a mathematical continuum certificate. Half of velocity/acceleration
+   capacity is reserved for execution time scaling. Failed requests report
+   sample/interval and constraint details; scaling slows the request without
+   changing its geometric goal.
+6. The existing executor owns the offline path; no new state machine was added.
+   All reference derivatives use one progress variable. Nominal lead is bounded
+   by measured progress; sustained lag pauses advancement and eventually faults.
+   Completion requires measured local pitch, full orientation, mechanism tracking
+   and settling, not elapsed time. Start/end rates are zero. Prepared movement,
+   changed session and accepted manual ownership invalidate incompatible plans.
+7. One navigator publishes only active roll/yaw positions to `joints_ctrl`.
+   `commandDesiredBaselinkPose` sends articulated CoG position, velocity,
+   acceleration, attitude and angular derivatives and synchronizes body-to-CoG
+   orientation for the existing fully actuated controller. It continues this
+   coherent output for every valid roll-yaw lock, even if the generic base
+   optional-hold switch is off. Stop/fault holds the applied contact-consistent
+   reference; it never requests zero rotor thrust or zero joint angles.
 
-The navigator remains the sole reference owner. It sends one coherent body,
-articulated CoG and active roll/yaw reference; passive alpha is never a servo
-command. Tracking faults compare measurements with this applied reference.
-Progress/completion compare measurements with the original request. Hard faults
-retain their first cause and hold the last valid applied pose.
+## Requirement status and physical limits
 
-**Offline/online work.** Offline preparation still validates the complete alignment
-and cut at the existing planning step and speed, with a 120-second cooperative
-wall-clock deadline. FK solvers and joint buffers are independently owned copies.
-The optional online mode defaults to false. It schedules at most every 0.05 seconds
-when a new segment is needed, using a 0.5-second horizon, 0.2-second phase lookahead
-and 0.1-second result deadline. These values are scheduling limits, not measured
-onboard performance or force bandwidth. An active splice is finished before it
-is replaced, so refresh acceptance is generally slower than the scheduling ceiling.
+| Requirement | Result |
+| --- | --- |
+| Local branch only, no commits/remotes/build setup | Satisfied; direct standalone checks only |
+| Remove roll-yaw QP and online replanning | Removed solver files, source entry, configuration, launch arguments and continuation paths; no selectable fallback |
+| Preserve keyboard and numeric mechanism targets | Implemented; independent axes, bounded accumulator/reversal, session/freshness checks, rezero/relock/hold retained |
+| Numeric coordinated body yaw/roll alignment | Implemented on separate Float64 topics; intrinsic frame semantics and asynchronous acknowledgement documented |
+| Fresh current alignment as cut start | Implemented; measured R0, active feedback, lock/session identity and movement invalidation |
+| Local-body pitch, coordinated active joints, fixed pivot | Implemented and checked on synthetic and actual URDF chains |
+| Downward feed sign | Checked for the rigid saw-origin proxy; physical tooth contact remains unverified |
+| Smooth profile and joint/controller bounds | Implemented; whole-interval joint bounds and sampled nonlinear limits; physical tracking unverified |
+| Thrust/vectoring feasibility | Not evaluated; no predictive planner gate |
+| Optional cutting admittance | Initially disabled; READY cut, valid fresh external wrench and explicit no-cut baseline required to enable |
+| Runtime feedback and completion | Existing gates plus manual/trajectory tracking and measured endpoint checks; no measured rotor saturation telemetry available here |
+| Collision, structure, current/torque, dynamics, cutting loads | Not checked; no simulation/flight/hardware validation |
 
-Online work removes the actually applied correction from the measured orientation
-to obtain a nominal measurement seed:
-`R_seed = R_measured R_appliedᵀ R_nominal`. Perfect tracking of the compliant
-reference therefore gives zero nominal seed error. Differential IK refreshes the
-interior toward the same original path/goal. A smooth correction preserves exact
-position, velocity and acceleration at both splice boundaries; the original
-offline path and its metadata are not overwritten. Bernstein bounds check joint
-position/rate/acceleration throughout each polynomial interval; dense samples check
-orientation, singularity, body/FC attitude and articulated CoG limits. Existing
-derivative reserves allow bounded phase stopping. Up to eight bounded correction
-weights are tried; infeasible results are rejected without weakening limits.
+Firmware limits and controller allocation remain unchanged. Kinematic preparation
+does not certify thrust, load, stability or actuator capacity. See the existing
+README for the downstream clipping limitation.
 
-One persistent worker handles online planning, one handles offline preparation,
-and one handles articulated dynamics. Each has one job/result slot, worker-owned
-model state, cooperative cancellation and nonblocking callback polling/submission.
-Workers never access the live robot model or navigator. Joins occur only at object
-shutdown. Session/generation, elapsed time and fresh effective tracking are checked
-when accepting an online result. Executor feedback guards run again at activation;
-an unactivated result older than 0.5 seconds is discarded. Rejected/late updates
-leave the validated offline nominal path available. This remains kinematic IK,
-without force optimization or obstacle detection.
+The configured external-wrench input uses signed coordinated path work with
+moment shifting. The command-derived wrench and articulated momentum observer
+remain diagnostic only. Tare removes a no-cut baseline; it does not establish
+physical cutting-force accuracy. Enabled source loss causes bounded stopping;
+all body/CoG/joint references retain the same progress and original goal.
 
-**Observer equations and sources.** For each copied inertia entry, its tensor is
-shifted to its own CoG, transformed by link FK, and included once. The live model's
-inertia map already aggregates fixed children; summing the tree inertias again
-would double-count them. Registered modules are added once. The saw's rigid inertia
-is included when present in that model.
+## Interfaces and usage
 
-With generalized coordinates `eta = [alpha, roll, yaw]`, world link CoG positions
-`x_i`, linear velocities `v_i`, angular velocities `w_i` and world inertias `I_i`:
+See [scripts/README.md](../scripts/README.md) for exact topics and runnable examples.
+Keyboard: `e` enable, `j/l` yaw −/+, `a/f` roll −/+, `i/k` passive alpha +/−,
+`z` rezero, `b` final relock, Space hold, `d` disable. Mechanism topics are
+`alpha_target`, `roll_target`, `yaw_target`; body topics are `body_yaw_target`,
+`body_roll_target`, all Float64 radians under `/gimbalrotor/perching/roll_yaw`.
+Cut parameters are `request/pitch_increment`, `request/pitch_rate`, and
+`request/pitch_acceleration` under `/gimbalrotor/navigation/roll_yaw_perching`.
 
-```text
-g_world = -robot_model.getGravity3d()       # (0,0,-9.80665), m/s²
-T       = 1/2 sum(m_i v_i·v_i + w_i·I_i w_i)
-U       = -sum(m_i g_world·x_i)
-p_eta   = sum(Jv_iᵀ m_i v_i + Jw_iᵀ I_i w_i)
-M_eta   = sum(m_i Jv_iᵀ Jv_i + Jw_iᵀ I_i Jw_i)
-b_eta   = Q_known + partial(T)/partial(eta) - partial(U)/partial(eta)
-n_theta = solve(J_omega_body, [0,1,0])
-```
+The UInt64 session-tagged actions are `prepare`, `start`, `pause`, `resume`,
+`stop`, `cancel`. `roll_yaw_command.py` obtains the exact current session and
+checks admission on `command_ack`. Wait for asynchronous `state`/diagnostics:
+`READY` means geometric preparation or completed measured body alignment, not
+thrust feasibility. A busy worker rejects new requests without queueing them.
+No explicit `align` action remains in the public cut workflow.
 
-Central differences evaluate FK derivatives (`1e-5`) and energy gradients (`1e-4`).
-This includes configuration-dependent inertia and Coriolis/centrifugal terms through
-the energy/momentum formulation. Moving other joints contribute to link velocity
-and generalized momentum when fresh velocity feedback, or two position samples,
-are available. Missing other-joint rates are explicitly frozen/modelled and counted
-in `load_source`; they are not labelled measured zeros. The existing CoG snapshot
-drift guard remains in force.
+## Checks performed
 
-Body pose/rate come from synchronized, fresh baselink odometry. Active positions,
-rates and efforts are selected by name from `joint_states`; passive rate is projected
-from body angular velocity after subtracting active-joint contributions. Joint/body
-and command/body synchronization and the existing 0.15-second freshness limit apply.
-Missing/nonfinite active effort prevents a computable observer update, but missing
-calibration does not add an enable gate.
+- Built only the standalone existing core test executable directly with g++,
+  Eigen, KDL, installed ROS libraries and gtest. No catkin/package build.
+- Expanded the current beetle Xacro locally and supplied it to the test binary.
+  All **17 core tests** passed, including yaw ±0.4 rad at body roll 0/pi/6,
+  orientation IK/FK and pivot consistency, downward proxy sign and upward
+  rejection, mechanism alignment followed by a cut, interpolation derivatives,
+  manual limit reversal, the former thrust-start gate (since removed), moved prepared
+  start, stale/session checks, blockage and measured completion. Legacy observer
+  and scalar-admittance utility checks pass without implying runtime availability.
+- All **6 interface tests** passed: UInt64 preservation/rejection, hardware and
+  simulation launch resolution, actual keyboard independent-axis/reversal logic,
+  stale feedback/new-session rejection. ROS publication was mocked for keyboard
+  checks; no node, ROS master or actuator was started.
+- Navigator C++ syntax-only check against already installed workspace headers.
+  This does not establish a successful full package link or ABI compatibility.
+- Source/call-site and build-reference audit, Python/launch parsing and
+  `git diff --check`. Temporary executable/URDF artifacts were removed.
 
-The ordinary controller publishes a *command-derived* resultant about the current
-CoG, expressed in world axes:
+No physical pivot/saw calibration, full ROS integration, simulator run, flight
+or real cutting was performed. Sampling resolution and configured controller
+limits are software checks, not physical validation.
 
-```text
-F_world       = R_WG m a_command_G
-tau_G_world   = R_WG (I_G angular_acc_command_G + omega_G × I_G omega_G)
-Q_known       = Jv_body_material_point_at_Gᵀ F_world
-                + (R_WB J_omega_body)ᵀ tau_G_world
-                + [0, effort_roll, effort_yaw]
-```
+## Files changed and retained scope
 
-The translation is the total existing PID result; no second gravity force is added.
-The positive gravity vector stored in RobotModel is negated for gravitational
-potential. The gyro term is added once when converting FC-mode acceleration to
-the estimated physical input moment. The existing published net external-wrench
-observer is untouched, including its world force/world moment-about-CoG semantics.
+Modified:
 
-All rotor inputs are on the body branch in this mechanism. Their resultant can be
-projected at an instantaneous body material point coinciding with G, with the moment
-about G. Its Jacobian is **not** the derivative of the articulated assembly CoG:
-that substitution would introduce incorrect active-joint virtual work. Individual
-rotor thrust/reaction measurements are absent. The resultant above is an estimate
-of realized actuation, and FC-side tracking/allocation errors remain disturbances.
-Active servo efforts are added separately; they cannot be recovered from a six-axis
-CoG wrench. The bridge already applies `torque_scale * angle_sgn`. In the current
-Servo.yaml the group scale is 0.01 and yaw sign is -1; neither is applied again here.
-Whether this calibrated load really represents output-joint Nm, including gearing
-and motor losses, still needs a bench check.
+- `CMakeLists.txt`
+- `config/beetle/RollYawPerching.yaml`
+- `config/beetle/RollYawPerching_sim.yaml`
+- `include/gimbalrotor/gimbalrotor_roll_yaw_perching_navigation.h`
+- `include/gimbalrotor/roll_yaw_cutting_trajectory.h`
+- `launch/bringup.launch`
+- `launch/roll_yaw_perching.launch`
+- `scripts/README.md`
+- `scripts/keyboard_command/keyboard_roll_yaw_perching.py`
+- `scripts/keyboard_command/roll_yaw_command.py`
+- `src/gimbalrotor_roll_yaw_perching_navigation.cpp`
+- `src/roll_yaw_admittance.cpp`
+- `src/roll_yaw_cutting_trajectory.cpp`
+- `test/ROLL_YAW_IMPLEMENTATION.md`
+- `test/roll_yaw_core_test.cpp`
+- `test/test_roll_yaw_interfaces.py`
 
-The residual uses a backward-Euler version of the existing observer principle:
+Removed only after inspecting call sites:
 
-```text
-r_k = K (p_k - p_initial - integral_previous - dt b_k) / (1 + K dt)
-integral_k = integral_previous + dt (b_k + r_k)
-tau_body_pitch = n_thetaᵀ r_k
-```
+- `include/gimbalrotor/roll_yaw_orientation_qp.h`
+- `src/roll_yaw_orientation_qp.cpp`
 
-`K` defaults to 10 s⁻¹; initialization records actual momentum, and gaps reinitialize
-the observer. There is a one-second initialization/recovery interval before using
-the torque for compliance. Dynamics jobs run at most at 20 Hz with a 0.1-second
-cooperative deadline; source timestamps determine integration dt. The SVD condition
-and solve residual are checked. Near neutral, the approximately pi mounting yaw
-maps positive passive alpha toward negative body-local pitch. The tests verify the
-Jacobian sign, gravity sign and `r_eta·eta_dot = tau_body_pitch*theta_dot` convention.
-No extra arbitrary pitch torque sign is introduced.
-
-Ideal support reactions have zero virtual work in the constrained coordinates.
-Unmodelled hinge/gear friction, support motion, structural flexibility, servo load
-calibration error, rotor/FC mismatch and spinning saw/rotor momentum can still enter
-the residual. URDF simulation friction is not assumed to be calibrated hardware
-friction. A scalar task torque does not uniquely identify a six-dimensional saw
-wrench or isolate cutting from every other disturbance.
-
-**Admittance lifecycle.** The only operator arm/disarm interface is the existing
-`/gimbalrotor/perching/admittance_enable` Bool. Default is disarmed. Keep the saw and
-contact unloaded during baseline collection: after observer initialization, 80
-distinct valid samples are averaged only while locked/held, planning or READY,
-with quiet measured rates and before the stroke has ever started. At the nominal
-20 Hz ceiling this takes at least about five seconds including initialization.
-Collection pauses during alignment. No sensor can certify that this operator-chosen
-period is actually contact-free. Bias is frozen during the stroke, pause, completion
-and topic release; a new lock resets it. Articulation-dependent bias is a limitation.
-
-True requires lock/HOVER, a ready baseline and fresh computable input, with rejection
-reasons reported. False removes forcing and releases the live offset smoothly.
-Stale torque similarly removes forcing, with recovery initialization before reuse.
-The scalar law is `0.40 delta_ddot + 5 delta_dot + 4.5 delta = gated_torque` by default,
-with a 0.1-second torque filter, 0.04/0.02 Nm contact hysteresis and 0.1/0.2-second
-dwell. Torque, angle, rate and acceleration limits are 0.18 Nm, 0.0383972 rad,
-0.15 rad/s and 0.1 rad/s². The reference torque is configurable, default zero.
-The virtual dynamics use bounded implicit integration, braking before the angle
-limit and constrained local IK with at most seven acceleration/braking candidates.
-Rejected candidates do not wind up the scalar state. If no candidate is feasible,
-the existing hard-fault hold takes precedence. These legacy-derived values still
-need robot-specific tuning.
-
-`R_control = R_nominal Ry(delta)` is reconstructed through the full mechanism.
-Body, joint and articulated CoG derivatives are generated consistently. Opposing
-negative task torque produces a negative correction during a positive stroke.
-Online planning is unnecessary for this local synthesis. The old single-pivot
-admittance plugin is not selected, and no additional PID/motor/FC writer was added.
-
-**Topics and recording.** Existing String `state` (latched), String `diagnostics`,
-UInt64 `session`, Vector3Stamped `nominal_angles`/`target_angles`, and odometry
-references/measurements retain their names and types. Angle wire order remains
-`[roll, alpha, yaw]`. Status snapshots publish at at most 5 Hz, plus state transitions.
-Existing feedback timestamps are retained; remote manual receipt/session handling
-is unchanged.
-
-| New topic under `/gimbalrotor/perching/roll_yaw` | Type and meaning |
-|---|---|
-| `diagnostics_status` | `diagnostic_msgs/DiagnosticArray`; publication stamp, stable keys with units, lock/session/plan/generation IDs, first fault, planning timing/intervals/cancellation, settling, sources/ages/skew/invalid counts, geometry, separate goal/nominal/measured/control fields, torque/bias/contact, online rejection/expiry and callback wall time |
-| `task_pitch` | `geometry_msgs/Vector3Stamped`; x nominal task pitch, y raw measured task pitch, z compliant control pitch; all rad |
-| `compliance` | `geometry_msgs/Vector3Stamped`; x offset rad, y offset rate rad/s, z estimated task torque Nm |
-| `command_wrench_estimate` | `geometry_msgs/WrenchStamped`; source IMU stamp, world axes, estimated input force N and input moment Nm about current CoG; published by the ordinary FC-mode controller when subscribed |
-| `command_ack` | `std_msgs/String`; action, exact UInt64 session, accepted/rejected flag and reason; acceptance acknowledges the command, not planning completion or physical success |
-
-Numeric plot headers are publication time and `perching_lock_<ns>`, not new sensor
-timestamps. Use `body_stamp_s`, `joint_stamp_s`, `torque_stamp_s`, source ages and
-validity fields in `diagnostics_status`; unavailable plotted values are NaN.
-`settling_valid` distinguishes complete statistics from unavailable values.
-Prepare solve/validation wall fields are cumulative phase measurements; total
-elapsed wall time includes all preparation work. Record `/rosout`, the original
-joint/body sources and command input estimate, and retain the model/configuration
-used for the bag.
-
-The following are operator examples only; they were not executed:
-
-```bash
-roslaunch gimbalrotor roll_yaw_perching.launch simulation:=false qp_planning:=true online_planning:=true
-# Perch, optionally rezero, and perform the existing final relock first.
-rosrun gimbalrotor roll_yaw_command.py prepare
-# Wait for validated plan readiness, then:
-rosrun gimbalrotor roll_yaw_command.py align
-# Wait for READY and baseline_ready; keep this baseline period unloaded.
-rostopic pub -1 /gimbalrotor/perching/admittance_enable std_msgs/Bool 'data: true'
-rosrun gimbalrotor roll_yaw_command.py start
-# May be changed independently during the stroke:
-rostopic pub -1 /gimbalrotor/perching/admittance_enable std_msgs/Bool 'data: false'
-rostopic echo /gimbalrotor/perching/roll_yaw/state
-rostopic echo /gimbalrotor/perching/roll_yaw/diagnostics
-rostopic echo /gimbalrotor/perching/roll_yaw/diagnostics_status
-rosbag record -a
-```
-
-The helper reads the current UInt64 session, validates serialization without a
-float conversion, waits for a navigator subscriber, sends one command and waits
-for a matching acknowledgement. It assumes one operator command source; the
-existing UInt64 wire protocol has no per-command nonce. Change `--namespace` when
-using a nondefault robot ID. No historical lock ID is hardcoded.
-
-**Verification actually performed, 2026-11-06 (Asia/Tokyo).** Full local package
-compilation/linking succeeded, including navigation, all controller plugins,
-robot model, perching core and available Gazebo plugin. Sixteen C++ regressions
-passed: task twist/wrap/nonzero starts, both stroke directions, finite blocked
-lead, measured +10/+9 distinction with stricter effective tracking, complete
-compliance/release/execution flow, stale feedback/wrong session, expired online
-activation, C2 continuation, removal of compliance from measured replanning seeds,
-contact/baseline/limits, mass/energy/gravity/observer signs, extra-module counting,
-moving-gimbal momentum, worker cancellation, and current URDF FK/QP/dynamics.
-Five Python checks passed for exact UInt64 wire serialization, invalid session
-types, and hardware offline/online plus simulation launch-parameter resolution.
-Launch parsing only expanded configuration/Xacro; no nodes were started.
-
-Release-mode host samples for a current-URDF +10-degree request with 30-degree yaw
-took roughly 0.29–0.32 seconds to prepare, and a single articulated dynamics sample
-roughly 1 ms. These are unit-check wall times on this computer, not onboard profiling
-or a comparison with the historical bag runtimes. The parser reports the existing
-dummy root inertia limitation (root mass 0.00001 kg); the original RobotModel also
-excludes that root. Geometry was not changed to suppress the warning.
-
-The reusable offline runner is `bash test/run_roll_yaw_checks.sh` from the existing
-ROS/dependency environment. It creates its own `/tmp/gimbalrotor-checks.*` directory
-and retains configuration/build logs, expanded URDF and test XML/logs. This session's
-artifacts are in `/tmp/gimbalrotor-checks.8gBJ8o`. `git diff --check` was also used.
-The ROS flight rostests, simulator, real middleware timing and robot were not run.
-
-Further validation needs calibrated active-joint output torque/load signs, physical
-task-torque sign checks in both directions, command-vs-realized FC wrench measurements,
-tool/inertia/module verification, no-contact bias across posture, input/skew/dropout
-bags, CPU/deadline profiles on the flight computer and measured compliance/settling
-tests. Local mathematical and compilation checks do not establish force accuracy,
-flight stability, collision safety or successful cutting under persistent resistance.
-
-**File-by-file changes.**
-
-| File | Change |
-|---|---|
-| `CMakeLists.txt` | Builds dynamics/admittance core sources, links diagnostic messages and installs the command helper |
-| `package.xml` | Adds diagnostic_msgs build/runtime dependency |
-| `config/beetle/RollYawPerching.yaml` | Adds online/deadline, measured-progress and scalar admittance settings; preserves existing hardware limits |
-| `launch/bringup.launch` | Exposes and applies QP/online startup arguments in roll–yaw mode |
-| `launch/roll_yaw_perching.launch` | Forwards both startup arguments |
-| `include/gimbalrotor/control/gimbalrotor_controller.h` | Declares the input-estimate publisher |
-| `src/control/gimbalrotor_controller.cpp` | Publishes the labelled FC-mode command/model wrench estimate; leaves control/observer semantics intact |
-| `include/gimbalrotor/gimbalrotor_roll_yaw_perching_navigation.h` | Declares independent worker, source, compliance, goal-diagnostic and timing state |
-| `src/gimbalrotor_roll_yaw_perching_navigation.cpp` | Integrates lifecycle, worker snapshots/results, measured effective tracking, topic enable, sole final reference, acknowledgements and diagnostics |
-| `include/gimbalrotor/roll_yaw_cutting_trajectory.h` | Stores immutable request convention, measured progress, endpoint flags, continuation and execution settings |
-| `src/roll_yaw_cutting_trajectory.cpp` | Adds cooperative preparation, C2 continuation, bounded measured phase, original-goal completion and detailed guard failures |
-| `src/roll_yaw_perching_kinematics.cpp` | Caches independently copied articulated FK solver/buffers without changing FK/CoG equations |
-| `include/gimbalrotor/roll_yaw_settling.h` | Bounds settling sample storage |
-| `include/gimbalrotor/roll_yaw_task.h` | Implements continuous task-frame pitch and directed filtered progress |
-| `include/gimbalrotor/roll_yaw_worker.h` | Implements bounded persistent workers, cancellation and shutdown lifecycle |
-| `include/gimbalrotor/roll_yaw_dynamics.h` | Declares copied articulated dynamics and generalized momentum observer |
-| `src/roll_yaw_dynamics.cpp` | Implements link energy, mass, generalized inputs and task torque residual |
-| `include/gimbalrotor/roll_yaw_admittance.h` | Declares scalar dynamics/contact state and compliant synthesis interface |
-| `src/roll_yaw_admittance.cpp` | Implements baseline, filtering/hysteresis, bounded release/integration, consistent IK derivatives and anti-windup |
-| `scripts/keyboard_command/roll_yaw_command.py` | Sends exact current-session commands and checks acknowledgement |
-| `test/CMakeLists.txt` | Registers the core gtest target; existing flight tests remain available but were not run |
-| `test/roll_yaw_core_test.cpp` | Adds mathematical, execution, worker and actual-URDF regressions |
-| `test/test_roll_yaw_interfaces.py` | Adds offline ROS wire and launch checks |
-| `test/run_roll_yaw_checks.sh` | Reproduces isolated local build and offline verification |
-| `test/ROLL_YAW_IMPLEMENTATION.md` | Records the audit, equations, operational behavior, schema, verification and remaining limitations |
+`Limits` moved into the retained trajectory header; the singularity threshold
+is now an independent planning field. FK/CoG, task progress, settling, worker,
+base session/hold, rezero, actuator output and non-QP dynamics/admittance utilities
+remain. Existing test files were updated; no new test files remain. The shared
+controller, allocation, motor/servo configuration, URDF, Gazebo contact plugin,
+package dependencies, other perching modes, bags and user data were preserved.
+The shared launch change removes only the roll-yaw-specific obsolete arguments.
+No unrelated QP functionality was removed; no solver dependency was dropped.

@@ -1,5 +1,5 @@
 # Fixed-contact capture, manual increments and explicit automatic trajectories. All angles are radians; lengths metres; times seconds.
-# Confirmed hinge geometry; execution still requires an explicit perching lock.
+# Nominal hinge geometry; physical calibration is not established by this file.
 controller:
   # Preserve Spinal attitude feedback and FC-side gimbal/motor allocation.
   # Host yaw PID consumes target rate; FourAxisCommand has no separate rate field.
@@ -9,22 +9,30 @@ navigation:
   roll_yaw_perching:
     # Common base lifecycle: enable/capture -> nominal target -> update/FK -> controller.
     # Manual targets always mean [passive alpha, active roll, active yaw].
-    qp_planning: false
-    online_planning: false
     prepare_deadline: 120.0 # steady-clock seconds; cooperative cancellation
-    online_period: 0.05
-    online_horizon: 0.5
-    online_deadline: 0.1
-    online_lookahead: 0.2
     # Execution allowance, not overshoot or hardware-validated tuning.
-    # Must exceed admittance angle limit + reference_tracking_allowance.
-    reference_lead: 0.06
-    reference_tracking_allowance: 0.01
+    # Limits the nominal feed lead over measured progress.
+    reference_lead: 0.018 # rad, strictly below soft body tracking bound
+    soft_tracking_fraction: 0.6 # 0.024 rad soft vs 0.04 rad hard, body AND joints
+    resume_fraction: 0.5 # release latched hold below half the soft errors
+    max_execution_step: 0.05 # seconds; nominal navigation 40 Hz
+    preparation_tolerance: 0.03 # rad measured-to-hinge consistency, NOT IK solver error
+    preparation_quiet_time: 0.3 # seconds: fresh RMS/current/mean-rate window before prepare
     progress_filter_time: 0.15
     goal_tolerance: 0.0087
     progress_timeout: 30.0
     admittance:
-      # Legacy starting values, NOT validated roll-yaw tuning. Runtime Bool only.
+      # Built-in observer software convention: wrench ON robot, world force/moment
+      # about CoG in N and N.m; not a physically calibrated cutting-force measurement.
+      # Command_wrench_estimate is never used as external cutting resistance.
+      external_wrench_topic: estimated_external_wrench
+      wrench_frame: world # world or body (body header must match body_frame)
+      wrench_point: cog # cog, body, or world_origin; moment is ABOUT this point
+      wrench_sign: 1.0 # Built-in observer: wrench ON robot; resistance -> negative work
+      wrench_scale: 1.0 # Built-in observer software units N, N.m; not physical calibration
+      # Prepare -> READY, remove cutting load, admittance_tare -> baseline_ready,
+      # then perching/admittance_enable=true. Disabling releases gradually.
+      # Gains below are provisional, not hardware tuning.
       inertia: 0.40
       damping: 5.0
       stiffness: 4.5
@@ -66,7 +74,7 @@ navigation:
     # body_frame defaults to the URDF baselink resolved with tf_prefix (beetle: fc).
     debug_prefix: perching/roll_yaw
 
-    # Confirmed T_CP relative to roll_hand_link, including the additional 9 mm.
+    # Nominal T_CP relative to roll_hand_link; verify against the hardware pivot.
     pivot_offset: [0.21049, 0.0, 0.0205]
     pivot_rpy: [0.0, 0.0, 0.0] # ZYX rotation of P relative to C
     hinge_axis: [0.0, 1.0, 0.0] # signed UNIT axis expressed in P
@@ -89,10 +97,6 @@ navigation:
     scaling_attempts: 5
     cog_speed_limit: 0.1
     cog_acceleration_limit: 0.2
-    qp_weights: [1.0, 1.0, 1.0]
-    qp_regularization: 0.00000001
-    qp_smoothing: 0.000001
-    orientation_gain: 2.0
     min_singular_value: 0.05
     feedback_timeout: 0.15
     future_tolerance: 0.02
@@ -102,7 +106,7 @@ navigation:
     tracking_tolerance: 0.04
     body_tracking_tolerance: 0.04
     cog_model_tolerance: 0.005
-    # Only optional QP trajectory endpoints wait for measured settling.
+    # Orientation trajectory endpoints wait for measured settling.
     # Enable/relock capture current measurements without a zero-rate prerequisite.
     settle_rate: 0.01 # Legacy strict policy (settle_use_window=false).
     # Trial hardware bounds: time-weighted RMS/current norms and signed mean-vector norms.
@@ -118,14 +122,11 @@ navigation:
     # nominal_angles / target_angles report nominal / applied [roll, alpha, yaw].
     # Legacy full-vector target accepts that order with frame_id=perching_lock_<ns>.
     # Remote command stamps are informational; onboard feedback stamps stay checked.
-    # cancel holds the applied reference. manual_pitch_delta and pitch-only uav/nav
+    # cancel brakes along the applied path, then holds its final reference. manual_pitch_delta and pitch-only uav/nav
     # remain absolute lock-relative alpha; no per-key lookahead or planning phase.
     request:
-      # Only qp_planning=true and explicit prepare/align/start use this body request.
-      # Relative to N = measured body orientation at this contact lock.
-      body_yaw: 0.523598775598
-      body_roll: 0.0
-      pitch_start: 0.0
-      pitch_end: 0.349065850399
-      pitch_rate: 0.03          # positive magnitude; direction from end-start
-      pitch_acceleration: 0.02
+      # Signed controlled-body-local Y increment from fresh measured cut start R0.
+      # R_des(d) = R0 * Ry(d); angle, not linear depth. Proxy sign checked by FK.
+      pitch_increment: 0.349065850399
+      pitch_rate: 0.03          # positive magnitude, rad/s; may be time-scaled down
+      pitch_acceleration: 0.02  # positive magnitude, rad/s^2

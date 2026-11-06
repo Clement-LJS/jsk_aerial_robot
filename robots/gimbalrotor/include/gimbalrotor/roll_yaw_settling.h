@@ -28,7 +28,7 @@ struct SettlingStatistics
 class SettlingWindow
 {
 public:
-  void reset() { samples_.clear(); window_=0; }
+  void reset() { samples_.clear(); window_=0; last_=SettlingStatistics(); }
 
   SettlingStatistics observe(double now,const std::array<double,3>& body,
                             const std::array<double,2>& joint,double window,double max_gap)
@@ -47,8 +47,15 @@ public:
     }
     if(!samples_.empty()) {
       const double dt=now-samples_.back().time;
-      if(dt<=0||dt>max_gap) {
-        reset(); out.status=dt<=0?"non-increasing clock; collecting fresh window":
+      if(dt==0) {
+        // No additional measurement time; still check the faster source NOW.
+        out=last_;
+        out.body_current=std::hypot(std::hypot(body[0],body[1]),body[2]);
+        out.joint_current=std::hypot(joint[0],joint[1]);
+        return out;
+      }
+      if(dt<0||dt>max_gap) {
+        reset(); out.status=dt<0?"backwards clock; collecting fresh window":
           "sampling gap; collecting fresh window";
       }
     }
@@ -63,7 +70,7 @@ public:
     out.observed=std::min(window,now-samples_.front().time);
     out.body_current=std::hypot(std::hypot(body[0],body[1]),body[2]);
     out.joint_current=std::hypot(joint[0],joint[1]);
-    if(samples_.size()<2||samples_.front().time>begin) return out;
+    if(samples_.size()<2||samples_.front().time>begin) { last_=out; return out; }
 
     std::array<double,5> integral{{}},energy{{}};
     for(std::size_t i=1;i<samples_.size();++i) {
@@ -90,7 +97,7 @@ public:
                   out.body_current,out.joint_current}) if(!std::isfinite(x)) {
       reset(); out.status="nonfinite window statistics"; return out;
     }
-    out.complete=true; out.status="complete window";
+    out.complete=true; out.status="complete window"; last_=out;
     return out;
   }
 
@@ -98,5 +105,6 @@ private:
   struct Sample { double time; std::array<double,5> rate; };
   std::deque<Sample> samples_;
   double window_=0;
+  SettlingStatistics last_;
 };
 }

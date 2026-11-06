@@ -1,10 +1,14 @@
 #pragma once
-#include <gimbalrotor/roll_yaw_perching_kinematics.h>
+#include <gimbalrotor/roll_yaw_cutting_trajectory.h>
 #include <kdl/treefksolverpos_recursive.hpp>
 #include <vector>
 
 namespace roll_yaw
 {
+// Generalized work per radian of signed body-local pitch progress. Wrench and
+// its reference point are world expressed; includes fixed-pivot translation.
+bool pathInteractionTorque(const Kinematics&,const Vec& eta,double direction,double min_singular,
+                           const Vec& force_world,const Vec& moment_world,const Vec& point_world,double& torque);
 struct DynamicsTerms
 {
   bool ok=false;

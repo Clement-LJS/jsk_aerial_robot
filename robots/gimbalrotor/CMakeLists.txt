@@ -59,7 +59,6 @@ target_link_libraries(gimbalrotor_robot_model ${catkin_LIBRARIES})
 
 add_library(roll_yaw_perching_core
   src/roll_yaw_perching_kinematics.cpp
-  src/roll_yaw_orientation_qp.cpp
   src/roll_yaw_cutting_trajectory.cpp
   src/roll_yaw_dynamics.cpp
   src/roll_yaw_admittance.cpp)

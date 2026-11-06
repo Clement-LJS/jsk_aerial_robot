@@ -4,6 +4,22 @@
 
 namespace roll_yaw
 {
+bool pathInteractionTorque(const Kinematics& model,const Vec& q,double direction,double min_singular,
+                           const Vec& force,const Vec& moment,const Vec& point,double& torque)
+{
+  Mat j; Pose body,cog,bp,gp,bm,gm;
+  if((direction!=1&&direction!=-1)||!force.allFinite()||!moment.allFinite()||!point.allFinite()||
+     !model.jacobian(q,j)||!model.evaluate(q,body,cog)) return false;
+  Eigen::JacobiSVD<Mat> svd(j,Eigen::ComputeFullU|Eigen::ComputeFullV);
+  if(svd.singularValues().minCoeff()<min_singular) return false;
+  const Vec tangent=svd.solve(direction*Vec::UnitY()); constexpr double h=1e-5;
+  if(!model.evaluate(q+h*tangent,bp,gp)||!model.evaluate(q-h*tangent,bm,gm)) return false;
+  const Vec linear=(bp.translation()-bm.translation())/(2*h);
+  const Vec angular=body.linear()*(direction*Vec::UnitY());
+  const Vec about_body=moment+(point-body.translation()).cross(force);
+  torque=force.dot(linear)+about_body.dot(angular);
+  return std::isfinite(torque);
+}
 ArticulatedDynamics::ArticulatedDynamics(Kinematics model,const KDL::Tree& tree,
   const std::map<std::string,KDL::RigidBodyInertia>& inertia,const std::map<std::string,KDL::Segment>& extra,
   std::string base,unsigned roll,unsigned yaw,Vec gravity):

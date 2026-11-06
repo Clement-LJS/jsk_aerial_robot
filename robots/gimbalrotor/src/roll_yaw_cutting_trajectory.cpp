@@ -8,6 +8,9 @@
 
 namespace roll_yaw
 {
+bool Limits::valid() const
+{ return lower.allFinite()&&upper.allFinite()&&velocity.allFinite()&&acceleration.allFinite()&&
+    (lower.array()<upper.array()).all()&&(velocity.array()>0).all()&&(acceleration.array()>0).all(); }
 bool Request::valid() const
 {
   for(double x:{yaw,roll,pitch_start,pitch_end,rate,acceleration}) if(!std::isfinite(x)) return false;
@@ -26,7 +29,7 @@ bool PlanningConfig::valid() const
   for(double x:{dt,max_tilt,orientation_tolerance,rate_tolerance,alignment_rate,alignment_acceleration,
                 max_duration,cog_speed_limit,cog_acceleration_limit}) if(!std::isfinite(x)||x<=0) return false;
   return mechanismValid()&&limits.valid()&&limits.lower[0]>-M_PI&&limits.upper[0]<M_PI&&
-    limits.lower[0]<=0&&limits.upper[0]>=0&&qp.valid()&&dt>=.001&&dt<=.1&&max_tilt<M_PI/2&&
+    limits.lower[0]<=0&&limits.upper[0]>=0&&std::isfinite(min_singular_value)&&min_singular_value>0&&dt>=.001&&dt<=.1&&max_tilt<M_PI/2&&
     scaling_attempts>=1&&scaling_attempts<=10&&max_duration/dt<200000;
 }
 Stroke::Stroke(double distance,double rate,double acc):distance_(std::abs(distance)),sign_(distance>=0?1:-1)
@@ -95,12 +98,12 @@ bool configurationAllowed(const Kinematics& m,const Vec& q,const Desired& des,co
   Pose b,g; Mat j;
   if(!q.allFinite()||!rotationValid(des.rotation)||!m.evaluate(q,b,g)||!m.jacobian(q,j)) { error="invalid FK/reference"; return false; }
   if((q.array()<c.limits.lower.array()-1e-9).any()||(q.array()>c.limits.upper.array()+1e-9).any())
-  { error="mechanism position limit"; return false; }
+  { error="mechanism position limit [alpha, roll, yaw]: q="+std::to_string(q[0])+","+std::to_string(q[1])+","+std::to_string(q[2]); return false; }
   if(b.linear()(2,2)<std::cos(c.max_tilt)||des.rotation(2,2)<std::cos(c.max_tilt))
   { error="body world tilt exceeds configured operating range"; return false; }
   if(!fcAttitudeAllowed(g.linear()))
   { error="CoG attitude exceeds Spinal roll/pitch command limits"; return false; }
-  if(Eigen::JacobiSVD<Mat>(j).singularValues().minCoeff()<c.qp.min_singular_value)
+  if(Eigen::JacobiSVD<Mat>(j).singularValues().minCoeff()<c.min_singular_value)
   { error="singular/ill-conditioned mechanism"; return false; }
   if(logSO3(b.linear().transpose()*des.rotation).norm()>c.orientation_tolerance)
   { error="FK orientation tracking tolerance exceeded"; return false; }
@@ -112,22 +115,28 @@ bool validatePath(const Kinematics& m,const Path& path,const PlanningConfig& c,s
     if(c.cancelled&&c.cancelled()) { error="validation cancelled/deadline exceeded"; return false; }
     if(c.report) c.report(k,path.knots.size()-1,true);
     const double dt=path.knots[k].t-path.knots[k-1].t;
+    auto failed=[&](const std::string& why,int axis=-1) {
+      error="interval="+std::to_string(k)+" t="+std::to_string(path.knots[k-1].t)+" s "+
+        (axis<0?"":std::string(axis==0?"alpha":axis==1?"roll":"yaw")+": ")+why; return false;
+    };
     const auto p=controls(path.knots[k-1],path.knots[k]); std::array<Vec,5> v;
-    for(const auto& q:p) if((q.array()<c.limits.lower.array()).any()||(q.array()>c.limits.upper.array()).any())
-      { error="interpolated position limit"; return false; }
+    for(const auto& q:p) for(int axis=0;axis<3;++axis)
+      if(q[axis]<c.limits.lower[axis]-1e-12||q[axis]>c.limits.upper[axis]+1e-12)
+        return failed("interpolated position limit",axis);
     for(int i=0;i<5;++i) {
       v[i]=5*(p[i+1]-p[i])/dt;
-      if((v[i].cwiseAbs().array()>c.limits.velocity.array()*.5+1e-9).any())
-        { error="interpolated velocity reserve exceeded; time scaling required"; return false; }
+      for(int axis=0;axis<3;++axis) if(std::abs(v[i][axis])>c.limits.velocity[axis]*.5+1e-9)
+        return failed("interpolated velocity reserve exceeded; time scaling required",axis);
     }
     for(int i=0;i<4;++i) if(( (4*(v[i+1]-v[i])/dt).cwiseAbs().array()>c.limits.acceleration.array()*.5+1e-9).any())
       { std::ostringstream why; why<<"interpolated acceleration reserve exceeded; interval="<<k
             <<" coefficient="<<i<<" acceleration="<<(4*(v[i+1]-v[i])/dt).transpose()
             <<" limit="<<(c.limits.acceleration*.5).transpose(); error=why.str(); return false; }
-    const int samples=std::max(4,static_cast<int>(std::ceil(dt/(c.dt/4))));
+    const int samples=c.min_singular_value==0?24:std::max(4,static_cast<int>(std::ceil(dt/(c.dt/4))));
     for(int i=0;i<=samples;++i) {
       Reference ref; const double t=path.knots[k-1].t+dt*i/samples;
-      if(!samplePath(m,path,t,ref)||!configurationAllowed(m,ref.eta,ref.desired,c,error)) return false;
+      if(!samplePath(m,path,t,ref)||!configurationAllowed(m,ref.eta,ref.desired,c,error))
+        return failed("sample="+std::to_string(i)+": "+error);
       if((ref.body_omega-ref.body.linear().transpose()*ref.desired.rotation*ref.desired.omega).norm()>c.rate_tolerance)
         { error="body angular velocity tracking tolerance exceeded"; return false; }
       if(ref.cog_velocity.norm()>c.cog_speed_limit*.5||ref.cog_acceleration.norm()>c.cog_acceleration_limit*.5)
@@ -143,34 +152,57 @@ bool buildPath(const Kinematics& m,const Vec& initial,double duration,const std:
   const int steps=std::max(2,static_cast<int>(std::ceil(duration/c.dt)));
   const double dt=duration/steps;
   path.knots.clear(); path.desired=desired;
-  Vec eta=initial,u=Vec::Zero(); path.knots.push_back({0,eta,u});
-  for(int i=0;i<steps;++i) {
+  Vec eta=initial;
+  for(int i=0;i<=steps;++i) {
     if(c.cancelled&&c.cancelled()) { error="planning cancelled/deadline exceeded"; return false; }
     if(c.report) c.report(i,steps,false);
-    const double t=i*dt; Pose b,g; Mat j;
-    if(!configurationAllowed(m,eta,desired(t),c,error)||!m.evaluate(eta,b,g)||!m.jacobian(eta,j)) return false;
-    // Mid-interval feed-forward reduces Euler integration bias; SO(3) feedback
-    // is evaluated at the current sample, with exact box intersection.
-    auto d=desired(t); auto mid=desired(t+dt*.5);
-    const Vec omega=d.rotation.transpose()*mid.rotation*mid.omega;
-    auto qp=orientationStep(j,b.linear(),d.rotation,omega,eta,u,dt,c.limits,c.qp);
-    if(!qp.ok) { error=qp.reason; return false; }
-    u=qp.u; eta+=u*dt; path.knots.push_back({(i+1)*dt,eta,u});
+    const auto d=desired(i*dt); const Vec seed=eta;
+    Mat j;
+    if(!inverseOrientation(m,d.rotation,seed,c,eta,error)||!configurationAllowed(m,eta,d,c,error)||
+       (eta-seed).norm()>.1||(i==0&&(eta-initial).norm()>1e-7)||!m.jacobian(eta,j)) {
+      error="sample="+std::to_string(i)+" t="+std::to_string(i*dt)+" s: "+
+        (error.empty()?"IK branch/start consistency":error); return false;
+    }
+    // Differentiate the same orientation constraint: J qdot = omega,
+    // J qddot + Jdot qdot = omegadot. Endpoints are zero speed/acceleration.
+    Eigen::JacobiSVD<Mat> svd(j,Eigen::ComputeFullU|Eigen::ComputeFullV);
+    const Vec velocity=svd.solve(d.omega); Mat jp,jm;
+    if(!m.jacobian(eta+1e-4*velocity,jp)||!m.jacobian(eta-1e-4*velocity,jm)) return false;
+    const Vec acceleration=svd.solve(d.acceleration-(jp-jm)/(2e-4)*velocity);
+    path.knots.push_back({i*dt,eta,velocity,acceleration});
   }
-  // C2 quintic Bezier interpolation. All endpoint accelerations are zero;
-  // Bernstein convex-hull bounds certify limits for the WHOLE interval.
-  for(std::size_t i=1;i+1<path.knots.size();++i)
-    path.knots[i].velocity=(path.knots[i+1].eta-path.knots[i-1].eta)/(2*dt);
-  path.knots.front().velocity.setZero(); path.knots.back().velocity.setZero();
-  return validatePath(m,path,c,error);
+  if(!validatePath(m,path,c,error)) { error="interpolation: "+error; return false; }
+  return cachePathTravel(path);
 }
+}
+bool inverseOrientation(const Kinematics& model,const Mat& desired,const Vec& seed,
+                        const PlanningConfig& config,Vec& q,std::string& error)
+{
+  error.clear(); q=seed;
+  if(!rotationValid(desired)||!seed.allFinite()) { error="invalid IK input"; return false; }
+  for(int iteration=0;iteration<40;++iteration) {
+    Pose body,cog; Mat j;
+    if(!model.evaluate(q,body,cog)||!model.jacobian(q,j)) { error="IK model failure"; return false; }
+    Eigen::JacobiSVD<Mat> svd(j,Eigen::ComputeFullU|Eigen::ComputeFullV);
+    if(svd.singularValues().minCoeff()<config.min_singular_value) { error="singular orientation IK"; return false; }
+    const Vec residual=logSO3(body.linear().transpose()*desired);
+    if(residual.norm()<1e-9) return mechanismAllowed(model,q,config,error);
+    // Damped inverse with bounded iteration length and nearest-seed branches.
+    const auto singular=svd.singularValues();
+    const Vec inverse=singular.array()/(singular.array().square()+1e-10);
+    Vec delta=svd.matrixV()*inverse.asDiagonal()*svd.matrixU().transpose()*residual;
+    if(delta.norm()>.08) delta*=.08/delta.norm();
+    q+=delta;
+    for(int axis=0;axis<3;++axis) q[axis]=seed[axis]+std::remainder(q[axis]-seed[axis],2*M_PI);
+  }
+  error="orientation IK did not converge in 40 iterations"; return false;
 }
 bool mechanismAllowed(const Kinematics& m,const Vec& q,const PlanningConfig& c,std::string& error)
 {
   Pose b,g;
   if(!c.mechanismValid()||!q.allFinite()||!m.evaluate(q,b,g)) { error="invalid mechanism configuration/FK"; return false; }
   if((q.array()<c.limits.lower.array()-1e-9).any()||(q.array()>c.limits.upper.array()+1e-9).any())
-    { error="mechanism position limit"; return false; }
+    { error="mechanism position limit [alpha, roll, yaw]: q="+std::to_string(q[0])+","+std::to_string(q[1])+","+std::to_string(q[2]); return false; }
   if(b.linear()(2,2)<std::cos(c.max_tilt)||!fcAttitudeAllowed(g.linear()))
     { error="body/CoG attitude limit"; return false; }
   return true;
@@ -198,6 +230,37 @@ bool mechanismReference(const Kinematics& m,const Vec& q,const Vec& v,const Vec&
     r.cog_acceleration.allFinite()&&r.cog_omega.allFinite()&&r.cog_angular_acceleration.allFinite();
 }
 
+bool cachePathTravel(Path& path)
+{
+  path.travel.assign(path.knots.size(),Vec::Zero());
+  for(std::size_t k=1;k<path.knots.size();++k) {
+    const double dt=path.knots[k].t-path.knots[k-1].t;
+    if(!std::isfinite(dt)||dt<=0) return false;
+    const auto p=controls(path.knots[k-1],path.knots[k]);
+    Vec bound=Vec::Zero();
+    for(int i=0;i<5;++i) bound=bound.cwiseMax((5*(p[i+1]-p[i])).cwiseAbs());
+    path.travel[k]=path.travel[k-1]+bound;
+  }
+  return path.knots.size()>=2;
+}
+Vec pathTravel(const Path& p,double t)
+{
+  if(p.travel.size()!=p.knots.size()||p.knots.size()<2) return Vec::Constant(std::numeric_limits<double>::infinity());
+  t=std::clamp(t,0.0,p.duration());
+  auto it=std::upper_bound(p.knots.begin(),p.knots.end(),t,[](double x,const Knot& k){return x<k.t;});
+  std::size_t k=std::min<std::size_t>(p.knots.size()-1,std::max<std::size_t>(1,it-p.knots.begin()));
+  const double u=(t-p.knots[k-1].t)/(p.knots[k].t-p.knots[k-1].t);
+  return p.travel[k-1]+u*(p.travel[k]-p.travel[k-1]);
+}
+void scaleReference(Reference& r,double v,double a)
+{
+  r.acceleration=r.acceleration*v*v+r.velocity*a;
+  r.body_acceleration=r.body_acceleration*v*v+r.body_omega*a;
+  r.cog_acceleration=r.cog_acceleration*v*v+r.cog_velocity*a;
+  r.cog_angular_acceleration=r.cog_angular_acceleration*v*v+r.cog_omega*a;
+  r.desired.acceleration=r.desired.acceleration*v*v+r.desired.omega*a;
+  r.velocity*=v; r.body_omega*=v; r.cog_velocity*=v; r.cog_omega*=v; r.desired.omega*=v;
+}
 bool samplePath(const Kinematics& m,const Path& p,double t,Reference& r)
 {
   Vec q,v,a;
@@ -206,82 +269,43 @@ bool samplePath(const Kinematics& m,const Path& p,double t,Reference& r)
   r.orientation_error=logSO3(r.body.linear().transpose()*r.desired.rotation).norm();
   return true;
 }
-bool continuation(const Kinematics& model,const Path& nominal,double begin,double horizon,
-                  const PlanningConfig& config,Path& result,std::string& reason,const Vec& seed_error)
+bool mechanismPath(const Kinematics& model,const Reference& from,const Vec& goal,
+                   const PlanningConfig& config,Path& path,std::string& error)
 {
-  Reference first,middle,last;
-  const double duration=std::min(horizon,nominal.duration()-begin);
-  if(duration<2*config.dt||!samplePath(model,nominal,begin,first)||
-     !samplePath(model,nominal,begin+duration,last)) { reason="continuation interval unavailable"; return false; }
-  const double mid=duration*.5;
-  if(!samplePath(model,nominal,begin+mid,middle)) return false;
-  // Refresh the interior IK at the unchanged offline planning dt. Keep the
-  // nominal polynomial intervals (including exact C2 subdivisions at boundaries)
-  // and blend a smooth, measured-state-derived correction inside this horizon.
-  Vec q=first.eta+seed_error,u=first.velocity;
-  const int steps=std::max(1,static_cast<int>(std::ceil(mid/config.dt)));
-  const double dt=mid/steps;
-  for(int i=0;i<steps;++i) {
-    if(config.cancelled&&config.cancelled()) { reason="continuation cancelled/deadline"; return false; }
-    Pose body,cog; Mat j;
-    if(!model.evaluate(q,body,cog)||!model.jacobian(q,j)) return false;
-    const auto d=nominal.desired(begin+i*dt),next=nominal.desired(begin+(i+.5)*dt);
-    auto solved=orientationStep(j,body.linear(),d.rotation,d.rotation.transpose()*next.rotation*next.omega,
-                                q,u,dt,config.limits,config.qp);
-    if(!solved.ok) { reason=solved.reason; return false; }
-    u=solved.u; q+=u*dt;
+  if(!config.limits.valid()) { error="invalid manual rate bounds"; return false; }
+  const Vec distance=(goal-from.eta).cwiseAbs();
+  double duration=std::max(.1,std::max((2*distance.cwiseQuotient(config.limits.velocity)).maxCoeff(),
+    (8*distance.cwiseQuotient(config.limits.acceleration)).array().sqrt().maxCoeff()));
+  for(int attempt=0;attempt<6;++attempt,duration*=1.5) {
+    path.knots={{0,from.eta,from.velocity,from.acceleration},{duration,goal,Vec::Zero(),Vec::Zero()}};
+    const auto points=path.knots;
+    path.desired=[model,points](double t) {
+      Path p; p.knots=points; Vec q,v,a; Reference ref;
+      if(!coordinates(p,t,q,v,a)||!mechanismReference(model,q,v,a,ref)) {
+        Desired bad; bad.rotation.setConstant(std::numeric_limits<double>::quiet_NaN()); return bad;
+      }
+      return Desired{ref.body.linear(),ref.body_omega,ref.body_acceleration};
+    };
+    // Manual motion does not depend on IK, a saw model, or planning availability.
+    PlanningConfig manual=config; manual.min_singular_value=0;
+    manual.orientation_tolerance=1e-6; manual.rate_tolerance=1e-5;
+    manual.dt=.1; // bounded sampling plus exact Bernstein joint bounds
+    if(validatePath(model,path,manual,error)) return cachePathTravel(path);
   }
-  result.desired=[source=nominal.desired,begin](double t){return source(begin+t);};
-  std::vector<Knot> base={{0,first.eta,first.velocity,first.acceleration}};
-  for(const auto& knot:nominal.knots) if(knot.t>begin+1e-9&&knot.t<begin+duration-1e-9)
-    base.push_back({knot.t-begin,knot.eta,knot.velocity,knot.acceleration});
-  base.push_back({duration,last.eta,last.velocity,last.acceleration});
-  for(int attempt=0;attempt<8;++attempt) {
-    const double weight=std::pow(.5,attempt); const Vec correction=weight*(q-middle.eta);
-    result.knots=base;
-    for(auto& knot:result.knots) {
-      const double s=knot.t/duration;
-      const double b=64*(std::pow(s,3)-3*std::pow(s,4)+3*std::pow(s,5)-std::pow(s,6));
-      const double v=64*(3*s*s-12*std::pow(s,3)+15*std::pow(s,4)-6*std::pow(s,5))/duration;
-      const double a=64*(6*s-36*s*s+60*std::pow(s,3)-30*std::pow(s,4))/(duration*duration);
-      knot.eta+=b*correction; knot.velocity+=v*correction; knot.acceleration+=a*correction;
-    }
-    if(validatePath(model,result,config,reason)) { reason="validated C2 continuation; IK correction weight="+std::to_string(weight); return true; }
-    if(config.cancelled&&config.cancelled()) return false;
-  }
-  return false;
+  path=Path(); return false;
 }
-
-bool nominalMeasurementSeed(const Kinematics& model,const Feedback& measured,const Reference& nominal,
-                            const Reference& applied,const PlanningConfig& config,Vec& error,std::string& reason)
-{
-  Estimate estimate;
-  if(!model.estimate(measured.body,measured.eta,estimate)) { reason="invalid measured seed"; return false; }
-  Vec q=measured.eta; q[0]=estimate.alpha;
-  // Remove the actually applied correction from the measured orientation, not
-  // from the goal. Perfect effective tracking must yield zero nominal seed error.
-  const Mat desired=measured.body.linear()*applied.body.linear().transpose()*nominal.body.linear();
-  for(int i=0;i<8;++i) {
-    Pose body,cog; Mat j;
-    if(!model.evaluate(q,body,cog)||!model.jacobian(q,j)) return false;
-    Eigen::JacobiSVD<Mat> svd(j,Eigen::ComputeFullU|Eigen::ComputeFullV);
-    if(svd.singularValues().minCoeff()<config.qp.min_singular_value) { reason="singular measured seed"; return false; }
-    const Vec residual=logSO3(body.linear().transpose()*desired);
-    if(residual.norm()<1e-8) {
-      error=q-nominal.eta; return mechanismAllowed(model,q,config,reason);
-    }
-    const Vec step=svd.solve(residual);
-    if(step.norm()>.2) { reason="measured seed requires excessive IK step"; return false; }
-    q+=step;
-  }
-  reason="measured nominal seed did not converge"; return false;
-}
-
 Plan prepare(const Kinematics& model,const Vec& initial,const Mat& neutral,const Request& request,const PlanningConfig& c)
 {
   Plan out; out.model=model; out.goal=request; out.neutral=neutral; out.reason="invalid request/configuration";
   if(!request.valid()||!c.valid()||!rotationValid(neutral)||!initial.allFinite()) return out;
   Pose body,cog; if(!model.evaluate(initial,body,cog)) { out.reason="invalid initial FK"; return out; }
+  if(!request.align_only && (request.yaw!=0||request.roll!=0||request.pitch_start!=0||
+      logSO3(body.linear().transpose()*neutral).norm()>c.orientation_tolerance)) {
+    out.reason="cut must start at measured R0; no implicit alignment allowed"; return out;
+  }
+  if(!request.align_only&&!c.saw_point_valid) {
+    out.reason="downward feed UNVERIFIED: missing rigid saw-link origin in controlled body frame"; return out;
+  }
   const Mat end=cuttingOrientation(neutral,request,request.pitch_start,0,0).rotation;
   const Vec delta=logSO3(body.linear().transpose()*end);
   for(int attempt=0;attempt<c.scaling_attempts;++attempt) {
@@ -297,7 +321,7 @@ Plan prepare(const Kinematics& model,const Vec& initial,const Mat& neutral,const
     };
     if(!buildPath(model,initial,time,align,c,out.align,out.reason)) continue;
     if(request.align_only) {
-      out.ok=true; out.reason="validated alignment only"; return out;
+      out.ok=true; out.reason="body alignment geometry prepared"; return out;
     }
     Stroke stroke(request.pitch_end-request.pitch_start,request.rate/scale,request.acceleration/(scale*scale));
     auto cut=[neutral,request,stroke](double t) {
@@ -305,7 +329,29 @@ Plan prepare(const Kinematics& model,const Vec& initial,const Mat& neutral,const
       return cuttingOrientation(neutral,request,request.pitch_start+theta,v,a);
     };
     if(!buildPath(model,out.align.knots.back().eta,stroke.duration(),cut,c,out.cut,out.reason)) continue;
-    out.ok=true; out.reason="validated alignment and local-body-Y stroke"; return out;
+    // Check the actual coordinated proxy trajectory, including interpolation.
+    // A curved path is allowed; sustained upward travel is not a downward feed.
+    const double start_z=(body*c.saw_point).z(); double previous_z=start_z;
+    const int samples=std::max(2,static_cast<int>(std::ceil(out.cut.duration()/(c.dt/4))));
+    bool downward=true;
+    for(int i=1;i<=samples;++i) {
+      if(c.cancelled&&c.cancelled()) { out.reason="proxy validation cancelled"; return out; }
+      Reference ref;
+      if(!samplePath(model,out.cut,out.cut.duration()*i/samples,ref)) { downward=false; break; }
+      const double z=(ref.body*c.saw_point).z();
+      if(z>previous_z+1e-8) {
+        out.reason="upward saw-origin proxy motion at sample="+std::to_string(i)+
+          "; requested sign retained; choose another extent/alignment"; downward=false; break;
+      }
+      previous_z=z;
+    }
+    out.proxy_drop=start_z-previous_z;
+    if(!downward||out.proxy_drop<=1e-6) {
+      if(downward) out.reason="no downward saw-origin proxy displacement";
+      out.align.knots.clear(); out.cut.knots.clear(); return out;
+    }
+    out.ok=true; out.reason="geometry prepared: R0 * Ry(d); saw-origin drop="+
+      std::to_string(out.proxy_drop)+" m; physical tooth contact unverified"; return out;
   }
   out.align.knots.clear(); out.cut.knots.clear(); return out;
 }
@@ -321,9 +367,23 @@ bool ExecutionConfig::feedbackConfigValid() const
 }
 bool ExecutionConfig::valid() const
 {
-  for(double x:{tracking_tolerance,orientation_tolerance,reference_lead,reference_tracking_allowance,progress_filter_time,goal_tolerance,progress_timeout,require_settled_on_enable?settle_rate:1.0})
+  for(double x:{tracking_tolerance,orientation_tolerance,reference_lead,progress_filter_time,goal_tolerance,progress_timeout,require_settled_on_enable?settle_rate:1.0})
     if(!std::isfinite(x)||x<=0) return false;
-  return feedbackConfigValid();
+  return feedbackConfigValid()&&std::isfinite(soft_tracking_fraction)&&soft_tracking_fraction>0&&soft_tracking_fraction<.8&&
+    std::isfinite(resume_fraction)&&resume_fraction>0&&resume_fraction<1&&
+    reference_lead<soft_tracking_fraction*orientation_tolerance&&
+    std::isfinite(preparation_tolerance)&&preparation_tolerance>0&&preparation_tolerance<=hinge_tolerance&&
+    std::isfinite(preparation_quiet_time)&&preparation_quiet_time>0;
+
+}
+bool ExecutionConfig::governorValid(const PlanningConfig& p) const
+{
+  if(!valid()||!p.valid()||!std::isfinite(max_execution_step)||max_execution_step<=0||max_execution_step>timeout) return false;
+  // One maximum cycle of the path's reserved rates must fit between soft and
+  // hard bounds. Braking distance itself is reserved by the cached path horizon.
+  const Vec cycle=.5*p.limits.velocity*max_execution_step;
+  return cycle.maxCoeff()<(1-soft_tracking_fraction)*tracking_tolerance&&
+    cycle.sum()<(1-soft_tracking_fraction)*orientation_tolerance;
 }
 bool ExecutionConfig::settlingValid() const
 {
@@ -357,7 +417,7 @@ std::string Executor::feedbackRejection(const Feedback& s) const
 bool Executor::attach(const Kinematics& captured,const Reference& held,std::uint64_t identity,double now)
 {
   std::string error;
-  if(!qp_planning||!planning.valid()||!config.valid()||!config.settlingValid()||
+  if(!planning.valid()||!config.governorValid(planning)||!config.settlingValid()||
      !std::isfinite(now)||now<=0||!identity||!mechanismAllowed(captured,held.eta,planning,error))
     { reason="invalid explicit planner attachment: "+error; return false; }
   model=captured; target=held; session=identity; stage=Stage::CONTACT_LOCKED;
@@ -387,40 +447,55 @@ bool Executor::capture(const Feedback& s,const Kinematics& m)
   stage=Stage::CONTACT_LOCKED; reason="measured contact captured; N is locked body orientation";
   last_time_=s.now; progress=0; resetSettling(); stopping_=cancel_=false; speed_=1; return true;
 }
+bool Executor::submissionMatches(const Plan& p,const Feedback& f,const Reference& held) const
+{
+  Estimate estimate;
+  if(p.session!=session||!p.submission_valid||!feedbackValid(f)||
+     !model.estimate(f.body,f.eta,estimate)||estimate.pivot_error>config.pivot_tolerance||
+     estimate.hinge_residual>config.hinge_tolerance) return false;
+  Vec q=f.eta; q[0]=estimate.alpha;
+  return (q-p.submission.eta).cwiseAbs().maxCoeff()<=config.goal_tolerance&&
+    logSO3(p.submission.body.linear().transpose()*f.body.linear()).norm()<=config.goal_tolerance&&
+    (held.eta-p.applied_start.eta).norm()<1e-9&&
+    (held.body.matrix()-p.applied_start.body.matrix()).norm()<1e-9&&
+    (held.cog.matrix()-p.applied_start.cog.matrix()).norm()<1e-9&&held.velocity.norm()<1e-6;
+}
 bool Executor::accept(Plan p)
 {
-  if(!qp_planning||stage!=Stage::PLANNING||p.session!=session) return false;
+  if(stage!=Stage::PLANNING||p.session!=session) return false;
   resetSettling();
+  if(!config.governorValid(planning)) { p.ok=false; p.reason="invalid soft/hard tracking or trajectory limits"; }
   if(!p.ok) { stage=Stage::CONTACT_LOCKED; reason=p.reason; return false; }
   if(p.align.knots.size()<2||(p.align.knots.front().eta-target.eta).norm()>1e-9) { fault("plan start no longer matches held target"); return false; }
-  online_path=Path(); plan=std::move(p); progress=0; speed_=1; stopping_=cancel_=false;
+  if(!cachePathTravel(p.align)||(!p.goal.align_only&&!cachePathTravel(p.cut))) { fault("invalid path braking envelope"); return false; }
+  plan=std::move(p); progress=nominal_progress=0; speed_=0; governor_hold_=false; stopping_=cancel_=false;
   task.reset(plan.goal.pitch_start); planned_pitch=plan.goal.pitch_start;
   path_end_commanded=goal_reached=progress_lag=false; lag_since_=0;
-  stage=Stage::CONTACT_LOCKED;
-  reason="plan ready; align with current session ID";
+  stage=Stage::CONTACT_LOCKED; // Every connection, including a zero-distance one, settles before READY.
+  reason=plan.reason;
   return true;
 }
 bool Executor::command(const std::string& cmd,std::uint64_t id)
 {
   if(id!=session||!owns()) { reason="stale or missing lock session"; return false; }
-  if(cmd=="prepare"&&(!qp_planning||!planning.valid()||!config.valid()||!config.settlingValid()))
-  { reason=qp_planning?"invalid QP planning configuration":"body-orientation request requires qp_planning=true"; return false; }
+  if(cmd=="prepare"&&(!planning.valid()||!config.governorValid(planning)||!config.settlingValid()))
+  { reason="invalid offline planning configuration"; return false; }
   if(cmd=="prepare"&&(stage==Stage::CONTACT_LOCKED||stage==Stage::COMPLETED_HOLD))
   { plan=Plan(); resetSettling(); stage=Stage::PLANNING; reason="preparing from held configuration"; return true; }
   if(cmd=="align"&&stage==Stage::CONTACT_LOCKED&&plan.ok) {
-    stage=Stage::PRE_ALIGN; progress=0; speed_=1; resetSettling();
-    reason="aligning along validated path"; return true;
+    stage=Stage::PRE_ALIGN; motion_clock_pending_=true; progress=nominal_progress=0; speed_=0; resetSettling();
+    reason="aligning along geometrically validated path"; return true;
   }
   if(cmd=="start"&&stage==Stage::READY) {
     if(plan.cut.knots.empty()) { reason="alignment-only plan; prepare a pitch stroke to start"; return false; }
-    stage=Stage::EXECUTING; progress=0; speed_=0; resetSettling();
+    stage=Stage::EXECUTING; motion_clock_pending_=true; progress=nominal_progress=0; speed_=0; governor_hold_=false; resetSettling();
     task.reset(plan.goal.pitch_start); lag_since_=0; goal_reached=false;
-    reason="executing validated pitch stroke"; return true;
+    reason="executing geometrically validated pitch stroke"; return true;
   }
   if((cmd=="pause"||cmd=="cancel")&&(stage==Stage::PRE_ALIGN||stage==Stage::EXECUTING))
   { stopping_=true; cancel_=cmd=="cancel"; resetSettling(); reason="decelerating along validated path"; return true; }
   if(cmd=="resume"&&stage==Stage::PAUSED) {
-    stage=paused_align_?Stage::PRE_ALIGN:Stage::EXECUTING; stopping_=false; resetSettling();
+    stage=paused_align_?Stage::PRE_ALIGN:Stage::EXECUTING; motion_clock_pending_=true; stopping_=false; lag_since_=0; governor_hold_=false; resetSettling();
     reason=paused_align_?"resuming validated alignment":"resuming validated pitch stroke"; return true;
   }
   if(cmd=="cancel"&&(stage==Stage::PAUSED||stage==Stage::PLANNING||stage==Stage::CONTACT_LOCKED||stage==Stage::READY||stage==Stage::COMPLETED_HOLD))
@@ -473,7 +548,11 @@ void Executor::tick(const Feedback& s)
   { std::ostringstream why; why<<"effective tracking: mechanism="<<joint_error<<"/"<<config.tracking_tolerance
       <<" rad; body="<<body_error<<"/"<<config.orientation_tolerance<<" rad"; fault(why.str()); return; }
   const double dt=s.now-last_time_; last_time_=s.now;
-  if(!std::isfinite(dt)||dt<=0||dt>config.timeout) { fault("invalid execution clock step"); return; }
+  const bool moving=stage==Stage::PRE_ALIGN||stage==Stage::EXECUTING;
+  if(dt<0) { fault("execution clock moved backwards"); return; }
+  if(moving&&motion_clock_pending_) { motion_clock_pending_=false; return; }
+  if(moving&&(!std::isfinite(dt)||dt<0||dt>config.max_execution_step)) { fault("invalid execution clock step"); return; }
+  if(moving&&dt==0) return;
   if(stage==Stage::FAULT_HOLD) return;
   if(plan.ok&&!plan.goal.align_only) {
     const Mat pre=cuttingOrientation(plan.neutral,plan.goal,0,0,0).rotation;
@@ -481,6 +560,12 @@ void Executor::tick(const Feedback& s)
                      config.progress_filter_time,config.orientation_tolerance)) { fault("degenerate measured task twist"); return; }
     goal_error=plan.goal.pitch_end-task.raw;
     goal_orientation_error=logSO3(s.body.linear().transpose()*cuttingOrientation(plan.neutral,plan.goal,plan.goal.pitch_end,0,0).rotation).norm();
+  }
+  if(plan.ok&&(stage==Stage::READY||stage==Stage::CONTACT_LOCKED)&&!plan.goal.align_only&&
+     ((measured_q-(plan.measured_start_valid?plan.measured_start.eta:plan.cut.knots.front().eta)).cwiseAbs().maxCoeff()>config.goal_tolerance||
+      logSO3(s.body.linear().transpose()*plan.neutral).norm()>config.preparation_tolerance||
+      (plan.measured_start_valid&&logSO3(s.body.linear().transpose()*plan.measured_start.body.linear()).norm()>config.goal_tolerance))) {
+    plan=Plan(); hold("prepared start moved; prepare again"); return;
   }
   if(stage!=Stage::PRE_ALIGN&&stage!=Stage::EXECUTING) return;
   const auto& path=stage==Stage::EXECUTING?plan.cut:plan.align;
@@ -497,42 +582,85 @@ void Executor::tick(const Feedback& s)
     for(int i=0;i<32;++i) {
       const double mid=(lo+hi)*.5; double pitch,cross;
       if(!taskPitch(pre,path.desired(mid).rotation,plan.goal.pitch_start,pitch,cross)) { fault("invalid nominal pitch map"); return; }
-      if(direction*(pitch-plan.goal.pitch_start)>allowed) hi=mid; else lo=mid;
+      if(direction*(pitch-plan.goal.pitch_start)>allowed+1e-12) hi=mid; else lo=mid;
     }
     phase_limit=lo;
   }
-  double new_speed=stopping_?std::max(0.0,speed_-speed_acc*dt):std::min(1.0,speed_+speed_acc*dt);
-  // Reserve enough phase distance to brake at the bounded phase acceleration.
-  // Includes the current trapezoidal integration step (prevents lead overshoot).
-  if(stage==Stage::EXECUTING&&phase_limit<path.duration()-1e-7) {
-    const double gap=std::max(0.0,phase_limit-progress);
-    const double a=speed_acc*dt;
-    const double safe=std::max(0.0,(-a+std::sqrt(std::max(0.0,a*a-4*a*speed_+8*speed_acc*gap)))*.5);
-    new_speed=std::max(0.0,std::max(speed_-speed_acc*dt,std::min(new_speed,safe)));
+  // Joint variation bounds also bound body SO(3) distance by their sum:
+  // all three coordinates are revolute, including the configured passive axis.
+  // Searching this cached envelope is logarithmic; no FK/search in the callback.
+  const Vec origin=pathTravel(path,progress);
+  double soft_joint=config.tracking_tolerance*config.soft_tracking_fraction;
+  double soft_body=config.orientation_tolerance*config.soft_tracking_fraction;
+  // A preparation connection can begin with a valid noisy residual above the
+  // nominal soft band. Permit approach toward measured feedback, while retaining
+  // one whole maximum cycle below BOTH hard faults. Never lift cut soft bands.
+  if(stage==Stage::PRE_ALIGN) {
+    const double endpoint_joint=(measured_q-path.knots.back().eta).cwiseAbs().maxCoeff();
+    const double endpoint_body=logSO3(s.body.linear().transpose()*path.desired(path.duration()).rotation).norm();
+    if(endpoint_joint<joint_error&&joint_error>soft_joint)
+      soft_joint=std::max(soft_joint,config.tracking_tolerance-.5*planning.limits.velocity.maxCoeff()*config.max_execution_step-1e-6);
+    if(endpoint_body<body_error&&body_error>soft_body)
+      soft_body=std::max(soft_body,config.orientation_tolerance-.5*planning.limits.velocity.sum()*config.max_execution_step-1e-6);
   }
-  progress_lag=stage==Stage::EXECUTING&&!stopping_&&new_speed<.01&&phase_limit<path.duration()-1e-7;
+  double lo=progress,hi=phase_limit;
+  for(int i=0;i<32;++i) {
+    const double mid=(lo+hi)*.5;
+    const Vec travel=pathTravel(path,mid)-origin;
+    if((travel.array()+ (measured_q-tracking.eta).cwiseAbs().array()>soft_joint).any()||
+       travel.sum()+body_error>soft_body) hi=mid; else lo=mid;
+  }
+  phase_limit=lo;
+  const double gap=std::max(0.0,phase_limit-progress);
+  if(governor_hold_&&joint_error<soft_joint*config.resume_fraction&&body_error<soft_body*config.resume_fraction)
+    governor_hold_=false;
+  if(speed_<.01&&gap<1e-4&&phase_limit<path.duration()-1e-7) governor_hold_=true;
+  // Admittance changes only the scalar destination on the prepared path. The
+  // nominal clock is capped by measured lead and by the bounded scalar offset;
+  // it cannot accumulate time behind a blockage. Effective progress may stop,
+  // then recover gradually. It never advances faster than the original path.
+  double effective_limit=phase_limit;
+  if(stage==Stage::EXECUTING) {
+    const Mat pre=cuttingOrientation(plan.neutral,plan.goal,0,0,0).rotation;
+    const double direction=plan.goal.pitch_end>=plan.goal.pitch_start?1:-1;
+    auto pitch=[&](double t) { double p=0,c=0; taskPitch(pre,path.desired(t).rotation,plan.goal.pitch_start,p,c); return direction*(p-plan.goal.pitch_start); };
+    if(!stopping_&&!interaction_hold&&!governor_hold_) {
+      nominal_progress=std::max(nominal_progress,std::min(phase_limit,nominal_progress+dt));
+    }
+    const double wanted=std::max(0.0,pitch(nominal_progress)+std::min(0.0,relief));
+    double a=progress,b=phase_limit;
+    for(int i=0;i<32;++i) { double m=(a+b)*.5; if(pitch(m)>wanted) b=m; else a=m; }
+    // The cosine endpoint is flat: inverting a sub-nanoradian spring tail
+    // otherwise leaves a finite phase gap forever. Only numerical-size relief
+    // can use the exact endpoint; measured completion remains mandatory.
+    effective_limit=pitch(path.duration())-wanted<=1e-10?phase_limit:a;
+  }
+  double new_speed=(stopping_||interaction_hold||governor_hold_)?std::max(0.0,speed_-speed_acc*dt):std::min(1.0,speed_+speed_acc*dt);
+  // Braking distance includes this trapezoidal step. Never clamp phase after
+  // integration: doing so would publish derivatives inconsistent with position.
+  if(effective_limit<path.duration()-1e-7) {
+    const double gap=std::max(0.0,effective_limit-progress),a=speed_acc*dt;
+    // Reserve the final discrete braking step as well as continuous stopping
+    // distance, for any allowed future update interval. No phase clamp/jump.
+    const double b=speed_acc*(dt+config.max_execution_step);
+    const double safe=std::max(0.0,(-b+std::sqrt(std::max(0.0,b*b-4*a*speed_+8*speed_acc*gap)))*.5);
+    new_speed=std::max(0.0,std::max(speed_-a,std::min(new_speed,safe)));
+  }
+  progress_lag=!stopping_&&(governor_hold_||interaction_hold||new_speed<.01)&&progress<path.duration()-1e-7;
   if(progress_lag) {
     if(lag_since_==0) lag_since_=s.now;
-    reason="measured-progress lag; nominal reference lead consumed";
-    if(s.now-lag_since_>config.progress_timeout) { fault("measured-progress lag timeout; original goal pending"); return; }
+    reason="bounded progress hold; original goal pending";
+    if(s.now-lag_since_>config.progress_timeout) {
+      stopping_=true; cancel_=false; reason="blockage/input timeout; braking to PAUSED, original goal pending";
+    }
   } else lag_since_=0;
   const double ds=(new_speed-speed_)/dt;
-  progress=std::min(phase_limit,progress+(speed_+new_speed)*.5*dt); speed_=new_speed;
-  if(!online_path.knots.empty()&&!online_started) {
-    if(s.now-online_stamp>online_activation_timeout) { online_path=Path(); ++online_expired; }
-    else if(progress>=online_begin) online_started=true;
-  }
+  progress=std::min(path.duration(),progress+(speed_+new_speed)*.5*dt); speed_=new_speed;
   Reference next;
-  const bool use_online=stage==Stage::EXECUTING&&!online_path.knots.empty()&&progress>=online_begin&&progress<=online_begin+online_path.duration();
-  if(!(use_online?samplePath(model,online_path,progress-online_begin,next):samplePath(model,path,progress,next))) { fault("invalid trajectory sample"); return; }
+  if(!samplePath(model,path,progress,next)) { fault("invalid trajectory sample"); return; }
   if(next.body.linear()(2,2)<std::cos(planning.max_tilt)||!fcAttitudeAllowed(next.cog.linear()))
   { fault("trajectory sample exceeds body/FC attitude limits"); return; }
-  next.acceleration=next.acceleration*speed_*speed_+next.velocity*ds;
-  next.body_acceleration=next.body_acceleration*speed_*speed_+next.body_omega*ds;
-  next.cog_acceleration=next.cog_acceleration*speed_*speed_+next.cog_velocity*ds;
-  next.cog_angular_acceleration=next.cog_angular_acceleration*speed_*speed_+next.cog_omega*ds;
-  next.desired.acceleration=next.desired.acceleration*speed_*speed_+next.desired.omega*ds;
-  next.velocity*=speed_; next.body_omega*=speed_; next.cog_velocity*=speed_; next.cog_omega*=speed_; next.desired.omega*=speed_;
+  scaleReference(next,speed_,speed_==0?0:ds);
   target=next;
   if(stage==Stage::EXECUTING) {
     double cross;
@@ -558,10 +686,13 @@ void Executor::tick(const Feedback& s)
     bool qualified=false;
     std::ostringstream detail;
     if(config.settle_use_window) {
+      // Do not lose faster-body excursions between distinct joint timestamps.
+      if(s.body_omega.norm()>=config.settle_body_rate||
+         s.joint_rate.tail<2>().norm()>=config.settle_joint_rate) settling_window_.reset();
       const double sample_stamp=std::min(s.body_stamp,s.joint_stamp);
-      const auto stats=sample_stamp>settling_stamp_?settling_window_.observe(sample_stamp,
+      const auto stats=settling_window_.observe(sample_stamp,
         {{s.body_omega.x(),s.body_omega.y(),s.body_omega.z()}},
-        {{s.joint_rate[1],s.joint_rate[2]}},config.settle_time,config.timeout):settling;
+        {{s.joint_rate[1],s.joint_rate[2]}},config.settle_time,config.timeout);
       settling_stamp_=sample_stamp;
       settling=stats;
       qualified=stats.qualifies(config.settle_body_rate,config.settle_joint_rate,config.settle_mean_rate);
@@ -582,21 +713,29 @@ void Executor::tick(const Feedback& s)
     } else {
       const double body_rate=s.body_omega.norm(),joint_rate=s.joint_rate.tail<2>().norm();
       const bool settled=joint_rate<config.settle_rate&&body_rate<config.settle_rate;
-      if(!settled) stable_since_=0; else if(stable_since_==0) stable_since_=s.now;
-      qualified=stable_since_>0&&s.now-stable_since_>=config.settle_time;
-      detail<<"strict quiet time "<<(stable_since_>0?s.now-stable_since_:0)<<"/"<<config.settle_time
+      const double sample_stamp=std::min(s.body_stamp,s.joint_stamp);
+      if(sample_stamp<settling_stamp_||sample_stamp-settling_stamp_>config.timeout) stable_since_=0;
+      settling_stamp_=sample_stamp;
+      if(!settled) stable_since_=0; else if(stable_since_==0) stable_since_=sample_stamp;
+      qualified=stable_since_>0&&sample_stamp-stable_since_>=config.settle_time;
+      detail<<"strict quiet time "<<(stable_since_>0?sample_stamp-stable_since_:0)<<"/"<<config.settle_time
             <<" s; current body="<<body_rate<<" joint="<<joint_rate<<"; bound="<<config.settle_rate<<" rad/s";
     }
-    const bool at_goal=stage==Stage::PRE_ALIGN || (task.valid&&std::abs(goal_error)<=config.goal_tolerance&&
+    const bool at_goal=stage==Stage::PRE_ALIGN ?
+      (logSO3(s.body.linear().transpose()*path.desired(path.duration()).rotation).norm()<=config.goal_tolerance&&
+       (measured_q-path.knots.back().eta).cwiseAbs().maxCoeff()<=config.goal_tolerance) : (task.valid&&std::abs(goal_error)<=config.goal_tolerance&&
       goal_orientation_error<=config.goal_tolerance&&
       (measured_q-plan.cut.knots.back().eta).cwiseAbs().maxCoeff()<=config.tracking_tolerance);
     if(!at_goal) { qualified=false; settling_window_.reset(); settling=SettlingStatistics(); settling_stamp_=0; stable_since_=0; detail<<"; original measured goal pending; pitch error="<<goal_error<<" full SO(3) error="<<goal_orientation_error; }
     settling_elapsed=s.now-ready_since_;
     if(settling_elapsed>config.settle_timeout) { fault("settling timed out: "+detail.str()); return; }
     if(qualified) {
+      if(stage==Stage::PRE_ALIGN&&!plan.goal.align_only) {
+        plan.measured_start.eta=measured_q; plan.measured_start.body=s.body; plan.measured_start_valid=true;
+      }
       stage=stage==Stage::PRE_ALIGN?Stage::READY:Stage::COMPLETED_HOLD;
       goal_reached=stage==Stage::COMPLETED_HOLD;
-      reason=stage==Stage::READY?"alignment settled; start with current session ID":"GOAL_REACHED: measured original endpoint settled; holding contact";
+      reason=stage==Stage::READY?"MOTION_COMPLETE: alignment settled; READY for next command":"GOAL_REACHED: measured original endpoint settled; holding contact";
       resetSettling();
     } else reason="waiting for measured settling: "+detail.str();
   }

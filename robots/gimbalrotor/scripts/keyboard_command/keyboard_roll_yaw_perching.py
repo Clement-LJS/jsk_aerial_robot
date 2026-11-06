@@ -19,7 +19,7 @@ HELP = """
 ROLL / YAW PERCHING — small mechanism steps (default 0.2 degrees)
   j / l  active yaw joint - / +       a / f  active roll joint - / +
   i / k  passive hinge alpha + / - (lock-relative, not world Euler pitch)
-  SPACE  stop advancement and hold the applied reference
+  SPACE  brake along the applied path, then hold contact
   e / d  enable / disable             z / b  pitch rezero / relock
   r / t  arm / take off               g / h  land / HALT MOTORS
   s / ?  status / help               q / Ctrl-C  hold and quit
@@ -31,8 +31,9 @@ Relock stays perched and establishes a new measured baseline. The b key follows 
 General /perching/relock uses base enabled/HOVER capture, without a stopped gate.
 Roll/yaw are URDF joint coordinates: positive joints can rotate the body negatively.
 The body reference/measurement is published separately; no passive actuator exists.
-Keys have the same meanings with qp_planning=false (default) and true.
-Optional QP body requests use prepare/align/start topics, never ordinary keys.
+Body alignment uses separate body_yaw_target/body_roll_target Float64 topics.
+Cut commands use prepare/start/stop with current session; wait for measured READY before start.
+During an automatic motion, a manual key requests braking and is rejected: retry after stop complete.
 Each key updates only its own accumulated nominal destination, like multilink.
 Other destinations survive quick axis changes. Space holds without zeroing joints.
 Targets clamp to navigator effective limits; reversal at a limit takes one step.

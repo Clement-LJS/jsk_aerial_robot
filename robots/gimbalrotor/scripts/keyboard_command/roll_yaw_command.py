@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Explicit QP commands with current UInt64 session and acknowledgement."""
+"""Offline cutting commands with current UInt64 session and acknowledgement."""
 import argparse
 import io
 import threading
@@ -20,7 +20,7 @@ def session_message(value):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=['prepare', 'align', 'start', 'pause', 'resume', 'cancel'])
+    parser.add_argument('action', choices=['prepare', 'start', 'pause', 'resume', 'stop', 'cancel'])
     parser.add_argument('--namespace', default='/gimbalrotor/perching/roll_yaw')
     parser.add_argument('--timeout', type=float, default=3.0)
     args = parser.parse_args(rospy.myargv()[1:])

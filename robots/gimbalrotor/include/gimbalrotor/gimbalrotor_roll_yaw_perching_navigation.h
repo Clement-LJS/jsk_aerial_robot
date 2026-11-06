@@ -40,6 +40,9 @@ private:
   std::string contactRejection(const roll_yaw::Feedback&) const;
   void jointCallback(const sensor_msgs::JointStateConstPtr&);
   void bodyCallback(const nav_msgs::OdometryConstPtr&);
+  void bodyAlignmentCallback(const std_msgs::Float64ConstPtr&,int axis);
+  roll_yaw::Request alignment_request_;
+  bool body_alignment_valid_=false;
   void mechanismTargetCallback(const std_msgs::Float64ConstPtr&,int axis);
   void manualCallback(const geometry_msgs::Vector3StampedConstPtr&);
   bool setNominalTarget(const roll_yaw::Vec&,int changed_axis=-1);
@@ -49,13 +52,21 @@ private:
   void invalidatePlanner();
   void stopMotion(const std::string&);
   void faultHold(const std::string&);
-  void request(const std::string&,std::uint64_t);
+  void request(const std::string&,std::uint64_t,int axis=-1,double value=0);
   void diagnostics();
 
   // Multilink lifecycle, adapted from pitch+secondary to passive alpha+roll+yaw.
   bool lock_valid_=false, faulted_=false;
   roll_yaw::Kinematics model_;
+  std::shared_ptr<const roll_yaw::Kinematics> planning_model_;
   roll_yaw::Vec nominal_=roll_yaw::Vec::Zero(); // independent accepted destinations
+  roll_yaw::Path manual_path_;
+  double manual_time_=0, manual_phase_=0, manual_speed_=1, manual_wall_=0;
+  bool stop_pending_=false;
+  roll_yaw::SettlingWindow preparation_window_;
+  roll_yaw::SettlingStatistics preparation_stats_;
+  bool preparation_ready_=false;
+  double preparation_clock_=0;
   roll_yaw::Reference final_target_;         // sole applied FK/controller reference
   roll_yaw::Estimate measured_contact_;
   std::string reason_="free flight", previous_failure_;
@@ -81,8 +92,8 @@ private:
   bool rezero_rate_valid_=false;
   roll_yaw::Vec rezero_frozen_=roll_yaw::Vec::Zero();
 
-  // Explicit QP requests are an optional target producer, never the manual lifecycle.
-  bool qp_planning_=false, qp_configuration_valid_=false;
+  // Offline orientation paths share the manual FK/controller output.
+  bool planning_configuration_valid_=false;
   roll_yaw::PlanningConfig planning_config_;
   roll_yaw::ExecutionConfig feedback_config_;
   std::unique_ptr<roll_yaw::Executor> planner_;
@@ -103,35 +114,33 @@ private:
     roll_yaw::DynamicsTerms terms; std::string reason;
     std::uint64_t generation=0,session=0; double stamp=0,submitted=0,wall=0;
   };
-  struct OnlineResult {
-    roll_yaw::Path path; std::string reason; bool ok=false;
-    std::uint64_t generation=0,session=0; double begin=0,submitted=0,wall=0;
-    roll_yaw::Reference applied; roll_yaw::Feedback measured;
-  };
   roll_yaw::Worker<DynamicsResult> dynamics_worker_;
-  roll_yaw::Worker<OnlineResult> online_worker_;
   std::shared_ptr<roll_yaw::ArticulatedDynamics> dynamics_model_;
   roll_yaw::MomentumObserver observer_;
   roll_yaw::PitchAdmittance admittance_;
-  bool online_planning_=false,online_pending_=false,dynamics_pending_=false,torque_valid_=false;
-  bool compliance_configuration_valid_=false;
-  bool stroke_started_=false,last_command_accepted_=false;
-  std::shared_ptr<const roll_yaw::Path> online_source_;
+  bool dynamics_pending_=false,torque_valid_=false;
+  bool last_command_accepted_=false;
   double last_dynamics_stamp_=0,observer_started_=0;
-  double online_period_=.05,online_horizon_=.5,online_deadline_=.1,online_lookahead_=.2;
-  double last_online_=0,online_wall_=0,online_age_=0,dynamics_wall_=0,last_dynamics_=0;
-  double torque_stamp_=0,torque_receipt_=0,compliance_time_=0,control_pitch_=0;
-  std::uint64_t online_rejected_=0,online_accepted_=0,plan_id_=0;
-  std::string online_reason_="disabled",load_reason_="no computable input",admittance_reason_="disarmed";
+  double dynamics_wall_=0,last_dynamics_=0;
+  double torque_stamp_=0,torque_receipt_=0,control_pitch_=0;
+  std::uint64_t plan_id_=0;
+  std::string load_reason_="no computable input",admittance_reason_="disarmed";
   roll_yaw::Vec servo_effort_=roll_yaw::Vec::Constant(std::numeric_limits<double>::quiet_NaN());
   double effort_stamp_=0,effort_receipt_=0,body_receipt_=0,joint_receipt_=0,wrench_receipt_=0;
   geometry_msgs::WrenchStamped input_wrench_;
   struct ArticulationSample { double position=0,rate=0,stamp=0; };
   std::map<std::string,ArticulationSample> articulation_samples_;
   void admittanceCallback(const std_msgs::BoolConstPtr&);
+  void externalWrenchCallback(const geometry_msgs::WrenchStampedConstPtr&);
+  void tareCallback(const std_msgs::EmptyConstPtr&);
+  void updateInteraction(const roll_yaw::Feedback&);
+  bool interaction_configured_=false,tare_requested_=false,interaction_valid_=false;
+  std::string interaction_frame_, interaction_point_, interaction_topic_;
+  double interaction_sign_=0,interaction_scale_=0,interaction_torque_=0,interaction_stamp_=0,interaction_receipt_=0;
+  double compliance_time_=0;
+  geometry_msgs::WrenchStamped external_wrench_;
   void wrenchCallback(const geometry_msgs::WrenchStampedConstPtr&);
   void updateDynamics(const roll_yaw::Feedback&);
-  void updateOnline(const roll_yaw::Feedback&);
   void resetCompliance();
   ros::Publisher status_pub_,task_pub_,compliance_pub_,ack_pub_;
   std::string last_status_;
