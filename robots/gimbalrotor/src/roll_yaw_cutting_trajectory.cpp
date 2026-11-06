@@ -109,12 +109,12 @@ bool configurationAllowed(const Kinematics& m,const Vec& q,const Desired& des,co
   { error="FK orientation tracking tolerance exceeded"; return false; }
   return true;
 }
-bool validatePath(const Kinematics& m,const Path& path,const PlanningConfig& c,std::string& error)
+bool jointBounds(const Path& path,const PlanningConfig& c,std::string& error)
 {
+  if(path.knots.size()<2) { error="empty polynomial path"; return false; }
   for(std::size_t k=1;k<path.knots.size();++k) {
-    if(c.cancelled&&c.cancelled()) { error="validation cancelled/deadline exceeded"; return false; }
-    if(c.report) c.report(k,path.knots.size()-1,true);
     const double dt=path.knots[k].t-path.knots[k-1].t;
+    if(!std::isfinite(dt)||dt<=0) { error="invalid polynomial interval"; return false; }
     auto failed=[&](const std::string& why,int axis=-1) {
       error="interval="+std::to_string(k)+" t="+std::to_string(path.knots[k-1].t)+" s "+
         (axis<0?"":std::string(axis==0?"alpha":axis==1?"roll":"yaw")+": ")+why; return false;
@@ -132,11 +132,22 @@ bool validatePath(const Kinematics& m,const Path& path,const PlanningConfig& c,s
       { std::ostringstream why; why<<"interpolated acceleration reserve exceeded; interval="<<k
             <<" coefficient="<<i<<" acceleration="<<(4*(v[i+1]-v[i])/dt).transpose()
             <<" limit="<<(c.limits.acceleration*.5).transpose(); error=why.str(); return false; }
+  }
+  return true;
+}
+bool validatePath(const Kinematics& m,const Path& path,const PlanningConfig& c,std::string& error)
+{
+  if(!jointBounds(path,c,error)) return false;
+  for(std::size_t k=1;k<path.knots.size();++k) {
+    if(c.cancelled&&c.cancelled()) { error="validation cancelled/deadline exceeded"; return false; }
+    if(c.report) c.report(k,path.knots.size()-1,true);
+    const double dt=path.knots[k].t-path.knots[k-1].t;
     const int samples=c.min_singular_value==0?24:std::max(4,static_cast<int>(std::ceil(dt/(c.dt/4))));
     for(int i=0;i<=samples;++i) {
+      if(c.cancelled&&c.cancelled()) { error="validation cancelled/deadline exceeded"; return false; }
       Reference ref; const double t=path.knots[k-1].t+dt*i/samples;
       if(!samplePath(m,path,t,ref)||!configurationAllowed(m,ref.eta,ref.desired,c,error))
-        return failed("sample="+std::to_string(i)+": "+error);
+        { error="interval="+std::to_string(k)+" sample="+std::to_string(i)+": "+error; return false; }
       if((ref.body_omega-ref.body.linear().transpose()*ref.desired.rotation*ref.desired.omega).norm()>c.rate_tolerance)
         { error="body angular velocity tracking tolerance exceeded"; return false; }
       if(ref.cog_velocity.norm()>c.cog_speed_limit*.5||ref.cog_acceleration.norm()>c.cog_acceleration_limit*.5)
@@ -226,6 +237,7 @@ bool mechanismReference(const Kinematics& m,const Vec& q,const Vec& v,const Vec&
   r.cog_omega=(wg_p-wg_m)/(2*h); r.cog_angular_acceleration=(wg_p+wg_m)/(h*h);
   r.cog_velocity=(gp.translation()-gm.translation())/(2*h);
   r.cog_acceleration=(gp.translation()+gm.translation()-2*r.cog.translation())/(h*h);
+  r.desired={r.body.linear(),r.body_omega,r.body_acceleration};
   return r.body_omega.allFinite()&&r.body_acceleration.allFinite()&&r.cog_velocity.allFinite()&&
     r.cog_acceleration.allFinite()&&r.cog_omega.allFinite()&&r.cog_angular_acceleration.allFinite();
 }
@@ -264,33 +276,68 @@ void scaleReference(Reference& r,double v,double a)
 bool samplePath(const Kinematics& m,const Path& p,double t,Reference& r)
 {
   Vec q,v,a;
-  if(!coordinates(p,t,q,v,a)||!p.desired||!mechanismReference(m,q,v,a,r)) return false;
-  r.t=std::max(0.0,std::min(t,p.duration())); r.desired=p.desired(r.t);
+  if(!coordinates(p,t,q,v,a)||!mechanismReference(m,q,v,a,r)) return false;
+  r.t=std::max(0.0,std::min(t,p.duration()));
+  if(p.desired) r.desired=p.desired(r.t);
   r.orientation_error=logSO3(r.body.linear().transpose()*r.desired.rotation).norm();
+  return true;
+}
+bool referenceAllowed(const Reference& r,const PlanningConfig& c,std::string& error)
+{
+  if(!poseValid(r.body)||!poseValid(r.cog)||!r.eta.allFinite()||
+     !r.velocity.allFinite()||!r.acceleration.allFinite()||
+     !r.body_omega.allFinite()||!r.body_acceleration.allFinite()||
+     !r.cog_velocity.allFinite()||!r.cog_acceleration.allFinite()||
+     !r.cog_omega.allFinite()||!r.cog_angular_acceleration.allFinite())
+    { error="invalid generated reference"; return false; }
+  if((r.eta.array()<c.limits.lower.array()-1e-9).any()||
+     (r.eta.array()>c.limits.upper.array()+1e-9).any()||
+     (r.velocity.cwiseAbs().array()>c.limits.velocity.array()+1e-9).any()||
+     (r.acceleration.cwiseAbs().array()>c.limits.acceleration.array()+1e-9).any())
+    { error="candidate joint position/rate/acceleration limit"; return false; }
+  if(r.body.linear()(2,2)<std::cos(c.max_tilt)||!fcAttitudeAllowed(r.cog.linear()))
+    { error="candidate body/CoG attitude limit"; return false; }
+  if(r.cog_velocity.norm()>c.cog_speed_limit||r.cog_acceleration.norm()>c.cog_acceleration_limit)
+    { error="candidate CoG speed/acceleration limit"; return false; }
   return true;
 }
 bool mechanismPath(const Kinematics& model,const Reference& from,const Vec& goal,
                    const PlanningConfig& config,Path& path,std::string& error)
 {
-  if(!config.limits.valid()) { error="invalid manual rate bounds"; return false; }
+  path=Path();
+  if(!config.limits.valid()||!from.eta.allFinite()||!from.velocity.allFinite()||!from.acceleration.allFinite())
+    { error="invalid manual state/rate bounds"; return false; }
+  if(!mechanismAllowed(model,goal,config,error)) return false;
   const Vec distance=(goal-from.eta).cwiseAbs();
   double duration=std::max(.1,std::max((2*distance.cwiseQuotient(config.limits.velocity)).maxCoeff(),
     (8*distance.cwiseQuotient(config.limits.acceleration)).array().sqrt().maxCoeff()));
+  // Only scalar polynomial bounds here. No trajectory FK, lambda/model copies,
+  // worker submission, IK or sampled validator on any manual command route.
   for(int attempt=0;attempt<6;++attempt,duration*=1.5) {
     path.knots={{0,from.eta,from.velocity,from.acceleration},{duration,goal,Vec::Zero(),Vec::Zero()}};
+    if(jointBounds(path,config,error)) return cachePathTravel(path);
+  }
+  path=Path(); return false;
+}
+bool validatedMechanismPath(const Kinematics& model,const Reference& from,const Vec& goal,
+                            const PlanningConfig& config,Path& path,std::string& error)
+{
+  if(!mechanismPath(model,from,goal,config,path,error)) return false;
+  // Offline cut-start connections retain full nonlinear validation and time
+  // scaling. Only the automatic executor needs a separate desired closure.
+  for(int attempt=0;attempt<6;++attempt,path.knots.back().t*=1.5) {
+    if(config.cancelled&&config.cancelled()) { error="validation cancelled/deadline exceeded"; break; }
+    if(path.duration()>config.max_duration) { error="connection duration exceeds limit"; break; }
+    if(!validatePath(model,path,config,error)) continue;
     const auto points=path.knots;
     path.desired=[model,points](double t) {
       Path p; p.knots=points; Vec q,v,a; Reference ref;
       if(!coordinates(p,t,q,v,a)||!mechanismReference(model,q,v,a,ref)) {
         Desired bad; bad.rotation.setConstant(std::numeric_limits<double>::quiet_NaN()); return bad;
       }
-      return Desired{ref.body.linear(),ref.body_omega,ref.body_acceleration};
+      return ref.desired;
     };
-    // Manual motion does not depend on IK, a saw model, or planning availability.
-    PlanningConfig manual=config; manual.min_singular_value=0;
-    manual.orientation_tolerance=1e-6; manual.rate_tolerance=1e-5;
-    manual.dt=.1; // bounded sampling plus exact Bernstein joint bounds
-    if(validatePath(model,path,manual,error)) return cachePathTravel(path);
+    return cachePathTravel(path);
   }
   path=Path(); return false;
 }
@@ -362,7 +409,7 @@ const char* stageName(Stage s)
 }
 bool ExecutionConfig::feedbackConfigValid() const
 {
-  for(double x:{timeout,pivot_tolerance,hinge_tolerance}) if(!std::isfinite(x)||x<=0) return false;
+  for(double x:{synchronization_tolerance,timeout,pivot_tolerance,hinge_tolerance}) if(!std::isfinite(x)||x<=0) return false;
   return std::isfinite(future_tolerance)&&future_tolerance>=0&&future_tolerance<timeout;
 }
 bool ExecutionConfig::valid() const
@@ -394,12 +441,23 @@ bool ExecutionConfig::settlingValid() const
   } else if(!std::isfinite(settle_rate)||settle_rate<=0) return false;
   return settle_timeout>settle_time;
 }
+FeedbackStatus feedbackStatus(const Feedback& s,const ExecutionConfig& config,const PlanningConfig& planning)
+{
+  if(!config.feedbackConfigValid()||!planning.mechanismValid()) return FeedbackStatus::FAULT;
+  if(!s.hover||!std::isfinite(s.now)) return FeedbackStatus::FAULT;
+  if(!s.valid) return FeedbackStatus::WAITING;
+  auto fresh=[&](double t){return std::isfinite(t)&&t>0&&s.now-t>=-config.future_tolerance&&s.now-t<=config.timeout;};
+  if(!fresh(s.joint_stamp)||!fresh(s.body_stamp)||
+     std::abs(s.joint_stamp-s.body_stamp)>config.synchronization_tolerance) return FeedbackStatus::WAITING;
+  if(!poseValid(s.body)||!s.eta.allFinite()||!s.joint_rate.allFinite()||!s.body_omega.allFinite()) return FeedbackStatus::FAULT;
+  return FeedbackStatus::READY;
+}
 std::string feedbackRejection(const Feedback& s,const ExecutionConfig& config,const PlanningConfig& planning)
 {
   if(!config.feedbackConfigValid()||!planning.mechanismValid()) return "invalid feedback/mechanism configuration";
   if(!s.hover) return "contact control requires HOVER without forced landing";
-  if(!s.valid) return s.invalid_reason.empty()?"invalid/incoherent feedback":s.invalid_reason;
   if(!std::isfinite(s.now)) return "invalid feedback clock";
+  if(!s.valid) return s.invalid_reason.empty()?"missing/incoherent feedback":s.invalid_reason;
   auto fresh=[&](double t){return std::isfinite(t)&&t>0&&s.now-t>=-config.future_tolerance&&s.now-t<=config.timeout;};
   auto age_reason=[&](const char* source,double stamp) {
     std::ostringstream out; out<<"stale/future "<<source<<" feedback: age="<<s.now-stamp
@@ -407,6 +465,7 @@ std::string feedbackRejection(const Feedback& s,const ExecutionConfig& config,co
   };
   if(!fresh(s.joint_stamp)) return age_reason("joint",s.joint_stamp);
   if(!fresh(s.body_stamp)) return age_reason("body",s.body_stamp);
+  if(std::abs(s.joint_stamp-s.body_stamp)>config.synchronization_tolerance) return "joint/body feedback timestamp skew";
   if(!poseValid(s.body)) return "invalid body pose/rotation";
   if(!s.eta.allFinite()) return "nonfinite joint positions";
   if(!s.joint_rate.allFinite()||!s.body_omega.allFinite()) return "invalid angular-rate feedback";
@@ -494,7 +553,7 @@ bool Executor::command(const std::string& cmd,std::uint64_t id)
   }
   if((cmd=="pause"||cmd=="cancel")&&(stage==Stage::PRE_ALIGN||stage==Stage::EXECUTING))
   { stopping_=true; cancel_=cmd=="cancel"; resetSettling(); reason="decelerating along validated path"; return true; }
-  if(cmd=="resume"&&stage==Stage::PAUSED) {
+  if(cmd=="resume"&&stage==Stage::PAUSED&&!feedback_waiting_) {
     stage=paused_align_?Stage::PRE_ALIGN:Stage::EXECUTING; motion_clock_pending_=true; stopping_=false; lag_since_=0; governor_hold_=false; resetSettling();
     reason=paused_align_?"resuming validated alignment":"resuming validated pitch stroke"; return true;
   }
@@ -524,14 +583,37 @@ void Executor::hold(const std::string& why)
   // Freeze at the applied reference, retaining the contact and lock identity.
   fault(why); first_fault.clear(); stage=Stage::CONTACT_LOCKED;
 }
+void Executor::waitForFeedback(double now,const std::string& why)
+{
+  if(!owns()||stage==Stage::FAULT_HOLD) return;
+  if(stage==Stage::PRE_ALIGN||stage==Stage::EXECUTING) {
+    paused_align_=stage==Stage::PRE_ALIGN;
+    stage=cancel_?Stage::COMPLETED_HOLD:Stage::PAUSED;
+    if(cancel_) plan=Plan();
+  }
+  if(stage==Stage::PLANNING) { plan=Plan(); stage=Stage::CONTACT_LOCKED; }
+  if(applied_valid) target=applied;
+  scaleReference(target,0,0); applied=target;
+  speed_=0; last_time_=now; motion_clock_pending_=true;
+  nominal_progress=progress; lag_since_=0; governor_hold_=false;
+  stopping_=cancel_=false; feedback_waiting_=true; resetSettling();
+  reason="waiting for coherent feedback: "+why;
+}
 void Executor::reset()
-{ stage=Stage::FREE_FLIGHT; ++session; plan=Plan(); first_fault.clear(); reason="perching disabled"; last_time_=0; resetSettling(); }
+{ stage=Stage::FREE_FLIGHT; feedback_waiting_=false; ++session; plan=Plan(); first_fault.clear(); reason="perching disabled"; last_time_=0; resetSettling(); }
 void Executor::resetSettling()
 { stable_since_=ready_since_=settling_stamp_=0; settling=SettlingStatistics(); settling_window_.reset(); }
 void Executor::tick(const Feedback& s)
 {
   if(!owns()) return;
-  if(!feedbackValid(s)) { fault(feedbackRejection(s)); return; }
+  if(!std::isfinite(s.now)||s.now<last_time_) { fault("execution clock moved backwards/invalid"); return; }
+  const auto status=roll_yaw::feedbackStatus(s,config,planning);
+  if(status==FeedbackStatus::WAITING) { waitForFeedback(s.now,feedbackRejection(s)); return; }
+  if(status==FeedbackStatus::FAULT) { fault(feedbackRejection(s)); return; }
+  if(feedback_waiting_) {
+    feedback_waiting_=false; last_time_=s.now; motion_clock_pending_=true;
+    reason="feedback restored; explicit resume required for paused motion";
+  }
   if(!model.estimate(s.body,s.eta,measured)) { fault("passive hinge estimation failed"); return; }
   Vec measured_q=s.eta; measured_q[0]=measured.alpha;
   if((measured_q.array()<planning.limits.lower.array()).any()||

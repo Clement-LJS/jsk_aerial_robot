@@ -183,14 +183,85 @@ TEST(Execution,StaleFeedbackWrongSessionAndDuplicateSettlingSamples)
 {
   Fixture f; double time; auto e=executor(f,f.plan(),time);
   EXPECT_FALSE(e.command("pause",2));
-  auto stale=feedback(e.target,20); stale.body_stamp=19;
-  e.tick(stale); EXPECT_EQ(e.stage,Stage::FAULT_HOLD); EXPECT_NE(e.first_fault.find("stale"),std::string::npos);
+  for(int i=0;i<50;++i) { time+=.01; e.tick(feedback(e.target,time)); }
+  ASSERT_GT(e.target.velocity.norm(),0);
+  const auto held=e.target; const double phase=e.progress;
+  auto stale=feedback(e.target,time+.3); stale.body_stamp=time;
+  e.tick(stale); EXPECT_EQ(e.stage,Stage::PAUSED); EXPECT_TRUE(e.first_fault.empty());
+  EXPECT_TRUE(e.plan.ok); EXPECT_FALSE(e.goal_reached); EXPECT_EQ(e.session,1u);
+  EXPECT_DOUBLE_EQ(e.progress,phase); EXPECT_EQ(e.target.velocity.norm(),0);
+  EXPECT_EQ(e.target.cog_acceleration.norm(),0); EXPECT_EQ(e.target.desired.omega.norm(),0);
+  EXPECT_FALSE(e.command("resume",1));
+  e.tick(feedback(e.target,time+3)); EXPECT_EQ(e.stage,Stage::PAUSED);
+  EXPECT_EQ((e.target.eta-held.eta).norm(),0); EXPECT_DOUBLE_EQ(e.progress,phase);
+  ASSERT_TRUE(e.command("resume",1));
+  e.tick(feedback(e.target,time+3.01)); EXPECT_DOUBLE_EQ(e.progress,phase);
+  e.tick(feedback(e.target,time+3.02)); EXPECT_GT(e.progress,phase);
+  EXPECT_NE(e.stage,Stage::FAULT_HOLD)<<e.reason;
   // Source duplicates should not represent elapsed measured quiet time.
   SettlingWindow window;
   auto first=window.observe(1,{{0,0,0}},{{0,0}},.5,.15);
   EXPECT_FALSE(first.complete);
   auto repeated=window.observe(1,{{0,0,0}},{{0,0}},.5,.15);
   EXPECT_FALSE(repeated.complete);
+}
+TEST(Execution,ObservationWaitCancelAlignmentAndRealFaults)
+{
+  Fixture f; double time; auto e=executor(f,f.plan(),time);
+  auto gap=feedback(e.target,time+.2); gap.valid=false; gap.invalid_reason="rate bootstrap";
+  e.tick(gap); ASSERT_EQ(e.stage,Stage::PAUSED);
+  ASSERT_TRUE(e.command("cancel",1));
+  e.tick(feedback(e.target,time+2)); EXPECT_EQ(e.stage,Stage::COMPLETED_HOLD);
+  EXPECT_FALSE(e.plan.ok); EXPECT_FALSE(e.command("resume",1));
+  for(int cause=0;cause<3;++cause) {
+    auto x=executor(f,f.plan(),time); auto bad=feedback(x.target,time+.01);
+    if(cause==0) bad.body.translation().x()+=.1;
+    if(cause==1) bad.eta[1]=2;
+    if(cause==2) bad.now=time-1;
+    x.tick(bad); EXPECT_EQ(x.stage,Stage::FAULT_HOLD)<<cause;
+    x.tick(feedback(x.target,time+.02)); EXPECT_EQ(x.stage,Stage::FAULT_HOLD);
+  }
+  auto x=executor(f,f.plan(),time,false);
+  x.stage=Stage::PRE_ALIGN; const auto goal=x.plan.goal.pitch_end;
+  auto skew=feedback(x.target,time+.02); skew.joint_stamp-=.06;
+  x.tick(skew); EXPECT_EQ(x.stage,Stage::PAUSED);
+  x.tick(feedback(x.target,time+1)); ASSERT_TRUE(x.command("resume",1));
+  EXPECT_EQ(x.stage,Stage::PRE_ALIGN); EXPECT_EQ(x.plan.goal.pitch_end,goal);
+}
+TEST(Planning,ManualRetargetAppliedDerivativesAndBoundedStop)
+{
+  Fixture f; Reference applied; Path path; std::string reason;
+  ASSERT_TRUE(mechanismReference(f.model,Vec(0,0,-.00076699),Vec::Zero(),Vec::Zero(),applied));
+  Vec goal=applied.eta; goal[2]=-.004257648503988658;
+  ASSERT_TRUE(mechanismPath(f.model,applied,goal,f.config,path,reason))<<reason;
+  EXPECT_FALSE(path.desired); EXPECT_NEAR(path.duration(),1.188998,1e-5);
+  ASSERT_TRUE(samplePath(f.model,path,.025,applied)); EXPECT_LT(applied.eta[2],-.00076699);
+  for(int key=0;key<30;++key) {
+    const int axis=key%3; goal[axis]+=(key%2?-.003:.003);
+    const auto before=applied;
+    ASSERT_TRUE(mechanismPath(f.model,applied,goal,f.config,path,reason))<<key<<": "<<reason;
+    EXPECT_EQ((path.knots.back().eta-goal).norm(),0);
+    ASSERT_TRUE(samplePath(f.model,path,0,applied));
+    EXPECT_LT((applied.velocity-before.velocity).norm(),1e-10);
+    EXPECT_LT((applied.acceleration-before.acceleration).norm(),1e-10);
+    for(int i=1;i<=5;++i) {
+      ASSERT_TRUE(samplePath(f.model,path,i*.025,applied));
+      ASSERT_TRUE(referenceAllowed(applied,f.config,reason))<<reason;
+      EXPECT_LT((applied.desired.omega-applied.body_omega).norm(),1e-12);
+      Pose b,g; ASSERT_TRUE(f.model.evaluate(applied.eta,b,g));
+      EXPECT_LT((b.matrix()-applied.body.matrix()).norm(),1e-12);
+      EXPECT_LT((g.matrix()-applied.cog.matrix()).norm(),1e-12);
+    }
+  }
+  double phase=.125,speed=1;
+  const double braking=.5*std::min((f.config.limits.acceleration.array()/f.config.limits.velocity.array()).minCoeff(),
+    f.config.cog_acceleration_limit/f.config.cog_speed_limit);
+  while(speed>0&&phase<path.duration()) {
+    const double next=std::max(0.,speed-braking*.025);
+    phase+=.5*(speed+next)*.025;
+    ASSERT_TRUE(samplePath(f.model,path,phase,applied)); scaleReference(applied,next,(next-speed)/.025);
+    ASSERT_TRUE(referenceAllowed(applied,f.config,reason))<<reason; speed=next;
+  }
 }
 TEST(Planning,BodyAlignmentThenMeasuredLocalStroke)
 {
@@ -351,6 +422,24 @@ TEST(ActualUrdf,JacobianCogAndOfflinePlan)
     Mat a,b; ASSERT_TRUE(model.jacobian(q,a)); ASSERT_TRUE(model.numericalJacobian(q,b)); EXPECT_LT((a-b).norm(),1e-8);
   }
   PlanningConfig c; c.max_tilt=.9; c.saw_point=Vec(.05918,.00025,.017-.06927); c.saw_point_valid=true;
+  Reference manual; ASSERT_TRUE(mechanismReference(model,Vec(0,0,-.00076699),Vec::Zero(),Vec::Zero(),manual));
+  Path transition; Vec destination=manual.eta; destination[2]=-.004257648503988658;
+  double callback_max=0,sample_max=0;
+  for(int i=0;i<100;++i) {
+    const double began=steadySeconds();
+    ASSERT_TRUE(mechanismPath(model,manual,destination,c,transition,reason))<<reason;
+    callback_max=std::max(callback_max,steadySeconds()-began);
+    Reference next; const double tick=steadySeconds();
+    ASSERT_TRUE(samplePath(model,transition,.025,next)); ASSERT_TRUE(referenceAllowed(next,c,reason))<<reason;
+    sample_max=std::max(sample_max,steadySeconds()-tick);
+  }
+  std::cout<<"Current URDF manual construction max seconds: "<<callback_max<<"; sample/check max: "<<sample_max<<"\n";
+  // Offline connection must still invoke the full validator and cancellation.
+  c.cancelled=[] {return true;};
+  EXPECT_TRUE(mechanismPath(model,manual,destination,c,transition,reason));
+  EXPECT_FALSE(validatedMechanismPath(model,manual,destination,c,transition,reason));
+  c.cancelled={};
+  ASSERT_TRUE(validatedMechanismPath(model,manual,destination,c,transition,reason))<<reason;
   Request r; r.pitch_end=M_PI/18;
   const double start=steadySeconds(); auto plan=prepare(model,Vec::Zero(),Mat::Identity(),r,c);
   ASSERT_TRUE(plan.ok)<<plan.reason; std::cout<<"Current URDF offline prepare wall seconds: "<<steadySeconds()-start<<"\n";

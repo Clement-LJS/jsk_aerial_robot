@@ -62,7 +62,7 @@ private:
   roll_yaw::Vec nominal_=roll_yaw::Vec::Zero(); // independent accepted destinations
   roll_yaw::Path manual_path_;
   double manual_time_=0, manual_phase_=0, manual_speed_=1, manual_wall_=0;
-  bool stop_pending_=false;
+  bool stop_pending_=false, feedback_waiting_=false;
   roll_yaw::SettlingWindow preparation_window_;
   roll_yaw::SettlingStatistics preparation_stats_;
   bool preparation_ready_=false;
@@ -118,7 +118,7 @@ private:
   std::shared_ptr<roll_yaw::ArticulatedDynamics> dynamics_model_;
   roll_yaw::MomentumObserver observer_;
   roll_yaw::PitchAdmittance admittance_;
-  bool dynamics_pending_=false,torque_valid_=false;
+  bool diagnostic_dynamics_=false, dynamics_pending_=false,torque_valid_=false;
   bool last_command_accepted_=false;
   double last_dynamics_stamp_=0,observer_started_=0;
   double dynamics_wall_=0,last_dynamics_=0;
@@ -147,6 +147,8 @@ private:
   double last_diagnostics_=0,navigation_wall_=0;
 
   roll_yaw::Feedback measured_;
+  roll_yaw::Vec joint_bootstrap_=roll_yaw::Vec::Zero();
+  double joint_bootstrap_stamp_=0;
   roll_yaw::Pose cp_=roll_yaw::Pose::Identity();
   roll_yaw::Vec axis_=roll_yaw::Vec::Zero();
   std::string roll_,yaw_,contact_,prefix_,world_,body_frame_;

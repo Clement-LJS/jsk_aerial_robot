@@ -1,3 +1,101 @@
+# Manual navigation and feedback recovery correction (2026-11-06)
+
+The local source and the locally available `be4b999` object confirmed the
+regression: manual admission ran full sampled FK validation while holding the
+same mutex as feedback callbacks and navigation. Manual commands now construct
+two-knot quintics with bounded analytic coefficient checks and endpoint FK only.
+Sampling reuses the generated reference's desired attitude/rates, without a
+per-key articulated-model closure. Full automatic geometry/IK/CoG/feed and
+cut-start connection validation remains in the offline worker. All command
+routes retain independent destinations and one canonical applied reference.
+
+Joint/body candidates are validated before replacing the complete accepted
+sample. Rejections cannot refresh or destroy that sample. Joint finite-difference
+bootstrap uses separate advancing samples, including after a real outage.
+Temporary observation unavailability holds the coherent pose, zeros command
+feedforwards and resets motion/quiet clocks. Manual motion recovers after contact
+and tracking checks; automatic motion retains its goal in PAUSED and requires
+explicit resume. Stop/cancel/disable override waiting movement. Rezero retains
+its measured/frozen-joint checks and timeout and cannot count an outage as
+settling. True geometry/tracking/clock faults remain latched. Emergency holds
+are not evidence of acceleration-continuous physical stopping.
+
+`diagnostic_dynamics` defaults false and gates the diagnostic worker early;
+external-wrench projection, explicit no-cut tare and path admittance remain
+independent. Callback timing now includes mutex wait, validation and diagnostics.
+The 0.15 s feedback timeout, 0.05 s synchronization tolerance, execution-step
+bound, gains, actuator limits, firmware and other perching modes are unchanged.
+
+Verification for this correction:
+
+- Full Release ROS/catkin package configure, compile and link passed using the
+  existing environment and `test/run_roll_yaw_checks.sh` build commands, with
+  build/devel/install paths in a temporary directory. Built controller, robot
+  model, roll-yaw core, navigation and Gazebo plugin libraries. No installation,
+  workspace devel replacement, dependency changes or environment setup occurred.
+- All **19 core tests** passed using the expanded current beetle URDF. Added
+  actual polynomial retarget/derivative/stop checks, bag-7 yaw increment,
+  moving automatic feedback pause/resume without phase catch-up, cancel,
+  alignment pause, timestamp skew and true contact/limit/clock fault checks.
+  Offline alignment, local-pitch preparation, full connection validation,
+  measured completion and admittance tests passed. Manual construction remains
+  available with a cancelled planning hook; the fully validated connection
+  rejects it, verifying the helper separation.
+- All **6 existing interface tests** passed, including real keyboard logic with
+  mocked ROS publication and hardware/simulation launch resolution.
+- All **6 temporary linked-navigator probes** passed with a private loopback ROS
+  master and isolated test publishers. These directly called the compiled
+  navigator callbacks/reference application methods with synthetic measurements
+  and the real expanded URDF. They covered malformed, nonfinite, duplicate,
+  out-of-order and wrong-frame rejection; empty-velocity bootstrap after a gap;
+  the bag-7 command advancing; held controller targets and manual recovery with
+  unchanged session/no catch-up; stop/disable; long loss without motion; real
+  pivot/clock faults; skew and pending preparation cancellation; legacy vector
+  and passive-pitch inputs; rezero timeout; and disabled diagnostic scheduling.
+  Separate threads exercised 50 Hz joint/body feedback and repeated axis commands
+  under the navigation mutex. A delayed offline worker did not block commands.
+- Final run: actual manual callback maximum **0.290 ms**, including admission,
+  mutex wait and diagnostics; concurrent-command maximum **0.184 ms** across
+  41 feedback samples. Reference application plus diagnostics maximum **0.0184
+  ms** in that probe. Real-URDF helper maxima were **0.0202 ms** construction and
+  **0.0290 ms** sampling/checking. These are host measurements, not target-CPU
+  real-time guarantees. The inherited legacy callback's outer mutex wait is
+  outside the derived pitch handler's timer; keyboard axis/vector callbacks and
+  `uav/nav` start timing before their mutex acquisition.
+- Source call-site audit confirms full sampled validation is reachable only
+  through offline `prepare`/`validatedMechanismPath`, never ordinary manual
+  admission or control updates. Timeout/synchronization/step limits, publishers,
+  keyboard/topics, firmware, allocator, gains and other perching architectures
+  were preserved. No QP or calibration acknowledgement interface was added.
+  `git diff --check` passed. Temporary probes, binaries, URDF, logs and build
+  outputs were removed after verification; the private test master was stopped.
+
+The supplied bag diagnosis was checked against local source and the historical
+Git object; bags were not replayed or independently reanalysed. The probes do not
+run the full flight-controller/main-loop process, sensor transport/spinner,
+physical articulated-CoG drift, Gazebo physics, hardware, flight or cutting.
+Controller input setters were exercised and coherent held position/velocity/
+acceleration checked; downstream actuator behavior and real hardware timing
+remain unverified. No commit, push, branch change or remote access was performed.
+
+Files changed for this correction:
+
+| File | Change and purpose |
+| --- | --- |
+| `src/gimbalrotor_roll_yaw_perching_navigation.cpp` | Candidate feedback caches, bounded manual sampling, observation hold/recovery, offline connection call, diagnostic opt-in and complete callback timing remove starvation and permanent timing faults. |
+| `include/gimbalrotor/gimbalrotor_roll_yaw_perching_navigation.h` | Minimal wait/bootstrap/diagnostic state supports those local behaviors. |
+| `src/roll_yaw_cutting_trajectory.cpp` | Separate analytic manual construction from full offline validation, share generated FK derivatives, validate candidates and pause/rebase the automatic executor on observation loss. |
+| `include/gimbalrotor/roll_yaw_cutting_trajectory.h` | Declare split helpers and typed feedback status shared by navigator/executor. |
+| `config/beetle/RollYawPerching.yaml` | Default-disable diagnostic dynamics without changing feedback or motion limits. |
+| `test/roll_yaw_core_test.cpp` | Extend existing regressions to cover manual retargeting, automatic recovery and real faults. |
+| `scripts/README.md` | Describe actual manual checks, waiting/recovery, explicit automatic resume and diagnostic default. |
+| `test/ROLL_YAW_IMPLEMENTATION.md` | Record this correction's verification and remaining runtime limitations. |
+
+The following older audit describes its own historical run; its counts and build
+restrictions are not the results of this correction.
+
+---
+
 # Coordinated local-pitch cutting: local implementation audit
 
 Current workflow correction: predictive thrust assessment/readiness and its opt-in
@@ -50,8 +148,8 @@ on hardware, not evidence of motor capabilities.
    lifecycle. HOVER, coherent timestamped pose/joints, bounded mechanism state,
    pivot/hinge residuals, and articulated-CoG consistency protect the outputs.
 2. Keyboard and mechanism-topic targets retain independent nominal destinations.
-   A non-IK C2 mechanism transition respects joint bounds and sampled body/CoG
-   limits. Its applied configuration produces all body/CoG derivatives and the
+   A non-IK C2 mechanism transition uses analytic whole-interval joint bounds,
+   endpoint FK/attitude rejection, and per-update body/CoG and rate checks. Its applied configuration produces all body/CoG derivatives and the
    active-joint commands. Rezero, final relock, hold, and key signs are retained.
 3. Separate numeric body topics request `N Rz(yaw) Rx(roll) Ry(beta)`, with N the
    current lock's measured body orientation. Values are absolute intrinsic Z-X-Y

@@ -98,6 +98,7 @@ navigation:
     cog_speed_limit: 0.1
     cog_acceleration_limit: 0.2
     min_singular_value: 0.05
+    diagnostic_dynamics: false # Optional articulated observer; independent of path admittance.
     feedback_timeout: 0.15
     future_tolerance: 0.02
     feedback_sync_tolerance: 0.05

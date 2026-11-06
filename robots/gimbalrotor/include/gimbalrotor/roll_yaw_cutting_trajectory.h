@@ -90,6 +90,9 @@ bool samplePath(const Kinematics&,const Path&,double time,Reference&);
 // Shared mechanism validation and articulated FK.
 bool mechanismAllowed(const Kinematics&,const Vec&,const PlanningConfig&,std::string&);
 bool mechanismReference(const Kinematics&,const Vec&,const Vec&,const Vec&,Reference&);
+bool referenceAllowed(const Reference&,const PlanningConfig&,std::string&);
+// Cheap manual construction; automatic connections must use the validated helper.
+bool validatedMechanismPath(const Kinematics&,const Reference&,const Vec&,const PlanningConfig&,Path&,std::string&);
 bool mechanismPath(const Kinematics&,const Reference&,const Vec&,const PlanningConfig&,Path&,std::string&);
 bool inverseOrientation(const Kinematics&,const Mat&,const Vec& seed,const PlanningConfig&,Vec&,std::string&);
 Plan prepare(const Kinematics&,const Vec& initial,const Mat& neutral,const Request&,const PlanningConfig&);
@@ -106,6 +109,7 @@ struct Feedback
 };
 struct ExecutionConfig
 {
+  double synchronization_tolerance=.05;
   double timeout=.15, future_tolerance=.02, pivot_tolerance=.01, hinge_tolerance=.03;
   double tracking_tolerance=.04, orientation_tolerance=.04, settle_rate=.01, settle_time=.5, settle_timeout=10;
   bool settle_use_window=false;
@@ -121,6 +125,8 @@ struct ExecutionConfig
   bool settlingValid() const;
   bool valid() const;
 };
+enum class FeedbackStatus { READY, WAITING, FAULT };
+FeedbackStatus feedbackStatus(const Feedback&,const ExecutionConfig&,const PlanningConfig&);
 // Shared onboard feedback validation; manual navigation does not instantiate an executor.
 std::string feedbackRejection(const Feedback&,const ExecutionConfig&,const PlanningConfig&);
 class Executor
@@ -156,6 +162,7 @@ public:
   bool submissionMatches(const Plan&,const Feedback&,const Reference&) const;
   bool command(const std::string&,std::uint64_t);
   void tick(const Feedback&);
+  void waitForFeedback(double now,const std::string&);
   void fault(const std::string&);
   void reset();
   void hold(const std::string&);
@@ -164,7 +171,7 @@ private:
   SettlingWindow settling_window_;
   double last_time_=0, stable_since_=0, ready_since_=0, speed_=1;
   double lag_since_=0,settling_stamp_=0;
-  bool governor_hold_=false;
+  bool governor_hold_=false, feedback_waiting_=false;
   bool stopping_=false, cancel_=false, paused_align_=false, motion_clock_pending_=false;
 };
 }

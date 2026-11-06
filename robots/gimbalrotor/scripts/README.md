@@ -84,10 +84,15 @@ sending, so reversing a key at a limit immediately changes the destination.
 
 Accepted destinations now use a bounded C2 mechanism interpolation from the
 applied reference. Its joint position/speed/acceleration bounds cover whole
-polynomial intervals; body/CoG limits are sampled along it. All axes share FK.
+polynomial intervals using analytic Bernstein bounds. Each key performs an
+endpoint FK/attitude check; it does not sample a whole path or submit planning
+work. Each update samples only the next reference, checks joint, attitude and CoG
+rate/acceleration limits before publication, and shares that FK between body,
+CoG and both servos. Automatic alignment and cut preparation (including the
+cut-start connection) retain full sampled validation in the offline worker.
 The navigator rejects a transition that cannot satisfy those bounds. Small steps
 remain available without offline IK, a saw proxy, thrust assessment, or admittance.
-Physical movement still obeys acceleration limits when reversing a moving joint.
+Reference motion retains acceleration limits when reversing a moving joint; physical tracking must still be verified.
 
 ```bash
 # Absolute servo yaw and passive alpha, radians (not body yaw/pitch):
@@ -180,8 +185,23 @@ current `/session` value. The script reads that ID as an integer and checks the
 acknowledgement. `pause` decelerates on the existing path; `resume` continues it.
 `stop`/`cancel` and Space brake on the same scalar path for body, CoG and joints,
 then discard the plan and report `stop complete`. An already-held stop completes
-immediately. They do not command zero thrust or zero joint angles. A fault requires resolving
-the cause and recapturing contact. A lock change, accepted manual target, or
+immediately. They do not command zero thrust or zero joint angles.
+
+Temporary missing/stale feedback, derivative bootstrap and body/joint timestamp
+skew hold the last coherent reference with all command derivatives zero. Rejected
+packets retain the accepted measurement and its original timestamp; empty joint
+velocity arrays require two advancing fresh samples. The timeout remains 0.15 s
+and synchronization tolerance 0.05 s. Manual destinations and contact identity
+survive this wait: coherent contact/tracking checks precede a fresh bounded
+transition from the held reference, without catching up elapsed outage time.
+Stop/cancel/disable override pending movement. Moving automatic paths enter
+`PAUSED`, retain the original goal, and require explicit `resume` after fresh
+quiet/contact checks. Pending preparation is cancelled if its coherent start is
+lost; READY still requires its original measured-start checks. Rezero never
+counts the gap as settling and retains its original timeout. An observation
+hold zeros feedforwards immediately; it is not an acceleration-continuous physical
+stop. Actual geometry, hard tracking, bounds and clock faults remain latched.
+A fault requires resolving the cause and recapturing contact. A lock change, accepted manual target, or
 movement beyond `goal_tolerance` from measured READY (or loss of cut-start
 geometry consistency) invalidates the cut. Manual takeover during automatic
 motion first brakes: wait for stop complete and retry the key/target. Independent
@@ -203,7 +223,10 @@ is wrench ON the robot: `wrench_scale: 1`, `wrench_sign: +1`. These conventions
 are not physical calibration. This momentum observer uses model mass/inertia
 and commanded input; perch reaction, model error and actuator error contaminate
 it. `command_wrench_estimate`, pivot reaction alone and tracking error are not
-isolated saw-force inputs. The articulated observer remains diagnostic only.
+isolated saw-force inputs. The articulated observer remains diagnostic only and is not scheduled by default.
+Set `navigation/roll_yaw_perching/diagnostic_dynamics: true` only to opt in to
+that workload. This setting does not disable the built-in external-wrench
+estimator or affect path admittance.
 
 The built-in source defaults are `external_wrench_topic: estimated_external_wrench`,
 `wrench_frame: world`, `wrench_point: cog`, `wrench_sign: 1.0`, and
@@ -285,7 +308,10 @@ The default lead/soft/hard hierarchy remains 0.018 / 0.024 / 0.04 rad. At the
 single-joint travel and 0.00875 rad summed body-rotation bound, below the
 0.016 rad soft-to-hard margin. The governor additionally reserves discrete
 braking distance. `manual_callback_wall_s` and `navigation_wall_s` report observed
-costs; source checks and standalone timing do not establish real-time guarantees.
+costs, including mutex wait for manual callbacks and updates. Callback timing
+covers admission, construction and diagnostics; it is published on the next
+diagnostics cycle. Source checks and standalone timing do not establish
+real-time guarantees.
 
 The legacy full-vector `target` interface still takes wire order [roll, alpha,
 yaw] and `header.frame_id=perching_lock_<session>`. Legacy `manual_pitch_delta`
