@@ -87,6 +87,7 @@ install(DIRECTORY config plugins launch
 
 catkin_install_python(PROGRAMS scripts/keyboard_command/keyboard_roll_yaw_perching.py
   scripts/keyboard_command/roll_yaw_command.py
+  scripts/tasks/auto_roll_yaw_body_pitch_experiment.py
   scripts/visualization/module_cog_viewer.py
   scripts/visualization/cog_markers.py
   scripts/urdf/urdf_inertia_markers.py
