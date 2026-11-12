@@ -21,6 +21,10 @@
   <arg name="robot_id" default="" />
   <arg name="robot_ns" value="gimbalrotor$(arg robot_id)" />
   <arg name="airframe" default="quad" />
+  <!-- Motion routes remain mechanism-specific: pitch-only adjusts reach, then
+       freezes the servo for passive feed; multilink feeds active pitch with a
+       separate passive rezero; roll-yaw uses passive alpha or body-local pitch.
+       Sharing geometry does not provide an absent active pitch joint. -->
   <arg name="multilink_perching" default="false" />
   <arg name="pitch_only_perching" default="false" />
   <arg name="roll_yaw_perching" default="false" />

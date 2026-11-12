@@ -55,6 +55,10 @@ protected:
 
 private:
   void perchingRosParamInit();
+  void updatePitchIntegralPolicy(PID& pitch_pid, bool suppress_pitch_i_limit);
+  // Called with perching_state_mutex_ held, once per received wrench sequence.
+  void publishPivotWrench(const tf::Vector3& pivot_world, const Eigen::Matrix3d& R_world_constraint,
+                         const ros::Time& stamp, const Eigen::Matrix<double, 6, 1>& wrench);
 
   void normalAdmittanceEnableCallback(
       const std_msgs::Bool::ConstPtr& msg);

@@ -84,8 +84,8 @@ Files changed for this correction:
 | --- | --- |
 | `src/gimbalrotor_roll_yaw_perching_navigation.cpp` | Candidate feedback caches, bounded manual sampling, observation hold/recovery, offline connection call, diagnostic opt-in and complete callback timing remove starvation and permanent timing faults. |
 | `include/gimbalrotor/gimbalrotor_roll_yaw_perching_navigation.h` | Minimal wait/bootstrap/diagnostic state supports those local behaviors. |
-| `src/roll_yaw_cutting_trajectory.cpp` | Separate analytic manual construction from full offline validation, share generated FK derivatives, validate candidates and pause/rebase the automatic executor on observation loss. |
-| `include/gimbalrotor/roll_yaw_cutting_trajectory.h` | Declare split helpers and typed feedback status shared by navigator/executor. |
+| `src/perching_trajectory.cpp` | Separate analytic manual construction from full offline validation, share generated FK derivatives, validate candidates and pause/rebase the automatic executor on observation loss. |
+| `include/gimbalrotor/perching_trajectory.h` | Declare split helpers and typed feedback status shared by navigator/executor. |
 | `config/beetle/RollYawPerching.yaml` | Default-disable diagnostic dynamics without changing feedback or motion limits. |
 | `test/roll_yaw_core_test.cpp` | Extend existing regressions to cover manual retargeting, automatic recovery and real faults. |
 | `scripts/README.md` | Describe actual manual checks, waiting/recovery, explicit automatic resume and diagnostic default. |
@@ -261,15 +261,15 @@ Modified:
 - `config/beetle/RollYawPerching.yaml`
 - `config/beetle/RollYawPerching_sim.yaml`
 - `include/gimbalrotor/gimbalrotor_roll_yaw_perching_navigation.h`
-- `include/gimbalrotor/roll_yaw_cutting_trajectory.h`
+- `include/gimbalrotor/perching_trajectory.h`
 - `launch/bringup.launch`
 - `launch/roll_yaw_perching.launch`
 - `scripts/README.md`
 - `scripts/keyboard_command/keyboard_roll_yaw_perching.py`
 - `scripts/keyboard_command/roll_yaw_command.py`
 - `src/gimbalrotor_roll_yaw_perching_navigation.cpp`
-- `src/roll_yaw_admittance.cpp`
-- `src/roll_yaw_cutting_trajectory.cpp`
+- `src/control/perching_admittance.cpp`
+- `src/perching_trajectory.cpp`
 - `test/ROLL_YAW_IMPLEMENTATION.md`
 - `test/roll_yaw_core_test.cpp`
 - `test/test_roll_yaw_interfaces.py`

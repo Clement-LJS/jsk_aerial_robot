@@ -1,6 +1,6 @@
 #include <gtest/gtest.h>
-#include <gimbalrotor/roll_yaw_admittance.h>
-#include <gimbalrotor/roll_yaw_dynamics.h>
+#include <gimbalrotor/control/perching_admittance.h>
+#include <gimbalrotor/perching_dynamics.h>
 #include <gimbalrotor/roll_yaw_worker.h>
 #include <kdl_parser/kdl_parser.hpp>
 #include <kdl/treefksolverpos_recursive.hpp>

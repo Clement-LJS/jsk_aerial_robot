@@ -51,17 +51,17 @@ add_library(gimbalrotor_controller
   src/control/gimbalrotor_controller.cpp
   src/control/gimbalrotor_admittance_controller.cpp
   src/control/gimbalrotor_perching_admittance_controller.cpp)
-target_link_libraries(gimbalrotor_controller ${catkin_LIBRARIES})
+target_link_libraries(gimbalrotor_controller roll_yaw_perching_core ${catkin_LIBRARIES})
 
 add_library(gimbalrotor_robot_model
   src/model/gimbalrotor_robot_model.cpp)
 target_link_libraries(gimbalrotor_robot_model ${catkin_LIBRARIES})
 
 add_library(roll_yaw_perching_core
-  src/roll_yaw_perching_kinematics.cpp
-  src/roll_yaw_cutting_trajectory.cpp
-  src/roll_yaw_dynamics.cpp
-  src/roll_yaw_admittance.cpp)
+  src/perching_geometry.cpp
+  src/perching_trajectory.cpp
+  src/perching_dynamics.cpp
+  src/control/perching_admittance.cpp)
 target_link_libraries(roll_yaw_perching_core ${catkin_LIBRARIES})
 
 add_library(gimbalrotor_navigation

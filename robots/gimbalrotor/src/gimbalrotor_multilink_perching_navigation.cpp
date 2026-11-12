@@ -741,16 +741,8 @@ bool GimbalrotorMultilinkPerchingNavigator::computeBaselinkToCogVector(
     if(frame_it == frames.end() || !frameFinite(frame_it->second))
       return false;
 
-    total_inertia = total_inertia + frame_it->second * inertia.second;
-    for(const auto& extra : robot_model_->getExtraModuleMap())
-    {
-      if(extra.second.getName() == inertia.first)
-      {
-        total_inertia = total_inertia +
-            frame_it->second *
-            (extra.second.getFrameToTip() * extra.second.getInertia());
-      }
-    }
+    perching_geometry::accumulateLinkInertia(
+        total_inertia, frame_it->second, inertia.first, inertia.second, robot_model_->getExtraModuleMap());
   }
 
   if(!std::isfinite(total_inertia.getMass()) ||

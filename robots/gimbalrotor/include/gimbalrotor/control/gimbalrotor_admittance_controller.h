@@ -40,6 +40,8 @@ public:
 protected:
   virtual void rosParamInit() override;
   virtual void controlCore() override;
+  void updateAdmittance();
+  void resetExternalWrench();
   void publishAdmittanceStateIfChanged(bool force = false);
 
   /*

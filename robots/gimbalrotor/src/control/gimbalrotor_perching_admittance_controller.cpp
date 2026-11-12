@@ -1,4 +1,5 @@
 #include <gimbalrotor/control/gimbalrotor_perching_admittance_controller.h>
+#include <gimbalrotor/perching_dynamics.h>
 
 #include <pluginlib/class_list_macros.h>
 
@@ -1015,19 +1016,13 @@ preparePerchingAdmittanceInput()
   const Eigen::Vector3d force_world = wrench_cog_world.head<3>();
   const Eigen::Vector3d torque_cog_world = wrench_cog_world.tail<3>();
   const Eigen::Vector3d torque_pivot_world =
-      torque_cog_world +
-      (cog_pos_world - pivot_pos_world).cross(force_world);
+      perching_dynamics::shiftMoment(torque_cog_world, cog_pos_world - pivot_pos_world, force_world);
 
   Eigen::Matrix<double, 6, 1> wrench_pivot_world = wrench_cog_world;
   wrench_pivot_world.tail<3>() = torque_pivot_world;
 
-  Eigen::Matrix<double, 6, 1> wrench_pivot_frame;
-  wrench_pivot_frame.head<3>() =
-      R_world_constraint.transpose() *
-      wrench_pivot_world.head<3>();
-  wrench_pivot_frame.tail<3>() =
-      R_world_constraint.transpose() *
-      wrench_pivot_world.tail<3>();
+  const Eigen::Matrix<double, 6, 1> wrench_pivot_frame =
+      perching_dynamics::rotateWrench(R_world_constraint.transpose(), wrench_pivot_world);
 
   if(!torque_pivot_world.allFinite() ||
      !wrench_pivot_world.allFinite() ||
@@ -1073,21 +1068,7 @@ preparePerchingAdmittanceInput()
       /*
       * Publish exactly once for each received estimated_external_wrench sample.
        */
-      publishPivotWrenchFrame(pivot_world_tf, R_world_constraint, measurement_stamp);
-
-      geometry_msgs::WrenchStamped pivot_wrench_msg;
-
-      pivot_wrench_msg.header.stamp = measurement_stamp;
-
-      pivot_wrench_msg.header.frame_id = perching_pivot_wrench_frame_id_;
-
-      pivot_wrench_msg.wrench.force.x = wrench_pivot_frame(0);
-      pivot_wrench_msg.wrench.force.y = wrench_pivot_frame(1);
-      pivot_wrench_msg.wrench.force.z = wrench_pivot_frame(2);
-      pivot_wrench_msg.wrench.torque.x = wrench_pivot_frame(3);
-      pivot_wrench_msg.wrench.torque.y = wrench_pivot_frame(4);
-      pivot_wrench_msg.wrench.torque.z = wrench_pivot_frame(5);
-      pivot_external_wrench_est_pub_.publish(pivot_wrench_msg);
+      publishPivotWrench(pivot_world_tf, R_world_constraint, measurement_stamp, wrench_pivot_frame);
 
       last_published_pivot_wrench_sequence_ = wrench_sequence;
     }
@@ -1455,57 +1436,7 @@ void GimbalrotorPerchingAdmittanceController::controlCore()
   }
 
   PID& pitch_pid = pid_controllers_.at(PITCH);
-
-  if(suppress_pitch_i_limit)
-  {
-    /*
-     * This runs once when perching admittance becomes enabled.
-     */
-    if(!pitch_i_limit_suppressed_)
-    {
-      /*
-       * Save the current normal limit before changing it.
-       *
-       * Normally this is the YAML value 10.0.
-       */
-      normal_pitch_i_limit_ = pitch_pid.getLimitI();
-
-      pitch_i_limit_suppressed_ = true;
-
-      ROS_WARN(
-          "[GimbalrotorPerchingAdmittanceController] "
-          "Perching admittance enabled: pitch limit_i changed from %.6f to 0.0.",
-          normal_pitch_i_limit_);
-    }
-
-    /*
-     * Force the integral output limit to zero.
-     */
-    pitch_pid.setLimitI(0.0);
-
-    /*
-     * limit_i = 0 only forces the resulting I term to zero.
-     * The stored integral error would otherwise continue
-     * accumulating, so clear it before PID::update().
-     */
-    pitch_pid.setErrI(0.0);
-  }
-  else if(pitch_i_limit_suppressed_)
-  {
-    /*
-     * Perching admittance was disabled.
-     *
-     * Restore the normal limit and restart the integrator from zero.
-     */
-    pitch_pid.setErrI(0.0);
-    pitch_pid.setLimitI(normal_pitch_i_limit_);
-    pitch_i_limit_suppressed_ = false;
-
-    ROS_WARN(
-        "[GimbalrotorPerchingAdmittanceController] "
-        "Perching admittance disabled: pitch limit_i restored to %.6f.",
-        normal_pitch_i_limit_);
-  }
+  updatePitchIntegralPolicy(pitch_pid, suppress_pitch_i_limit);
 
   /*
    * This assignment remains in the main control thread.
@@ -1575,6 +1506,60 @@ void GimbalrotorPerchingAdmittanceController::controlCore()
   }
 
   publishContactAdmittanceDiagnostics();
+}
+
+void GimbalrotorPerchingAdmittanceController::updatePitchIntegralPolicy(PID& pitch_pid, bool suppress_pitch_i_limit)
+{
+  if(suppress_pitch_i_limit)
+  {
+    /*
+     * This runs once when perching admittance becomes enabled.
+     */
+    if(!pitch_i_limit_suppressed_)
+    {
+      /*
+       * Save the current normal limit before changing it.
+       *
+       * Normally this is the YAML value 10.0.
+       */
+      normal_pitch_i_limit_ = pitch_pid.getLimitI();
+
+      pitch_i_limit_suppressed_ = true;
+
+      ROS_WARN(
+          "[GimbalrotorPerchingAdmittanceController] "
+          "Perching admittance enabled: pitch limit_i changed from %.6f to 0.0.",
+          normal_pitch_i_limit_);
+    }
+
+    /*
+     * Force the integral output limit to zero.
+     */
+    pitch_pid.setLimitI(0.0);
+
+    /*
+     * limit_i = 0 only forces the resulting I term to zero.
+     * The stored integral error would otherwise continue
+     * accumulating, so clear it before PID::update().
+     */
+    pitch_pid.setErrI(0.0);
+  }
+  else if(pitch_i_limit_suppressed_)
+  {
+    /*
+     * Perching admittance was disabled.
+     *
+     * Restore the normal limit and restart the integrator from zero.
+     */
+    pitch_pid.setErrI(0.0);
+    pitch_pid.setLimitI(normal_pitch_i_limit_);
+    pitch_i_limit_suppressed_ = false;
+
+    ROS_WARN(
+        "[GimbalrotorPerchingAdmittanceController] "
+        "Perching admittance disabled: pitch limit_i restored to %.6f.",
+        normal_pitch_i_limit_);
+  }
 }
 
 void GimbalrotorPerchingAdmittanceController::resetPerchingLockUnsafe()
@@ -2406,6 +2391,28 @@ applyAdmittanceOutputToNavigator(
    */
   navigator_->setTargetPos(modified_target_pos);
   navigator_->setTargetRPY(modified_target_rpy);
+}
+
+void GimbalrotorPerchingAdmittanceController::publishPivotWrench(const tf::Vector3& pivot_world_tf,
+                                                                 const Eigen::Matrix3d& R_world_constraint,
+                                                                 const ros::Time& measurement_stamp,
+                                                                 const Eigen::Matrix<double, 6, 1>& wrench_pivot_frame)
+{
+  publishPivotWrenchFrame(pivot_world_tf, R_world_constraint, measurement_stamp);
+
+  geometry_msgs::WrenchStamped pivot_wrench_msg;
+
+  pivot_wrench_msg.header.stamp = measurement_stamp;
+
+  pivot_wrench_msg.header.frame_id = perching_pivot_wrench_frame_id_;
+
+  pivot_wrench_msg.wrench.force.x = wrench_pivot_frame(0);
+  pivot_wrench_msg.wrench.force.y = wrench_pivot_frame(1);
+  pivot_wrench_msg.wrench.force.z = wrench_pivot_frame(2);
+  pivot_wrench_msg.wrench.torque.x = wrench_pivot_frame(3);
+  pivot_wrench_msg.wrench.torque.y = wrench_pivot_frame(4);
+  pivot_wrench_msg.wrench.torque.z = wrench_pivot_frame(5);
+  pivot_external_wrench_est_pub_.publish(pivot_wrench_msg);
 }
 
 void GimbalrotorPerchingAdmittanceController::publishPivotWrenchFrame(

@@ -684,10 +684,7 @@ bool GimbalrotorPerchingNavigator::applyPerchingConstraint(aerial_robot_msgs::Fl
           msg.roll_nav_mode == NAV_MODE_POS ? msg.target_roll : reference_locked_rpy_.x(),
           msg.target_pitch,
           msg.yaw_nav_mode == NAV_MODE_POS ? msg.target_yaw : reference_locked_rpy_.z());
-      const tf::Matrix3x3 relative(geometry_.orientation.inverse() * desired);
-      const double angle = std::atan2(relative[0][2] - relative[2][0],
-                                     relative[0][0] + relative[2][2]);
-      if(!geometry_.target(angle / arc_pitch_sign_, max_pitch_delta_, arc_pitch_sign_, pose)) return false;
+      if(!geometry_.targetOrientation(desired, max_pitch_delta_, arc_pitch_sign_, pose)) return false;
     }
     active_pitch_delta_ = pose.delta;
     applyAxialCompliance(pose);

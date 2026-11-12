@@ -1,4 +1,5 @@
 #include <gimbalrotor/control/gimbalrotor_admittance_controller.h>
+#include <gimbalrotor/perching_dynamics.h>
 
 #include <pluginlib/class_list_macros.h>
 
@@ -61,18 +62,7 @@ void GimbalrotorAdmittanceController::initialize(
    *
    * A callback must never be able to write a valid sample and then have initialize() overwrite it with an empty state.
    */
-  {
-    std::lock_guard<std::mutex> lock(external_wrench_mutex_);
-
-    raw_external_wrench_.setZero();
-
-    last_external_wrench_receive_time_ = ros::Time(0);
-    external_wrench_measurement_stamp_ = ros::Time(0);
-    external_wrench_receive_stamp_ = ros::Time(0);
-
-    external_wrench_sequence_ = 0;
-    has_external_wrench_ = false;
-  }
+  resetExternalWrench();
 
   prev_admittance_time_ = ros::Time::now();
 
@@ -111,25 +101,27 @@ void GimbalrotorAdmittanceController::initialize(
   publishAdmittanceStateIfChanged(true);
 }
 
+void GimbalrotorAdmittanceController::resetExternalWrench()
+{
+  std::lock_guard<std::mutex> lock(external_wrench_mutex_);
+
+  raw_external_wrench_.setZero();
+
+  last_external_wrench_receive_time_ = ros::Time(0);
+  external_wrench_measurement_stamp_ = ros::Time(0);
+  external_wrench_receive_stamp_ = ros::Time(0);
+
+  external_wrench_sequence_ = 0;
+  has_external_wrench_ = false;
+}
+
 void GimbalrotorAdmittanceController::reset()
 {
   GimbalrotorController::reset();
 
   admittance_enabled_ = false;
 
-  {
-    std::lock_guard<std::mutex> lock(external_wrench_mutex_);
-
-    raw_external_wrench_.setZero();
-
-    last_external_wrench_receive_time_ = ros::Time(0);
-    external_wrench_measurement_stamp_ = ros::Time(0);
-    external_wrench_receive_stamp_ = ros::Time(0);
-
-    external_wrench_sequence_ = 0;
-
-    has_external_wrench_ = false;
-  }
+  resetExternalWrench();
 
   admittance_core_.reset();
 
@@ -511,7 +503,7 @@ void GimbalrotorAdmittanceController::rosParamInit()
                   << admittance_config_.rot_enable(2));
 }
 
-void GimbalrotorAdmittanceController::controlCore()
+void GimbalrotorAdmittanceController::updateAdmittance()
 {
   const ros::Time now = ros::Time::now();
   const double dt = (now - prev_admittance_time_).toSec();
@@ -524,6 +516,11 @@ void GimbalrotorAdmittanceController::controlCore()
   input.enabled = admittance_enabled_;
 
   admittance_output_ = admittance_core_.update(input);
+}
+
+void GimbalrotorAdmittanceController::controlCore()
+{
+  updateAdmittance();
 
   /*
    * Important architecture:
@@ -692,12 +689,7 @@ GimbalrotorAdmittanceController::transformExternalWrenchToWorld(const Eigen::Mat
 
     tf::matrixTFToEigen(R_world_cog_tf, R_world_cog);
 
-    Eigen::Matrix<double, 6, 1> wrench_world;
-
-    wrench_world.head<3>() = R_world_cog * raw_wrench.head<3>();
-    wrench_world.tail<3>() = R_world_cog * raw_wrench.tail<3>();
-
-    return wrench_world;
+    return perching_dynamics::rotateWrench(R_world_cog, raw_wrench);
   }
 
   ROS_WARN_THROTTLE(
