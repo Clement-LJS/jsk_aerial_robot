@@ -26,6 +26,7 @@ navigation:
     goal_tolerance: 0.0087
     progress_timeout: 30.0
     admittance:
+      source: legacy_wrench # or articulated_momentum; selected at startup/disarmed READY tare
       # Built-in observer software convention: wrench ON robot, world force/moment
       # about CoG in N and N.m; not a physically calibrated cutting-force measurement.
       # Command_wrench_estimate is never used as external cutting resistance.
@@ -51,6 +52,16 @@ navigation:
       on_dwell: 0.1
       off_dwell: 0.2
       baseline_samples: 80
+    dynamics:
+      observer_gain: 10.0 # positive, inverse seconds; only articulated_momentum uses this
+      # Hardware load is raw motor current scaled by ServoBridge, NOT verified Nm.
+      # Set joint_side_actuation_nm only with a validated producer of fresh joint-side
+      # actuation torque in URDF signs (e.g. verified simulator joint_states effort).
+      # No sign/scale conversion is applied here. Never use joints_ctrl.position.
+      joint_effort_contract: unavailable
+      # First adapter requires ALL other model joints measured and frozen at lock:
+      # <=1e-4 rad position drift, <=1e-3 rad/s. Moving gimbals make it unavailable.
+      # Rotor spin momentum is omitted. A fault clears tare and requires disarm/retare.
     # Explicit setup: keyboard e -> z -> measured ready-HOLD -> b -> navigate.
     # Rezero uses only the configured passive hinge, with measured active joints frozen.
     pitch_rezero_target_pitch: 0.0

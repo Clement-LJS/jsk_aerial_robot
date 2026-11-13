@@ -3,6 +3,8 @@
 
 #include <gimbalrotor/gimbalrotor_navigation.h>
 #include <gimbalrotor/gimbalrotor_perching.h>
+#include <gimbalrotor/model/gimbalrotor_multilink_perching_model.h>
+#include <gimbalrotor/control/gimbalrotor_multilink_perching_observer.h>
 #include <cmath>
 #include <mutex>
 #include <string>
@@ -563,6 +565,34 @@ private:
   Eigen::Matrix3d neutral_ = Eigen::Matrix3d::Identity();
 
   roll_yaw::PitchAdmittance admittance_;
+  // Source is selected at startup or a disarmed READY tare, never mid-motion.
+  enum class InteractionSource { LEGACY_WRENCH, ARTICULATED_MOMENTUM, INVALID };
+  InteractionSource interaction_source_ = InteractionSource::LEGACY_WRENCH;
+  std::string interaction_source_name_ = "legacy_wrench", effort_contract_ = "unavailable";
+  double observer_gain_ = 10;
+  perching_dynamics::MultilinkModel articulated_model_;
+  perching_dynamics::MomentumObserver momentum_observer_;
+  bool articulated_model_valid_ = false;
+  std::string articulated_reason_ = "no locked dynamics snapshot";
+  std::function<bool(const roll_yaw::Kinematics&, perching_dynamics::MultilinkModel&, std::string&)> dynamics_factory_;
+  std::function<bool()> dynamics_snapshot_current_;
+  std::map<std::string, double> frozen_joints_;
+  struct DynamicsJoint
+  {
+    double position = 0, rate = 0, effort = std::numeric_limits<double>::quiet_NaN();
+    double stamp = 0, receipt = 0;
+    bool rate_valid = false;
+  };
+  std::map<std::string, DynamicsJoint> dynamics_joints_;
+  geometry_msgs::WrenchStamped command_wrench_;
+  ros::Subscriber command_wrench_sub_;
+  double command_wrench_receipt_ = 0, articulated_joint_stamp_ = 0, articulated_command_stamp_ = 0;
+  void loadInteractionSource();
+  bool interactionConfigurationValid() const;
+  void captureDynamicsJoints(const sensor_msgs::JointState&);
+  void commandWrenchCallback(const geometry_msgs::WrenchStampedConstPtr&);
+  bool observeArticulatedSample(const roll_yaw::Feedback&, double direction);
+  void invalidateArticulated(const std::string&);
   bool last_command_accepted_ = false;
   double control_pitch_ = 0;
   std::uint64_t plan_id_ = 0;
