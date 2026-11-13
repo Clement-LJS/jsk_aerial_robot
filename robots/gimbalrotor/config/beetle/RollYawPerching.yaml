@@ -54,11 +54,23 @@ navigation:
       baseline_samples: 80
     dynamics:
       observer_gain: 10.0 # positive, inverse seconds; only articulated_momentum uses this
-      # Hardware load is raw motor current scaled by ServoBridge, NOT verified Nm.
-      # Set joint_side_actuation_nm only with a validated producer of fresh joint-side
-      # actuation torque in URDF signs (e.g. verified simulator joint_states effort).
-      # No sign/scale conversion is applied here. Never use joints_ctrl.position.
+      # Compatibility key retained; setting this label alone NEVER enables effort.
+      # ServoBridge: torque_scale * angle_sgn * raw_load has no established Nm
+      # calibration in Servo.yaml. Hardware articulated observation is unavailable.
       joint_effort_contract: unavailable
+      joint_effort:
+        # Only implemented SI source: gazebo_ode_joint_states (see sim override).
+        source: unavailable
+        topic: joint_states # MUST equal roll_yaw_perching/joint_state_topic
+        producer: "" # exact absolute ROS callerid required, checked on each message
+        units: Nm # only Nm accepted; revolute JOINT-SIDE actuation, not reaction
+        sign: urdf # only URDF positive joint direction; never angle_sgn twice
+      # Effort shares the angle/rate sample; header and steady receipt age <=
+      # feedback_timeout, future <= future_tolerance, full sample span <=
+      # feedback_sync_tolerance. Duplicate stamps cannot refresh an observation;
+      # backwards/gapped/invalid inputs clear tare and use the existing hold path.
+      # YAML selects supported joint names, sources/topics, gains and limits only.
+      # Different serial order/contact/DOF/task/actuation maps need a code adapter.
       # First adapter requires ALL other model joints measured and frozen at lock:
       # <=1e-4 rad position drift, <=1e-3 rad/s. Moving gimbals make it unavailable.
       # Rotor spin momentum is omitted. A fault clears tare and requires disarm/retare.

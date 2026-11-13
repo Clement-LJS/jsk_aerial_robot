@@ -461,7 +461,7 @@ private:
   bool snapshotModel(roll_yaw::Kinematics&, std::string&);
   roll_yaw::Feedback feedback() const;
   std::string contactRejection(const roll_yaw::Feedback&) const;
-  void rollYawJointCallback(const sensor_msgs::JointStateConstPtr&);
+  void rollYawJointCallback(const ros::MessageEvent<sensor_msgs::JointState const>&);
   void bodyCallback(const nav_msgs::OdometryConstPtr&);
   void bodyAlignmentCallback(const std_msgs::Float64ConstPtr&, int axis);
   void bodyPitchCallback(const std_msgs::Float64ConstPtr&);
@@ -569,6 +569,9 @@ private:
   enum class InteractionSource { LEGACY_WRENCH, ARTICULATED_MOMENTUM, INVALID };
   InteractionSource interaction_source_ = InteractionSource::LEGACY_WRENCH;
   std::string interaction_source_name_ = "legacy_wrench", effort_contract_ = "unavailable";
+  // Only the audited Gazebo/ODE JointState producer is supported for SI effort.
+  std::string effort_source_ = "unavailable", effort_topic_, effort_producer_;
+  bool effort_source_valid_ = false;
   double observer_gain_ = 10;
   perching_dynamics::MultilinkModel articulated_model_;
   perching_dynamics::MomentumObserver momentum_observer_;
@@ -589,7 +592,7 @@ private:
   double command_wrench_receipt_ = 0, articulated_joint_stamp_ = 0, articulated_command_stamp_ = 0;
   void loadInteractionSource();
   bool interactionConfigurationValid() const;
-  void captureDynamicsJoints(const sensor_msgs::JointState&);
+  void captureDynamicsJoints(const sensor_msgs::JointState&, const std::string& producer);
   void commandWrenchCallback(const geometry_msgs::WrenchStampedConstPtr&);
   bool observeArticulatedSample(const roll_yaw::Feedback&, double direction);
   void invalidateArticulated(const std::string&);

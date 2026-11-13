@@ -1,6 +1,21 @@
 # Gazebo-only overrides, loaded after RollYawPerching.yaml and Servo.yaml.
 navigation:
   roll_yaw_perching:
+    dynamics:
+      # Explicit SIMULATION-ONLY contract for the shipped Gazebo ODE world,
+      # AerialRobotHWSim/DefaultRobotHWSim + effort-controlled roll/yaw joints +
+      # JointStateController. ODE GetForce reports saved limited SetForce torque
+      # in Nm in the URDF axis, not joint reaction or a PID target. No conversion.
+      # Other physics engines, plugins and external torque writers are unsupported.
+      # Runtime also requires /use_sim_time, matching controller/plugin and callerid.
+      # This does NOT select articulated admittance: legacy_wrench remains default.
+      joint_effort_contract: joint_side_actuation_nm
+      joint_effort:
+        source: gazebo_ode_joint_states
+        topic: joint_states
+        producer: /gazebo # change only if the same verified Gazebo node is renamed
+        units: Nm
+        sign: urdf
     # Orientation path endpoint settling only; enable/relock capture without a rate gate.
     # Stationary simulated IMU rate noise exceeds the hardware 0.01 rad/s value.
     settle_use_window: false # Retain continuous strict settling in Gazebo.

@@ -60,6 +60,7 @@ target_link_libraries(gimbalrotor_robot_model ${catkin_LIBRARIES})
 add_library(gimbalrotor_perching
   src/gimbalrotor_perching.cpp
   src/model/gimbalrotor_multilink_perching_model.cpp
+  src/model/gimbalrotor_roll_yaw_dynamics.cpp
   src/control/gimbalrotor_multilink_perching_observer.cpp)
 target_link_libraries(gimbalrotor_perching ${catkin_LIBRARIES})
 

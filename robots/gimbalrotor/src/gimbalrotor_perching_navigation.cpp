@@ -1,3 +1,4 @@
+#include <gimbalrotor/model/gimbalrotor_roll_yaw_dynamics.h>
 #include <gimbalrotor/gimbalrotor_perching_navigation.h>
 #include <pluginlib/class_list_macros.h>
 #include <sstream>
@@ -3514,11 +3515,12 @@ roll_yaw::Feedback GimbalrotorPerchingNavigator::feedback() const
   s.valid = s.invalid_reason.empty();
   return s;
 }
-void GimbalrotorPerchingNavigator::rollYawJointCallback(const sensor_msgs::JointStateConstPtr& m)
+void GimbalrotorPerchingNavigator::rollYawJointCallback(const ros::MessageEvent<sensor_msgs::JointState const>& event)
 {
+  const auto& m = event.getMessage();
   std::lock_guard<std::recursive_mutex> l(perchingStateMutex());
   if(interaction_source_ == InteractionSource::ARTICULATED_MOMENTUM)
-    captureDynamicsJoints(*m);
+    captureDynamicsJoints(*m, event.getPublisherName());
   const double source = m->header.stamp.toSec(), receipt = ros::Time::now().toSec();
   // Other publishers may send gimbal-only messages on this shared topic.
   if(std::find(m->name.begin(), m->name.end(), roll_) == m->name.end() &&
@@ -4649,11 +4651,31 @@ void GimbalrotorPerchingNavigator::loadInteractionSource()
   dn.param("observer_gain", observer_gain_, 10.0);
   dn.param<std::string>("joint_effort_contract", effort_contract_, "unavailable");
   dynamics_joints_.clear();
-  // joint_side_actuation_nm is an explicit producer contract, NOT a current conversion.
-  // Hardware ServoBridge: effort = torque_scale * angle_sgn * raw current count.
-  // Its default scale is not a calibration; never infer Nm from nonzero effort.
-  articulated_reason_ = effort_contract_ == "joint_side_actuation_nm" ? "waiting for synchronized dynamics inputs" :
-      "joint-side actuation torque in Nm is unverified; raw servo current/load is insufficient";
+  ros::NodeHandle en(dn, "joint_effort");
+  en.param<std::string>("source", effort_source_, "unavailable");
+  en.param<std::string>("topic", effort_topic_, "joint_states");
+  en.param<std::string>("producer", effort_producer_, "");
+  std::string units, sign, joint_topic, controller, description;
+  en.param<std::string>("units", units, "Nm");
+  en.param<std::string>("sign", sign, "urdf");
+  ros::NodeHandle(nh_, "navigation/roll_yaw_perching").param<std::string>("joint_state_topic", joint_topic, "joint_states");
+  nh_.getParam("joint_state_controller/type", controller);
+  nh_.getParam("robot_description", description);
+  // Audited local simulation path: AerialRobotHWSim delegates read/writeSim
+  // to DefaultRobotHWSim; JointStateController publishes its JointStateHandle.
+  // For the shipped ODE world and EffortJointInterface, effort is GetForce(0):
+  // ODE saves the limited SetForce torque, NOT contact reaction/GetForceTorque
+  // or the position PID target. The installed ODE implementation was inspected.
+  // No motor constant, gearbox conversion or second URDF sign is applied here.
+  // Hardware ServoBridge's torque_scale * angle_sgn * raw_load is NOT calibrated.
+  effort_source_valid_ = effort_source_ == "gazebo_ode_joint_states" && ros::Time::isSimTime() &&
+      effort_contract_ == "joint_side_actuation_nm" && units == "Nm" && sign == "urdf" &&
+      !effort_topic_.empty() && nh_.resolveName(effort_topic_) == nh_.resolveName(joint_topic) &&
+      !effort_producer_.empty() && effort_producer_.front() == '/' &&
+      controller == "joint_state_controller/JointStateController" &&
+      description.find("gazebo_ros_control/AerialRobotHWSim") != std::string::npos;
+  articulated_reason_ = effort_source_valid_ ? "waiting for synchronized Gazebo ODE joint-side torque" :
+      "unverified effort source/producer/topic/units/sign; hardware raw servo load is unavailable";
 }
 
 bool GimbalrotorPerchingNavigator::interactionConfigurationValid() const
@@ -4668,8 +4690,24 @@ bool GimbalrotorPerchingNavigator::interactionConfigurationValid() const
          (interaction_point_ == "cog" || interaction_point_ == "body" || interaction_point_ == "world_origin");
 }
 
-void GimbalrotorPerchingNavigator::captureDynamicsJoints(const sensor_msgs::JointState& msg)
+void GimbalrotorPerchingNavigator::captureDynamicsJoints(const sensor_msgs::JointState& msg,
+                                                        const std::string& producer)
 {
+  if(!effort_source_valid_ || !ros::Time::isSimTime() || producer != effort_producer_)
+  {
+    dynamics_joints_.clear();
+    invalidateArticulated("joint effort producer unavailable or differs from the configured Gazebo source");
+    return;
+  }
+  // The supported JointStateController publishes the complete registered set.
+  // A partial roll/yaw sample cannot retain an older apparently valid torque.
+  if(std::count(msg.name.begin(), msg.name.end(), roll_) != 1 ||
+     std::count(msg.name.begin(), msg.name.end(), yaw_) != 1)
+  {
+    dynamics_joints_.clear();
+    invalidateArticulated("verified joint-state producer omitted or duplicated roll/yaw");
+    return;
+  }
   const double stamp = msg.header.stamp.toSec(), now = ros::Time::now().toSec();
   for(std::size_t i = 0; i < msg.name.size(); ++i)
   {
@@ -4677,15 +4715,30 @@ void GimbalrotorPerchingNavigator::captureDynamicsJoints(const sensor_msgs::Join
     if(name != roll_ && name != yaw_ && !frozen_joints_.count(name))
       continue;
     auto& previous = dynamics_joints_[name];
-    if(stamp > 0 && stamp <= previous.stamp && now >= previous.stamp - feedback_config_.future_tolerance)
-      continue;
     if(stamp <= 0 || now - stamp > feedback_config_.timeout || now - stamp < -feedback_config_.future_tolerance ||
        std::count(msg.name.begin(), msg.name.end(), name) != 1 || msg.position.size() != msg.name.size() ||
-       !std::isfinite(msg.position[i]) || (!msg.velocity.empty() && msg.velocity.size() != msg.name.size()))
+       !std::isfinite(msg.position[i]) || (!msg.velocity.empty() &&
+       (msg.velocity.size() != msg.name.size() || !std::isfinite(msg.velocity[i]))))
     {
       previous = DynamicsJoint();
+      invalidateArticulated("invalid dynamics joint timestamp/name/position/rate array");
       continue;
     }
+    if((name == roll_ || name == yaw_) &&
+       (msg.effort.size() != msg.name.size() || !std::isfinite(msg.effort[i])))
+    {
+      previous = DynamicsJoint();
+      invalidateArticulated("missing/nonfinite joint-side actuation torque");
+      continue;
+    }
+    if(previous.stamp > 0 && (stamp < previous.stamp || stamp - previous.stamp > feedback_config_.timeout))
+    {
+      previous = DynamicsJoint();
+      invalidateArticulated("discontinuous dynamics joint timestamp; rebase and re-tare required");
+      continue;
+    }
+    if(stamp == previous.stamp)
+      continue; // Duplicate samples never refresh receipt or observer time.
     DynamicsJoint sample;
     sample.position = msg.position[i];
     sample.stamp = stamp;
@@ -4703,6 +4756,8 @@ void GimbalrotorPerchingNavigator::captureDynamicsJoints(const sensor_msgs::Join
     if(msg.effort.size() == msg.name.size())
       sample.effort = msg.effort[i]; // Already in URDF joint sign; never multiply angle_sgn again.
     previous = sample;
+    if(!sample.rate_valid)
+      invalidateArticulated("joint rate unavailable; awaiting advancing valid samples");
   }
 }
 
@@ -4719,9 +4774,17 @@ void GimbalrotorPerchingNavigator::commandWrenchCallback(const geometry_msgs::Wr
      !Eigen::Vector3d(w.torque.x, w.torque.y, w.torque.z).allFinite())
   {
     command_wrench_receipt_ = 0;
+    invalidateArticulated("invalid command wrench timestamp/frame/value");
     return;
   }
-  if(stamp <= command_wrench_.header.stamp.toSec())
+  if(stamp < command_wrench_.header.stamp.toSec())
+  {
+    command_wrench_receipt_ = 0;
+    command_wrench_ = geometry_msgs::WrenchStamped();
+    invalidateArticulated("command wrench timestamp moved backwards; rebase and re-tare required");
+    return;
+  }
+  if(stamp == command_wrench_.header.stamp.toSec())
     return;
   command_wrench_ = *msg;
   command_wrench_receipt_ = roll_yaw::steadySeconds();
@@ -4755,8 +4818,8 @@ bool GimbalrotorPerchingNavigator::observeArticulatedSample(const roll_yaw::Feed
     return fail("invalid locked dynamics snapshot; recapture with valid inertias and geometry");
   if(!dynamics_snapshot_current_ || !dynamics_snapshot_current_())
     return fail("robot inertia/extra modules changed since lock; recapture required");
-  if(effort_contract_ != "joint_side_actuation_nm")
-    return fail("unverified joint effort: require calibrated joint-side actuation Nm in URDF sign; hardware load is current");
+  if(!effort_source_valid_ || !ros::Time::isSimTime())
+    return fail("unverified joint effort source: require configured Gazebo ODE producer; hardware raw load is unavailable");
   const double wall = roll_yaw::steadySeconds();
   auto coherent = [&](double stamp, double receipt)
   {
@@ -5892,6 +5955,10 @@ void GimbalrotorPerchingNavigator::publishRollYawDiagnostics()
   field("articulated_ready", interaction_source_ == InteractionSource::ARTICULATED_MOMENTUM && momentum_observer_.ready());
   field("articulated_status", articulated_reason_);
   field("joint_effort_contract", effort_contract_);
+  field("joint_effort_source", effort_source_);
+  field("joint_effort_producer", effort_producer_);
+  field("joint_effort_topic", effort_topic_);
+  field("joint_effort_source_valid", effort_source_valid_);
   field("generalized_coordinate_order", "alpha," + roll_ + "," + yaw_);
   field("generalized_load_stamp_s", momentum_observer_.stamp());
   if(interaction_source_ == InteractionSource::ARTICULATED_MOMENTUM && momentum_observer_.ready())

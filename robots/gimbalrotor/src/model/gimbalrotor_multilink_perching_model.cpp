@@ -1,5 +1,6 @@
 #include <gimbalrotor/model/gimbalrotor_multilink_perching_model.h>
-#include <kdl/treefksolverpos_recursive.hpp>
+#include <cmath>
+#include <utility>
 #include <Eigen/Eigenvalues>
 #include <Eigen/Cholesky>
 
@@ -9,14 +10,25 @@ namespace
 {
 constexpr double difference_step = 1e-5;
 const Eigen::Vector3d gravity_world(0, 0, -9.80665);
+bool poseValid(const Eigen::Isometry3d& p)
+{
+  return p.matrix().allFinite() &&
+         (p.linear().transpose() * p.linear() - Eigen::Matrix3d::Identity()).norm() < 1e-7 &&
+         std::abs(p.linear().determinant() - 1) < 1e-7;
+}
+Eigen::Vector3d logSO3(const Eigen::Matrix3d& rotation)
+{
+  const Eigen::AngleAxisd angle(rotation);
+  return angle.angle() * angle.axis();
+}
 }
 
 bool MultilinkModel::configure(std::vector<std::string> coordinates, std::vector<Link> links,
-                               Geometry geometry, std::string& reason)
+                               Geometry geometry, std::string& reason, DifferentialGeometry differential)
 {
   *this = MultilinkModel();
   reason = "invalid coordinates, geometry or link inertia";
-  if(coordinates.empty() || links.empty() || !geometry)
+  if(coordinates.empty() || links.empty() || (!geometry && !differential))
     return false;
   double mass = 0;
   for(const auto& link : links)
@@ -35,48 +47,74 @@ bool MultilinkModel::configure(std::vector<std::string> coordinates, std::vector
   coordinates_ = std::move(coordinates);
   links_ = std::move(links);
   geometry_ = std::move(geometry);
+  differential_ = std::move(differential);
   reason.clear();
   return true;
 }
 
-bool MultilinkModel::metric(const Eigen::VectorXd& q, Eigen::MatrixXd& mass, double& potential) const
+bool MultilinkModel::state(const Eigen::VectorXd& q, GeometryState& s) const
 {
-  if(!geometry_ || q.size() != static_cast<int>(coordinates_.size()) || !q.allFinite())
+  const int n = coordinates_.size();
+  if(n == 0 || q.size() != n || !q.allFinite())
     return false;
-  Poses center;
-  Eigen::Isometry3d body;
-  if(!geometry_(q, center, body) || !roll_yaw::poseValid(body) || center.size() != links_.size())
-    return false;
-  std::vector<Eigen::MatrixXd> linear(links_.size(), Eigen::MatrixXd(3, q.size()));
-  auto angular = linear;
-  for(int j = 0; j < q.size(); ++j)
+  if(differential_)
   {
-    Eigen::VectorXd plus = q, minus = q;
-    plus[j] += difference_step;
-    minus[j] -= difference_step;
-    Poses p, m;
-    if(!geometry_(plus, p, body) || !geometry_(minus, m, body) ||
-       p.size() != center.size() || m.size() != center.size())
+    if(!differential_(q, s))
       return false;
-    for(std::size_t i = 0; i < links_.size(); ++i)
+  }
+  else
+  {
+    // Geometry-only fallback for future adapters; roll-yaw uses analytic columns.
+    if(!geometry_ || !geometry_(q, s.centers, s.body) || s.centers.size() != links_.size())
+      return false;
+    s.linear.assign(links_.size(), Eigen::MatrixXd(3, n));
+    s.angular = s.linear;
+    s.body_linear.resize(3, n);
+    s.body_angular.resize(3, n);
+    for(int j = 0; j < n; ++j)
     {
-      if(!roll_yaw::poseValid(center[i]) || !roll_yaw::poseValid(p[i]) || !roll_yaw::poseValid(m[i]))
+      Eigen::VectorXd plus = q, minus = q;
+      plus[j] += difference_step;
+      minus[j] -= difference_step;
+      Poses p, m;
+      Eigen::Isometry3d bp, bm;
+      if(!geometry_(plus, p, bp) || !geometry_(minus, m, bm) ||
+         p.size() != links_.size() || m.size() != links_.size() || !poseValid(bp) || !poseValid(bm))
         return false;
-      linear[i].col(j) = (p[i].translation() - m[i].translation()) / (2 * difference_step);
-      angular[i].col(j) = roll_yaw::logSO3(p[i].linear() * m[i].linear().transpose()) / (2 * difference_step);
+      s.body_linear.col(j) = (bp.translation() - bm.translation()) / (2 * difference_step);
+      s.body_angular.col(j) = logSO3(bp.linear() * bm.linear().transpose()) / (2 * difference_step);
+      for(std::size_t i = 0; i < links_.size(); ++i)
+      {
+        if(!poseValid(p[i]) || !poseValid(m[i]))
+          return false;
+        s.linear[i].col(j) = (p[i].translation() - m[i].translation()) / (2 * difference_step);
+        s.angular[i].col(j) = logSO3(p[i].linear() * m[i].linear().transpose()) / (2 * difference_step);
+      }
     }
   }
-  mass = Eigen::MatrixXd::Zero(q.size(), q.size());
-  potential = 0;
+  auto valid = [n](const Eigen::MatrixXd& j) { return j.rows() == 3 && j.cols() == n && j.allFinite(); };
+  if(!poseValid(s.body) || s.centers.size() != links_.size() || s.linear.size() != links_.size() ||
+     s.angular.size() != links_.size() || !valid(s.body_linear) || !valid(s.body_angular))
+    return false;
+  for(std::size_t i = 0; i < links_.size(); ++i)
+    if(!poseValid(s.centers[i]) || !valid(s.linear[i]) || !valid(s.angular[i]))
+      return false;
+  return true;
+}
+
+bool MultilinkModel::energy(const GeometryState& s, const Eigen::VectorXd& rate,
+                            double& kinetic, double& potential) const
+{
+  kinetic = potential = 0;
   for(std::size_t i = 0; i < links_.size(); ++i)
   {
     const auto& link = links_[i];
-    const Eigen::Matrix3d inertia_world = center[i].linear() * link.inertia * center[i].linear().transpose();
-    mass += link.mass * linear[i].transpose() * linear[i] + angular[i].transpose() * inertia_world * angular[i];
-    potential -= link.mass * gravity_world.dot(center[i].translation());
+    const Eigen::Vector3d v = s.linear[i] * rate;
+    const Eigen::Vector3d omega = s.centers[i].linear().transpose() * (s.angular[i] * rate);
+    kinetic += .5 * (link.mass * v.squaredNorm() + omega.dot(link.inertia * omega));
+    potential -= link.mass * gravity_world.dot(s.centers[i].translation());
   }
-  mass = (.5 * (mass + mass.transpose())).eval();
-  return mass.allFinite() && std::isfinite(potential);
+  return std::isfinite(kinetic) && std::isfinite(potential);
 }
 
 bool MultilinkModel::evaluate(const Eigen::VectorXd& q, const Eigen::VectorXd& rate,
@@ -86,105 +124,49 @@ bool MultilinkModel::evaluate(const Eigen::VectorXd& q, const Eigen::VectorXd& r
 {
   out = Evaluation();
   reason = "invalid dynamics state/input or singular mass matrix";
+  GeometryState center;
   if(q.size() != rate.size() || q.size() != joint_load.size() || !rate.allFinite() ||
      !joint_load.allFinite() || !force.allFinite() || !moment.allFinite() || !offset.allFinite() ||
-     !metric(q, out.mass, out.potential))
+     !state(q, center) || !energy(center, rate, out.kinetic, out.potential))
     return false;
-  Eigen::LLT<Eigen::MatrixXd> factor(out.mass);
-  if(factor.info() != Eigen::Success)
+  out.mass = Eigen::MatrixXd::Zero(q.size(), q.size());
+  for(std::size_t i = 0; i < links_.size(); ++i)
+  {
+    const Eigen::Matrix3d inertia_world = center.centers[i].linear() * links_[i].inertia *
+                                         center.centers[i].linear().transpose();
+    out.mass += links_[i].mass * center.linear[i].transpose() * center.linear[i] +
+                center.angular[i].transpose() * inertia_world * center.angular[i];
+  }
+  out.mass = (.5 * (out.mass + out.mass.transpose())).eval();
+  if(!out.mass.allFinite() || Eigen::LLT<Eigen::MatrixXd>(out.mass).info() != Eigen::Success)
     return false;
   out.momentum = out.mass * rate;
-  out.kinetic = .5 * rate.dot(out.momentum);
   out.gravity.resize(q.size());
-  out.predicted_rate = joint_load;
-  // Differentiate the complete Lagrangian with all other coordinates fixed.
-  // No partial Coriolis matrix and no gravity counted in the input wrench.
+  // Moment at body material origin B: tau_B = tau_u + (p_u - p_B) x f.
+  // offset is frozen ONLY for virtual displacement, never a migrating-CoG Jacobian.
+  const Eigen::Vector3d moment_body = moment + (center.body.linear() * offset).cross(force);
+  out.predicted_rate = joint_load + center.body_linear.transpose() * force +
+                       center.body_angular.transpose() * moment_body;
+  // Direct partial(T-U)/partial q at fixed qdot. Differentiate scalar energy,
+  // not whole mass matrices. This retains the configuration-dependent kinetic
+  // term; gravity is counted only here and no separate C matrix is needed.
   constexpr double h = 1e-4;
+  GeometryState displaced;
   for(int j = 0; j < q.size(); ++j)
   {
     Eigen::VectorXd plus = q, minus = q;
     plus[j] += h;
     minus[j] -= h;
-    Eigen::MatrixXd mp, mm;
-    double up, um;
-    Poses unused;
-    Eigen::Isometry3d bp, bm;
-    if(!metric(plus, mp, up) || !metric(minus, mm, um) ||
-       !geometry_(plus, unused, bp) || !geometry_(minus, unused, bm) ||
-       !roll_yaw::poseValid(bp) || !roll_yaw::poseValid(bm))
+    double tp, tm, up, um;
+    if(!state(plus, displaced) || !energy(displaced, rate, tp, up) ||
+       !state(minus, displaced) || !energy(displaced, rate, tm, um))
       return false;
     out.gravity[j] = (up - um) / (2 * h);
-    out.predicted_rate[j] += .5 * rate.dot((mp - mm) * rate) / (2 * h) - out.gravity[j];
-    // u is a VIRTUAL MATERIAL point of B. Hold this instantaneous body offset
-    // fixed in the virtual displacement, never differentiate aggregate CoG.
-    const Eigen::Vector3d ju = (bp * offset - bm * offset) / (2 * h);
-    const Eigen::Vector3d jw = roll_yaw::logSO3(bp.linear() * bm.linear().transpose()) / (2 * h);
-    out.predicted_rate[j] += ju.dot(force) + jw.dot(moment);
+    out.predicted_rate[j] += (tp - tm) / (2 * h) - out.gravity[j];
   }
-  if(!out.momentum.allFinite() || !out.predicted_rate.allFinite() || !out.gravity.allFinite() ||
-     !std::isfinite(out.kinetic))
+  if(!out.momentum.allFinite() || !out.predicted_rate.allFinite() || !out.gravity.allFinite())
     return false;
   reason.clear();
   return true;
-}
-
-bool rollYawModel(const roll_yaw::Kinematics& geometry, const KDL::Tree& tree,
-                 const KDL::JntArray& joints, const std::map<std::string, KDL::RigidBodyInertia>& inertia,
-                 const std::map<std::string, KDL::Segment>& extra, const std::string& body,
-                 unsigned ri, unsigned yi, const std::string& roll, const std::string& yaw,
-                 MultilinkModel& result, std::string& reason)
-{
-  result = MultilinkModel();
-  reason = "missing locked roll-yaw geometry, joint mapping or inertias";
-  if(!geometry.locked() || ri == yi || ri >= joints.rows() || yi >= joints.rows() ||
-     !joints.data.allFinite() || inertia.empty())
-    return false;
-  for(const auto& module : extra)
-    if(inertia.count(module.second.getName()) != 1)
-    {
-      reason = "extra module parent is absent from inertia map";
-      return false;
-    }
-  std::vector<std::string> names;
-  std::vector<KDL::Vector> centers;
-  std::vector<MultilinkModel::Link> links;
-  for(const auto& item : inertia)
-  {
-    KDL::RigidBodyInertia aggregate = KDL::RigidBodyInertia::Zero();
-    perching_geometry::accumulateLinkInertia(aggregate, KDL::Frame::Identity(), item.first, item.second, extra);
-    MultilinkModel::Link link;
-    link.mass = aggregate.getMass();
-    // KDL getRotationalInertia() is about its reference origin, NOT its CoM.
-    const auto ic = aggregate.RefPoint(aggregate.getCOG()).getRotationalInertia();
-    for(int r = 0; r < 3; ++r)
-      for(int c = 0; c < 3; ++c)
-        link.inertia(r, c) = ic.data[3 * r + c];
-    links.push_back(link);
-    names.push_back(item.first);
-    centers.push_back(aggregate.getCOG());
-  }
-  auto fk = [geometry, tree, joints, body, ri, yi, names, centers]
-      (const Eigen::VectorXd& q, MultilinkModel::Poses& poses, Eigen::Isometry3d& wb)
-  {
-    if(q.size() != 3 || !geometry.evaluateBody(q, wb))
-      return false;
-    KDL::JntArray state = joints;
-    state(ri) = q[1];
-    state(yi) = q[2];
-    KDL::TreeFkSolverPos_recursive solver(tree);
-    KDL::Frame root_body;
-    if(solver.JntToCart(state, root_body, body) < 0)
-      return false;
-    poses.clear();
-    for(std::size_t i = 0; i < names.size(); ++i)
-    {
-      KDL::Frame root_link;
-      if(solver.JntToCart(state, root_link, names[i]) < 0)
-        return false;
-      poses.push_back(wb * roll_yaw::fromKdl(root_body.Inverse() * root_link * KDL::Frame(centers[i])));
-    }
-    return true;
-  };
-  return result.configure({"alpha", roll, yaw}, std::move(links), std::move(fk), reason);
 }
 } // namespace perching_dynamics
