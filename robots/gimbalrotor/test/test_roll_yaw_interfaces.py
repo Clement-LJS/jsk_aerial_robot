@@ -134,6 +134,10 @@ class Interfaces(unittest.TestCase):
             verbose=False)
         self.assertEqual(config.params['/gimbalrotor/aerial_robot_control_name'].value,
                          'aerial_robot_control/gimbalrotor_controller')
+        self.assertEqual(config.params['/gimbalrotor/flight_navigation_plugin_name'].value,
+                         'aerial_robot_navigation/gimbalrotor_perching_navigation')
+        self.assertEqual(config.params['/gimbalrotor/navigation/perching_configuration'].value,
+                         'roll_yaw')
         return config
 
     def test_hardware_offline(self):

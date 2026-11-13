@@ -1,4 +1,5 @@
 navigation:
+  perching_configuration: pitch_only
   pitch_only_perching:
     # Same model-radian convention as MultilinkPerching.yaml. Do not duplicate
     # Servo.yaml's motor angle_sgn/angle_scale/zero_point_offset here.

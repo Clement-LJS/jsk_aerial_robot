@@ -51,33 +51,27 @@ add_library(gimbalrotor_controller
   src/control/gimbalrotor_controller.cpp
   src/control/gimbalrotor_admittance_controller.cpp
   src/control/gimbalrotor_perching_admittance_controller.cpp)
-target_link_libraries(gimbalrotor_controller roll_yaw_perching_core ${catkin_LIBRARIES})
+target_link_libraries(gimbalrotor_controller gimbalrotor_perching ${catkin_LIBRARIES})
 
 add_library(gimbalrotor_robot_model
   src/model/gimbalrotor_robot_model.cpp)
 target_link_libraries(gimbalrotor_robot_model ${catkin_LIBRARIES})
 
-add_library(roll_yaw_perching_core
-  src/perching_geometry.cpp
-  src/perching_trajectory.cpp
-  src/perching_dynamics.cpp
-  src/control/perching_admittance.cpp)
-target_link_libraries(roll_yaw_perching_core ${catkin_LIBRARIES})
+add_library(gimbalrotor_perching
+  src/gimbalrotor_perching.cpp)
+target_link_libraries(gimbalrotor_perching ${catkin_LIBRARIES})
 
 add_library(gimbalrotor_navigation
   src/gimbalrotor_navigation.cpp
-  src/gimbalrotor_perching_navigation.cpp
-  src/gimbalrotor_multilink_perching_navigation.cpp
-  src/gimbalrotor_pitch_only_perching_navigation.cpp
-  src/gimbalrotor_roll_yaw_perching_navigation.cpp)
-target_link_libraries(gimbalrotor_navigation roll_yaw_perching_core ${catkin_LIBRARIES})
+  src/gimbalrotor_perching_navigation.cpp)
+target_link_libraries(gimbalrotor_navigation gimbalrotor_perching ${catkin_LIBRARIES})
 add_dependencies(gimbalrotor_navigation ${catkin_EXPORTED_TARGETS})
 
 if(gazebo_FOUND)
-  add_library(roll_yaw_perching_gazebo src/roll_yaw_perching_gazebo.cpp)
-  target_include_directories(roll_yaw_perching_gazebo PRIVATE ${GAZEBO_INCLUDE_DIRS})
-  target_link_libraries(roll_yaw_perching_gazebo ${GAZEBO_LIBRARIES} ${catkin_LIBRARIES})
-  install(TARGETS roll_yaw_perching_gazebo LIBRARY DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION})
+  add_library(gimbalrotor_perching_gazebo src/gimbalrotor_perching_gazebo.cpp)
+  target_include_directories(gimbalrotor_perching_gazebo PRIVATE ${GAZEBO_INCLUDE_DIRS})
+  target_link_libraries(gimbalrotor_perching_gazebo ${GAZEBO_LIBRARIES} ${catkin_LIBRARIES})
+  install(TARGETS gimbalrotor_perching_gazebo LIBRARY DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION})
 endif()
 
 install(DIRECTORY config plugins launch

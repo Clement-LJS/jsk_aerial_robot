@@ -1,4 +1,5 @@
 navigation:
+  perching_configuration: multilink
   multilink_perching:
     pitch_joint_name: "joint_pitch"
     secondary_joint_name: "joint_roll"

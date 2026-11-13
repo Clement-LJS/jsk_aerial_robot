@@ -1,5 +1,5 @@
 #include <gimbalrotor/control/gimbalrotor_admittance_controller.h>
-#include <gimbalrotor/perching_dynamics.h>
+#include <gimbalrotor/gimbalrotor_perching.h>
 
 #include <pluginlib/class_list_macros.h>
 

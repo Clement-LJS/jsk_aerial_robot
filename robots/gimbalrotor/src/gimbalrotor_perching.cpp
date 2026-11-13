@@ -1,10 +1,879 @@
-#include <gimbalrotor/perching_trajectory.h>
-#include <Eigen/SVD>
-#include <algorithm>
+#include <gimbalrotor/gimbalrotor_perching.h>
+#include <kdl/chainfksolverpos_recursive.hpp>
+#include <kdl/treefksolverpos_recursive.hpp>
+#include <kdl/chainjnttojacsolver.hpp>
 #include <cmath>
+#include <Eigen/SVD>
+#include <Eigen/Cholesky>
+#include <algorithm>
 #include <limits>
 #include <sstream>
-#include <gimbalrotor/roll_yaw_worker.h>
+
+// Geometry and kinematics
+
+namespace perching_geometry
+{
+bool Lock::targetOrientation(const tf::Quaternion& desired, double limit, double sign, Pose& pose) const
+{
+  const tf::Matrix3x3 relative(orientation.inverse() * desired);
+  const double angle = std::atan2(relative[0][2] - relative[2][0], relative[0][0] + relative[2][2]);
+  return target(angle / sign, limit, sign, pose);
+}
+
+void accumulateLinkInertia(KDL::RigidBodyInertia& total, const KDL::Frame& frame, const std::string& link,
+                           const KDL::RigidBodyInertia& inertia, const std::map<std::string, KDL::Segment>& extra)
+{
+  total = total + frame * inertia;
+  for(const auto& module : extra)
+  {
+    if(module.second.getName() == link)
+      total = total + frame * (module.second.getFrameToTip() * module.second.getInertia());
+  }
+}
+}  // namespace perching_geometry
+
+namespace roll_yaw
+{
+Eigen::Vector3d logSO3(const Eigen::Matrix3d& r)
+{
+  Eigen::AngleAxisd a(r);
+  return a.angle() * a.axis();
+}
+Eigen::Matrix3d expSO3(const Eigen::Vector3d& v)
+{
+  const double a = v.norm();
+  return a < 1e-14 ? Eigen::Matrix3d::Identity() : Eigen::AngleAxisd(a, v / a).toRotationMatrix();
+}
+bool rotationValid(const Eigen::Matrix3d& r)
+{
+  return r.allFinite() && (r.transpose() * r - Eigen::Matrix3d::Identity()).norm() < 1e-7 &&
+         std::abs(r.determinant() - 1) < 1e-7;
+}
+bool poseValid(const Eigen::Isometry3d& p)
+{
+  return p.matrix().allFinite() && rotationValid(p.linear());
+}
+Eigen::Isometry3d fromKdl(const KDL::Frame& f)
+{
+  Eigen::Isometry3d p = Eigen::Isometry3d::Identity();
+  for(int i = 0; i < 3; ++i)
+  {
+    p.translation()[i] = f.p[i];
+    for(int j = 0; j < 3; ++j)
+      p.linear()(i, j) = f.M(i, j);
+  }
+  return p;
+}
+namespace
+{
+// Each copy owns both its FK solver and joint buffer. Planning workers never
+// evaluate against a mutable live RobotModel or share mutable FK storage.
+class ArticulatedCogSnapshot
+{
+public:
+  ArticulatedCogSnapshot(const KDL::Tree& tree, KDL::JntArray joints,
+                         std::map<std::string, KDL::RigidBodyInertia> inertia,
+                         std::map<std::string, KDL::Segment> extra, std::string base, KDL::Rotation relative,
+                         unsigned roll_index, unsigned yaw_index)
+      : fk_(tree),
+        joints_(std::move(joints)),
+        inertia_(std::move(inertia)),
+        extra_(std::move(extra)),
+        base_(std::move(base)),
+        relative_(relative),
+        roll_index_(roll_index),
+        yaw_index_(yaw_index)
+  {
+  }
+
+  bool evaluate(const Eigen::Vector3d& q, Eigen::Isometry3d& bg)
+  {
+    if(!q.allFinite() || roll_index_ >= joints_.rows() || yaw_index_ >= joints_.rows())
+      return false;
+    joints_(roll_index_) = q[1];
+    joints_(yaw_index_) = q[2];
+    KDL::Frame body;
+    if(fk_.JntToCart(joints_, body, base_) < 0)
+      return false;
+    KDL::RigidBodyInertia total = KDL::RigidBodyInertia::Zero();
+    for(const auto& item : inertia_)
+    {
+      KDL::Frame frame;
+      if(fk_.JntToCart(joints_, frame, item.first) < 0)
+        return false;
+      perching_geometry::accumulateLinkInertia(total, frame, item.first, item.second, extra_);
+    }
+    if(!std::isfinite(total.getMass()) || total.getMass() <= 0)
+      return false;
+    // relative_ is R_GB, the existing model's desired CoG orientation.
+    bg = fromKdl(KDL::Frame(relative_.Inverse(), body.Inverse() * total.getCOG()));
+    return poseValid(bg);
+  }
+
+private:
+  KDL::TreeFkSolverPos_recursive fk_;
+  KDL::JntArray joints_;
+  std::map<std::string, KDL::RigidBodyInertia> inertia_;
+  std::map<std::string, KDL::Segment> extra_;
+  std::string base_;
+  KDL::Rotation relative_;
+  unsigned roll_index_, yaw_index_;
+};
+}  // namespace
+
+std::function<bool(const Eigen::Vector3d&, Eigen::Isometry3d&)> articulatedCogModel(
+    KDL::Tree tree, KDL::JntArray joints, std::map<std::string, KDL::RigidBodyInertia> inertia,
+    std::map<std::string, KDL::Segment> extra, std::string base, KDL::Rotation relative, unsigned roll_index,
+    unsigned yaw_index)
+{
+  ArticulatedCogSnapshot snapshot(tree, joints, inertia, extra, base, relative, roll_index, yaw_index);
+  return [snapshot](const Eigen::Vector3d& q, Eigen::Isometry3d& bg) mutable { return snapshot.evaluate(q, bg); };
+}
+bool Kinematics::configure(const KDL::Chain& chain, const std::string& roll, const std::string& yaw,
+                           const Eigen::Isometry3d& cp, const Eigen::Vector3d& axis,
+                           std::function<bool(const Eigen::Vector3d&, Eigen::Isometry3d&)> cog, std::string& error)
+{
+  configured_ = locked_ = false;
+  if(chain.getNrOfJoints() != 2 || roll == yaw || !poseValid(cp) || !axis.allFinite() ||
+     std::abs(axis.norm() - 1) > 1e-7 || !cog)
+  {
+    error = "invalid chain or hinge geometry";
+    return false;
+  }
+  unsigned n = 0;
+  for(unsigned i = 0; i < chain.getNrOfSegments(); ++i)
+  {
+    const auto& j = chain.getSegment(i).getJoint();
+    if(j.getType() == KDL::Joint::None)
+      continue;
+    if(j.getName() != (n == 0 ? yaw : roll) || j.getType() == KDL::Joint::TransAxis ||
+       j.getType() == KDL::Joint::TransX || j.getType() == KDL::Joint::TransY || j.getType() == KDL::Joint::TransZ)
+    {
+      error = "body-to-contact chain must contain yaw then roll revolutes only";
+      return false;
+    }
+    ++n;
+  }
+  chain_ = chain;
+  cp_ = cp;
+  axis_ = axis;
+  cog_ = std::move(cog);
+  configured_ = true;
+  return true;
+}
+bool Kinematics::bodyPivot(const Eigen::Vector3d& eta, Eigen::Isometry3d& bp) const
+{
+  if(!configured_ || !eta.allFinite())
+    return false;
+  KDL::JntArray q(2);
+  q(0) = eta[2];
+  q(1) = eta[1];
+  KDL::Frame bc;
+  KDL::ChainFkSolverPos_recursive fk(chain_);
+  if(fk.JntToCart(q, bc) < 0)
+    return false;
+  bp = fromKdl(bc) * cp_;
+  return poseValid(bp);
+}
+bool Kinematics::lock(const Eigen::Isometry3d& body, const Eigen::Vector3d& eta)
+{
+  Eigen::Isometry3d bp;
+  if(!poseValid(body) || !bodyPivot(eta, bp) || std::abs(eta[0]) > 1e-12)
+    return false;
+  lock_ = body * bp;
+  locked_ = true;
+  return true;
+}
+bool Kinematics::evaluateBody(const Eigen::Vector3d& eta, Eigen::Isometry3d& body) const
+{
+  Eigen::Isometry3d bp;
+  if(!locked_ || !bodyPivot(eta, bp))
+    return false;
+  Eigen::Isometry3d hinge = Eigen::Isometry3d::Identity();
+  hinge.linear() = expSO3(axis_ * eta[0]);
+  body = lock_ * hinge * bp.inverse();
+  return poseValid(body) && ((body * bp).translation() - lock_.translation()).norm() < 1e-9;
+}
+bool Kinematics::evaluate(const Eigen::Vector3d& eta, Eigen::Isometry3d& body, Eigen::Isometry3d& cog) const
+{
+  Eigen::Isometry3d bg;
+  if(!evaluateBody(eta, body) || !cog_(eta, bg) || !poseValid(bg))
+    return false;
+  cog = body * bg;
+  return poseValid(cog);
+}
+bool Kinematics::jacobian(const Eigen::Vector3d& eta, Eigen::Matrix3d& j) const
+{
+  Eigen::Isometry3d bp;
+  if(!bodyPivot(eta, bp))
+    return false;
+  KDL::JntArray q(2);
+  q(0) = eta[2];
+  q(1) = eta[1];
+  KDL::Jacobian k(2);
+  KDL::ChainJntToJacSolver solver(chain_);
+  if(solver.JntToJac(q, k) < 0)
+    return false;
+  // Inverting T_BP changes the sign of both active-joint angular axes.
+  j.col(0) = bp.linear() * axis_;
+  j.col(1) = -k.data.block<3, 1>(3, 1);
+  j.col(2) = -k.data.block<3, 1>(3, 0);
+  return j.allFinite();
+}
+bool Kinematics::numericalJacobian(const Eigen::Vector3d& eta, Eigen::Matrix3d& j, double h) const
+{
+  if(!std::isfinite(h) || h <= 0)
+    return false;
+  Eigen::Isometry3d b;
+  if(!evaluateBody(eta, b))
+    return false;
+  for(int i = 0; i < 3; ++i)
+  {
+    Eigen::Vector3d ep = eta, em = eta;
+    ep[i] += h;
+    em[i] -= h;
+    Eigen::Isometry3d p, m;
+    if(!evaluateBody(ep, p) || !evaluateBody(em, m))
+      return false;
+    j.col(i) = (logSO3(b.linear().transpose() * p.linear()) - logSO3(b.linear().transpose() * m.linear())) / (2 * h);
+  }
+  return j.allFinite();
+}
+bool Kinematics::estimate(const Eigen::Isometry3d& body, const Eigen::Vector3d& eta, Estimate& out) const
+{
+  Eigen::Isometry3d bp;
+  if(!locked_ || !poseValid(body) || !bodyPivot(eta, bp))
+    return false;
+  const Eigen::Isometry3d measured = body * bp;
+  Eigen::Quaterniond q(lock_.linear().transpose() * measured.linear());
+  q.normalize();
+  // Swing/twist projection extracts the signed hinge rotation, not world Euler pitch.
+  const double s = q.vec().dot(axis_);
+  if(std::hypot(q.w(), s) < 1e-9)
+    return false;
+  out.alpha = std::remainder(2 * std::atan2(s, q.w()), 2 * M_PI);
+  out.pivot_error = (measured.translation() - lock_.translation()).norm();
+  out.hinge_residual = logSO3(expSO3(-axis_ * out.alpha) * lock_.linear().transpose() * measured.linear()).norm();
+  return std::isfinite(out.alpha) && std::isfinite(out.pivot_error) && std::isfinite(out.hinge_residual);
+}
+}  // namespace roll_yaw
+
+// Pitch-only calculations
+
+namespace pitch_only
+{
+bool Config::valid() const
+{
+  const double positive[] = {
+      q_rate,      q_zero_tolerance, q_hold_error,           joint_settle_rate,     feedback_timeout, rezero_kp,
+      rezero_rate, rezero_range,     rezero_pitch_tolerance, rezero_rate_tolerance, rezero_timeout,   passive_rate};
+  for(double x : positive)
+    if(!std::isfinite(x) || x <= 0)
+      return false;
+  return std::isfinite(q_min) && std::isfinite(q_max) && q_min < q_max && std::isfinite(settle_duration) &&
+         settle_duration >= 0 && std::isfinite(future_tolerance) && future_tolerance >= 0 &&
+         std::isfinite(rezero_pitch) && std::isfinite(rezero_sign) && std::abs(rezero_sign) == 1 &&
+         std::isfinite(body_pitch_min) && std::isfinite(body_pitch_max) && body_pitch_min >= -M_PI / 2 &&
+         body_pitch_max <= M_PI / 2 && body_pitch_min < body_pitch_max && rezero_pitch >= body_pitch_min &&
+         rezero_pitch <= body_pitch_max && std::isfinite(passive_min) && std::isfinite(passive_max) &&
+         passive_min < 0 && passive_max > 0 && finite(pivot_offset) && finite(hinge_axis) &&
+         std::abs(hinge_axis.Norm() - 1) < 1e-6;
+}
+
+const char* Core::feedbackError(const Sample& s) const
+{
+  if(!config.valid())
+    return "invalid pitch-only parameters or unresolved joint limits";
+  if(!s.model_valid)
+    return "mechanism model or joint feedback unavailable";
+  if(!s.hover)
+    return "navigation state is not HOVER_STATE";
+  if(!fresh(s.now, s.joint_stamp))
+    return "joint state is missing or stale";
+  if(!std::isfinite(s.q) || s.q < config.q_min - 1e-6 || s.q > config.q_max + 1e-6)
+    return "measured pitch joint outside configured limits";
+  if(!std::isfinite(s.qdot))
+    return "waiting for measured/derived joint velocity";
+  if(!finite(s.body) || !std::isfinite(s.angular_speed) || !std::isfinite(s.pitch_rate))
+    return "invalid estimator body pose/rate";
+  return nullptr;
+}
+
+bool Core::steady(const Sample& s) const
+{
+  return feedback(s) && stopped(s) && std::abs(s.q - q_target) <= config.q_hold_error && stable_since > 0 &&
+         s.now - stable_since >= config.settle_duration && std::abs(q_goal - q_target) < 1e-9 &&
+         std::abs(alpha_goal - alpha) < 1e-9;
+}
+
+bool Core::rezeroReady(const Sample& s) const
+{
+  return stage == Stage::PITCH_REZERO_READY_HOLD && feedback(s) && std::abs(s.q - q_target) <= config.q_hold_error &&
+         std::abs(wrap(config.rezero_pitch - pitch(s.body))) <= config.rezero_pitch_tolerance &&
+         std::abs(s.pitch_rate) <= config.rezero_rate_tolerance;
+}
+
+void Core::fault(const char* reason)
+{
+  if(ownsPose())
+    stage = Stage::FAULT_HOLD;
+  status = reason;
+  q_goal = q_target;
+  alpha_goal = alpha;
+  stable_since = 0;
+}
+
+void Core::reset()
+{
+  stage = Stage::FREE_FLIGHT;
+  zero_hold_armed = false;
+  rezero_completed = false;
+  q_target = q_goal = alpha = alpha_goal = alpha_min = alpha_max = 0;
+  stable_since = rezero_stable_since = 0;
+  ++generation;
+  status = "free flight; perching disabled";
+}
+
+bool Core::armZero(const Sample& s)
+{
+  if(stage != Stage::FREE_FLIGHT || !feedback(s) || !stopped(s) || config.q_min > 0 || config.q_max < 0 ||
+     std::abs(s.q) > config.q_zero_tolerance)
+    return reject("optional zero hold requires hover and a settled joint already near zero");
+  zero_hold_armed = true;
+  q_target = q_goal = 0;
+  status = "holding pitch at zero before contact";
+  return true;
+}
+
+bool Core::enable(const Sample& s)
+{
+  if(!feedback(s))
+    return reject("enable requires hover, valid model and fresh joint/estimator feedback");
+  if(!bodyPitchAllowed(s.body))
+    return reject("enable rejected: BASELINK world pitch outside body limits");
+  KDL::Frame bc;
+  KDL::Vector g;
+  if(!model || !model(s.q, bc, g) || !finite(bc) || !finite(g))
+    return reject("enable FK invalid");
+  contact = s.body * bc;
+  target = reference = s.body;
+  cog = g;
+  pivot = contact * config.pivot_offset;
+  axis = contact.M * config.hinge_axis;
+  q_target = q_goal = s.q;
+  alpha = alpha_goal = 0;
+  rezero_completed = false;
+  zero_hold_armed = false;
+  stage = Stage::CONTACT_LOCKED_PRE_REZERO;
+  ++generation;
+  stable_since = 0;
+  status = "contact locked; holding measured pitch joint";
+  return true;
+}
+
+bool Core::rezero(const Sample& s)
+{
+  if(stage != Stage::CONTACT_LOCKED_PRE_REZERO)
+    return reject("rezero requires an enabled provisional perching lock");
+  if(const auto error = feedbackError(s))
+    return reject(error);
+  if(std::abs(s.q - q_target) > config.q_hold_error)
+    return reject("pitch joint moved outside hold tolerance before rezero");
+  // Like multilink, start from valid feedback without a pre-settling gate.
+  // Convergence is checked while rezero is active, using world body pitch rate.
+  reference = target;
+  alpha = alpha_goal = 0;
+  start = s.now;
+  stable_since = 0;
+  rezero_stable_since = 0;
+  stage = Stage::PITCH_REZERO_ACTIVE;
+  status = "rezero active; pitch servo frozen";
+  return true;
+}
+
+bool Core::rebase(const Sample& s, Stage required)
+{
+  const bool ready = required == Stage::PITCH_REZERO_READY_HOLD ? rezeroReady(s) : steady(s);
+  if(stage != required || !ready)
+    return reject("rebase requires fresh settled feedback for the current stage");
+  if(!bodyPitchAllowed(s.body))
+    return reject("rebase rejected: BASELINK world pitch outside body limits");
+  KDL::Frame bc;
+  KDL::Vector g;
+  if(!model || !model(s.q, bc, g) || !finite(bc) || !finite(g))
+    return reject("rebase FK invalid");
+  // Use measured contact orientation but keep the original world pivot.
+  contact = s.body * bc;
+  contact.p = pivot - contact.M * config.pivot_offset;
+  target = contact * bc.Inverse();
+  cog = g;
+  q_target = q_goal = s.q;
+  if(required == Stage::PITCH_REZERO_READY_HOLD)
+    alpha = 0;
+  alpha_goal = alpha;
+  // Preserve the post-rezero passive coordinate through servo changes and
+  // freeze/unfreeze. Reconstruct the zero pose for the newly captured servo.
+  reference = arc(target, pivot, axis, -alpha);
+  stage = Stage::SERVO_ADJUSTMENT;
+  ++generation;
+  stable_since = 0;
+  status = "servo adjustment; original pivot preserved";
+  return true;
+}
+
+bool Core::relock(const Sample& s)
+{
+  if(stage != Stage::PITCH_REZERO_READY_HOLD ||
+     std::abs(wrap(config.rezero_pitch - pitch(s.body))) > config.rezero_pitch_tolerance)
+    return reject("relock requires rezero READY at the requested body pitch");
+  if(!rebase(s, Stage::PITCH_REZERO_READY_HOLD))
+    return false;
+  rezero_completed = true;
+  return true;
+}
+
+bool Core::servo(double q, const Sample& s)
+{
+  if(stage != Stage::SERVO_ADJUSTMENT || !feedback(s) || !std::isfinite(q))
+    return reject("servo command requires SERVO_ADJUSTMENT and valid feedback");
+  q_goal = clamp(q, config.q_min, config.q_max);
+  stable_since = 0;
+  status = "servo adjustment commanded";
+  return true;
+}
+
+bool Core::freeze(const Sample& s)
+{
+  if(!rebase(s, Stage::SERVO_ADJUSTMENT))
+    return false;
+  alpha_min = config.passive_min;
+  alpha_max = config.passive_max;
+  stage = Stage::PASSIVE_CUTTING;
+  status = "servo frozen at measurement; passive navigation enabled";
+  return true;
+}
+
+bool Core::cut(double a, const Sample& s)
+{
+  if(stage != Stage::PASSIVE_CUTTING || !feedback(s) || !std::isfinite(a))
+    return reject("passive command requires frozen servo and valid feedback");
+  alpha_goal = clamp(a, alpha_min, alpha_max);
+  stable_since = 0;
+  status = "passive arc commanded; servo unchanged";
+  return true;
+}
+
+bool Core::prepare(const Sample& s)
+{
+  if(stage != Stage::SERVO_ADJUSTMENT || !steady(s))
+    return reject("release preparation requires settled servo adjustment");
+  stage = Stage::UNPERCH_PREP;
+  status = "holding current pose for manual release";
+  return true;
+}
+
+bool Core::released(const Sample& s)
+{
+  if(stage != Stage::UNPERCH_PREP || !feedback(s))
+    return reject("release confirmation requires release preparation");
+  stage = Stage::DISENGAGED;
+  ++generation;
+  status = "release acknowledged; disable to resume free flight";
+  return true;
+}
+
+bool Core::recover(const Sample& s)
+{
+  if(stage != Stage::FAULT_HOLD || !steady(s))
+    return reject("recovery requires fresh settled feedback at the held joint angle");
+  if(rezero_completed)
+    return rebase(s, Stage::FAULT_HOLD);
+  reference = target;
+  alpha = alpha_goal = 0;
+  stage = Stage::CONTACT_LOCKED_PRE_REZERO;
+  stable_since = 0;
+  status = "fault acknowledged; repeat rezero and relock";
+  return true;
+}
+
+double Core::measuredAlpha(const Sample& s) const
+{
+  KDL::Vector v;
+  const double a = (s.body.M * reference.M.Inverse()).GetRotAngle(v);
+  return a * KDL::dot(v, axis);
+}
+
+void Core::tick(const Sample& s, double dt)
+{
+  if(!ownsPose())
+    return;
+  if(const auto error = feedbackError(s))
+  {
+    fault(error);
+    return;
+  }
+  if(!std::isfinite(dt) || dt <= 0 || dt > config.feedback_timeout)
+  {
+    fault("invalid control time step");
+    return;
+  }
+  if(stage != Stage::SERVO_ADJUSTMENT && std::abs(s.q - q_target) > config.q_hold_error)
+  {
+    fault("frozen pitch joint moved outside hold tolerance");
+    return;
+  }
+  const bool settling = stopped(s) && std::abs(s.q - q_target) <= config.q_hold_error;
+  if(!settling)
+    stable_since = 0;
+  else if(stable_since == 0)
+    stable_since = s.now;
+  if(stage == Stage::FAULT_HOLD || stage == Stage::DISENGAGED)
+    return;
+  double next_q = q_target, next_a = alpha;
+  if(stage == Stage::PITCH_REZERO_ACTIVE)
+  {
+    if(s.now - start > config.rezero_timeout)
+    {
+      fault("rezero timeout; holding last target");
+      return;
+    }
+    const double error = wrap(config.rezero_pitch - pitch(s.body));
+    const bool converged = std::abs(error) <= config.rezero_pitch_tolerance &&
+                           std::abs(s.pitch_rate) <= config.rezero_rate_tolerance && dt <= .1;
+    if(!converged)
+      rezero_stable_since = 0;
+    else if(rezero_stable_since == 0)
+      rezero_stable_since = s.now;
+    if(converged && s.now - rezero_stable_since >= config.settle_duration)
+    {
+      // Rezero travel is discarded. This pose is the new passive zero.
+      reference = target;
+      alpha = alpha_goal = 0;
+      alpha_min = config.passive_min;
+      alpha_max = config.passive_max;
+      stage = Stage::PITCH_REZERO_READY_HOLD;
+      status = "rezero READY; press relock";
+      return;
+    }
+    if(std::abs(error) <= config.rezero_pitch_tolerance)
+    {
+      alpha_goal = alpha;
+    }
+    else
+    {
+      stable_since = 0;
+      const double rate = config.rezero_sign * clamp(config.rezero_kp * error, -config.rezero_rate, config.rezero_rate);
+      next_a = alpha_goal = clamp(alpha + rate * dt, -config.rezero_range, config.rezero_range);
+    }
+  }
+  if(stage == Stage::SERVO_ADJUSTMENT)
+    next_q = q_target + clamp(q_goal - q_target, -config.q_rate * dt, config.q_rate * dt);
+  if(stage == Stage::PASSIVE_CUTTING)
+    next_a = alpha + clamp(alpha_goal - alpha, -config.passive_rate * dt, config.passive_rate * dt);
+  auto evaluate = [&](double q, double a, KDL::Frame& b, KDL::Vector& g)
+  {
+    b = target;
+    g = cog;
+    if(stage == Stage::SERVO_ADJUSTMENT)
+    {
+      KDL::Frame bc;
+      if(!model || !model(q, bc, g))
+        return false;
+      b = contact * bc.Inverse();
+    }
+    else if(stage == Stage::PASSIVE_CUTTING || stage == Stage::PITCH_REZERO_ACTIVE)
+      b = arc(reference, pivot, axis, a);
+    return finite(b) && finite(g);
+  };
+  KDL::Frame b;
+  KDL::Vector g;
+  if(!evaluate(next_q, next_a, b, g))
+  {
+    fault("target FK invalid or nonfinite");
+    return;
+  }
+  if(!bodyPitchAllowed(b))
+  {
+    // Stop along the existing FK/arc path, preserving the pivot. Clamping
+    // Euler pitch alone would break the contact geometry.
+    double lo = 0, hi = 1;
+    const double dq = next_q - q_target, da = next_a - alpha;
+    for(int i = 0; i < 32; ++i)
+    {
+      const double t = (lo + hi) / 2;
+      if(!evaluate(q_target + t * dq, alpha + t * da, b, g))
+      {
+        fault("target FK invalid or nonfinite");
+        return;
+      }
+      if(bodyPitchAllowed(b))
+        lo = t;
+      else
+        hi = t;
+    }
+    next_q = q_target + lo * dq;
+    next_a = alpha + lo * da;
+    if(!evaluate(next_q, next_a, b, g))
+    {
+      fault("target FK invalid or nonfinite");
+      return;
+    }
+    q_goal = next_q;
+    alpha_goal = next_a;
+    status = "BASELINK world-pitch limit reached; reverse command to move inward";
+  }
+  q_target = next_q;
+  alpha = next_a;
+  target = b;
+  cog = g;
+}
+}  // namespace pitch_only
+
+
+// Dynamics and wrench operations
+
+namespace perching_dynamics
+{
+Eigen::Matrix<double, 6, 1> rotateWrench(const Eigen::Matrix3d& rotation, const Eigen::Matrix<double, 6, 1>& wrench)
+{
+  Eigen::Matrix<double, 6, 1> rotated;
+  rotated.head<3>() = rotation * wrench.head<3>();
+  rotated.tail<3>() = rotation * wrench.tail<3>();
+  return rotated;
+}
+
+Eigen::Vector3d shiftMoment(const Eigen::Vector3d& moment, const Eigen::Vector3d& source_minus_target,
+                            const Eigen::Vector3d& force)
+{
+  return moment + source_minus_target.cross(force);
+}
+}  // namespace perching_dynamics
+
+namespace roll_yaw
+{
+bool pathInteractionTorque(const Kinematics& model, const Eigen::Vector3d& q, double direction, double min_singular,
+                           const Eigen::Vector3d& force, const Eigen::Vector3d& moment, const Eigen::Vector3d& point,
+                           double& torque)
+{
+  Eigen::Matrix3d j;
+  Eigen::Isometry3d body, bp, bm;
+  if((direction != 1 && direction != -1) || !force.allFinite() || !moment.allFinite() || !point.allFinite() ||
+     !model.jacobian(q, j) || !model.evaluateBody(q, body))
+    return false;
+  Eigen::JacobiSVD<Eigen::Matrix3d> svd(j, Eigen::ComputeFullU | Eigen::ComputeFullV);
+  if(svd.singularValues().minCoeff() < min_singular)
+    return false;
+  const Eigen::Vector3d tangent = svd.solve(direction * Eigen::Vector3d::UnitY());
+  constexpr double h = 1e-5;
+  if(!model.evaluateBody(q + h * tangent, bp) || !model.evaluateBody(q - h * tangent, bm))
+    return false;
+  const Eigen::Vector3d linear = (bp.translation() - bm.translation()) / (2 * h);
+  const Eigen::Vector3d angular = body.linear() * (direction * Eigen::Vector3d::UnitY());
+  const Eigen::Vector3d about_body = perching_dynamics::shiftMoment(moment, point - body.translation(), force);
+  torque = force.dot(linear) + about_body.dot(angular);
+  return std::isfinite(torque);
+}
+ArticulatedDynamics::ArticulatedDynamics(Kinematics model, const KDL::Tree& tree,
+                                         const std::map<std::string, KDL::RigidBodyInertia>& inertia,
+                                         const std::map<std::string, KDL::Segment>& extra, std::string base,
+                                         unsigned roll, unsigned yaw, Eigen::Vector3d gravity)
+    : model_(std::move(model)), fk_(tree), base_(std::move(base)), roll_(roll), yaw_(yaw), gravity_(gravity)
+{
+  for(const auto& item : inertia)
+  {
+    addLink(item.first, Eigen::Isometry3d::Identity(), item.second);
+    for(const auto& e : extra)
+      if(e.second.getName() == item.first)
+        addLink(item.first, fromKdl(e.second.getFrameToTip()), e.second.getInertia());
+  }
+}
+void ArticulatedDynamics::addLink(const std::string& name, Eigen::Isometry3d local, KDL::RigidBodyInertia value)
+{
+  if(value.getMass() <= 0)
+    return;
+  const auto center = value.getCOG();
+  const auto tensor = value.RefPoint(center).getRotationalInertia();
+  local.translation() += local.linear() * Eigen::Vector3d(center.x(), center.y(), center.z());
+  Eigen::Matrix3d i;
+  for(int r = 0; r < 3; ++r)
+    for(int c = 0; c < 3; ++c)
+      i(r, c) = tensor.data[3 * r + c];
+  links_.push_back({name, local, value.getMass(), i});
+}
+bool ArticulatedDynamics::poses(const Eigen::Vector3d& eta, const KDL::JntArray& input,
+                                std::vector<Eigen::Isometry3d>& out)
+{
+  if(roll_ >= input.rows() || yaw_ >= input.rows() || !input.data.allFinite())
+    return false;
+  KDL::JntArray joints = input;
+  joints(roll_) = eta[1];
+  joints(yaw_) = eta[2];
+  KDL::Frame base;
+  Eigen::Isometry3d body, cog;
+  if(fk_.JntToCart(joints, base, base_) < 0 || !model_.evaluate(eta, body, cog))
+    return false;
+  const Eigen::Isometry3d root = body * fromKdl(base).inverse();
+  out.resize(links_.size());
+  for(std::size_t i = 0; i < links_.size(); ++i)
+  {
+    KDL::Frame f;
+    if(fk_.JntToCart(joints, f, links_[i].name) < 0)
+      return false;
+    out[i] = root * fromKdl(f) * links_[i].local;
+    if(!poseValid(out[i]))
+      return false;
+  }
+  return !out.empty();
+}
+bool ArticulatedDynamics::energy(const Eigen::Vector3d& q, const Eigen::Vector3d& v, const KDL::JntArray& joints,
+                                 const KDL::JntArray& rates, DynamicsTerms& out)
+{
+  constexpr double h = 1e-5;
+  std::vector<Eigen::Isometry3d> center, plus, minus;
+  if(!poses(q, joints, center))
+    return false;
+  KDL::JntArray jp = joints, jm = joints;
+  jp.data += h * rates.data;
+  jm.data -= h * rates.data;
+  if(!poses(q + h * v, jp, plus) || !poses(q - h * v, jm, minus))
+    return false;
+  std::vector<Eigen::Vector3d> linear(center.size()), angular(center.size());
+  std::vector<Eigen::Matrix3d> jv(center.size(), Eigen::Matrix3d::Zero()), jw(center.size(), Eigen::Matrix3d::Zero());
+  out.kinetic = out.potential = 0;
+  out.momentum.setZero();
+  out.mass.setZero();
+  for(std::size_t i = 0; i < center.size(); ++i)
+  {
+    linear[i] = (plus[i].translation() - minus[i].translation()) / (2 * h);
+    angular[i] = logSO3(plus[i].linear() * minus[i].linear().transpose()) / (2 * h);
+    const Eigen::Matrix3d iw = center[i].linear() * links_[i].inertia * center[i].linear().transpose();
+    out.kinetic += .5 * (links_[i].mass * linear[i].squaredNorm() + angular[i].dot(iw * angular[i]));
+    out.potential -= links_[i].mass * gravity_.dot(center[i].translation());
+  }
+  for(int k = 0; k < 3; ++k)
+  {
+    Eigen::Vector3d d = Eigen::Vector3d::Zero();
+    d[k] = h;
+    if(!poses(q + d, joints, plus) || !poses(q - d, joints, minus))
+      return false;
+    for(std::size_t i = 0; i < center.size(); ++i)
+    {
+      jv[i].col(k) = (plus[i].translation() - minus[i].translation()) / (2 * h);
+      jw[i].col(k) = logSO3(plus[i].linear() * minus[i].linear().transpose()) / (2 * h);
+    }
+  }
+  for(std::size_t i = 0; i < center.size(); ++i)
+  {
+    const Eigen::Matrix3d iw = center[i].linear() * links_[i].inertia * center[i].linear().transpose();
+    out.momentum += links_[i].mass * jv[i].transpose() * linear[i] + jw[i].transpose() * iw * angular[i];
+    out.mass += links_[i].mass * jv[i].transpose() * jv[i] + jw[i].transpose() * iw * jw[i];
+  }
+  return out.mass.allFinite() && out.momentum.allFinite() && std::isfinite(out.kinetic) && std::isfinite(out.potential);
+}
+DynamicsTerms ArticulatedDynamics::evaluate(const Eigen::Vector3d& q, const Eigen::Vector3d& v,
+                                            const KDL::JntArray& joints, const KDL::JntArray& rates,
+                                            const Eigen::Vector3d& force, const Eigen::Vector3d& torque,
+                                            const Eigen::Vector3d& servo, double min_singular,
+                                            const std::function<bool()>& cancelled)
+{
+  DynamicsTerms out;
+  Eigen::Matrix3d j;
+  Eigen::Isometry3d body, cog;
+  out.reason = "invalid dynamics input/kinematics";
+  if(!q.allFinite() || !v.allFinite() || !force.allFinite() || !torque.allFinite() || !servo.allFinite() ||
+     joints.rows() != rates.rows() || !rates.data.allFinite() || !model_.jacobian(q, j) ||
+     !model_.evaluate(q, body, cog))
+    return out;
+  Eigen::JacobiSVD<Eigen::Matrix3d> svd(j, Eigen::ComputeFullU | Eigen::ComputeFullV);
+  if(svd.singularValues().minCoeff() < min_singular)
+  {
+    out.reason = "singular task torque map";
+    return out;
+  }
+  out.pitch_map = svd.solve(Eigen::Vector3d::UnitY());
+  if((j * out.pitch_map - Eigen::Vector3d::UnitY()).norm() > 1e-8 || !energy(q, v, joints, rates, out))
+    return out;
+  if(Eigen::LDLT<Eigen::Matrix3d>(out.mass).vectorD().minCoeff() <= 0)
+  {
+    out.reason = "nonpositive generalized inertia";
+    return out;
+  }
+  constexpr double h = 1e-4;
+  // A resultant applied to the BODY at the instantaneous CoG location. Its
+  // translational Jacobian is a body material-point Jacobian, NOT d(CoG)/deta.
+  // This is equivalent to summing body-branch rotor forces with frozen gimbals.
+  std::vector<Eigen::Isometry3d> centers;
+  if(!poses(q, joints, centers))
+    return out;
+  Eigen::Vector3d center = Eigen::Vector3d::Zero();
+  double mass = 0;
+  for(std::size_t i = 0; i < centers.size(); ++i)
+  {
+    center += links_[i].mass * centers[i].translation();
+    mass += links_[i].mass;
+  }
+  if(mass <= 0)
+    return out;
+  const Eigen::Vector3d material = body.inverse() * (center / mass);
+  Eigen::Matrix3d jv;
+  for(int k = 0; k < 3; ++k)
+  {
+    if(cancelled && cancelled())
+    {
+      out.reason = "dynamics cancelled/deadline";
+      return out;
+    }
+    Eigen::Vector3d d = Eigen::Vector3d::Zero();
+    d[k] = h;
+    DynamicsTerms p, m;
+    Eigen::Isometry3d bp, bm, g;
+    if(!energy(q + d, v, joints, rates, p) || !energy(q - d, v, joints, rates, m) || !model_.evaluate(q + d, bp, g) ||
+       !model_.evaluate(q - d, bm, g))
+      return out;
+    out.drift[k] = (p.kinetic - m.kinetic - p.potential + m.potential) / (2 * h);
+    jv.col(k) = ((bp * material) - (bm * material)) / (2 * h);
+  }
+  out.drift += jv.transpose() * force + j.transpose() * body.linear().transpose() * torque +
+               Eigen::Vector3d(0, servo[1], servo[2]);
+  out.ok = out.drift.allFinite();
+  out.reason =
+      out.ok ? "articulated momentum; command-derived body wrench + scaled servo effort" : "nonfinite dynamics";
+  return out;
+}
+bool MomentumObserver::update(const DynamicsTerms& terms, double stamp, double max_gap)
+{
+  if(!terms.ok || !std::isfinite(stamp) || stamp <= 0 || !std::isfinite(gain) || gain <= 0)
+  {
+    reset();
+    return false;
+  }
+  const double dt = stamp - stamp_;
+  if(initialized_ && dt == 0)
+    return false;
+  if(!initialized_ || dt < 0 || dt > max_gap)
+  {
+    initial_ = terms.momentum;
+    integral_.setZero();
+    residual.setZero();
+    initialized_ = true;
+    stamp_ = stamp;
+    return false;
+  }
+  // Backward Euler for integral(b+r): stable for any positive gain and dt.
+  residual = gain * (terms.momentum - initial_ - integral_ - dt * terms.drift) / (1 + gain * dt);
+  integral_ += dt * (terms.drift + residual);
+  stamp_ = stamp;
+  torque = terms.pitch_map.dot(residual);
+  if(!std::isfinite(torque))
+  {
+    reset();
+    return false;
+  }
+  return true;
+}
+}  // namespace roll_yaw
+
+// Trajectory execution and settling
 
 namespace roll_yaw
 {
@@ -1879,5 +2748,221 @@ void Executor::tick(const Feedback& s)
     else
       reason = "waiting for measured settling: " + detail.str();
   }
+}
+}  // namespace roll_yaw
+
+// Scalar admittance
+
+namespace roll_yaw
+{
+bool AdmittanceConfig::valid() const
+{
+  for(double x : {inertia, damping, stiffness, torque_limit, angle_limit, rate_limit, acceleration_limit, filter_time,
+                  on_threshold, on_dwell, off_dwell})
+    if(!std::isfinite(x) || x <= 0)
+      return false;
+  return std::isfinite(reference_torque) && std::isfinite(off_threshold) && off_threshold >= 0 &&
+         off_threshold < on_threshold && angle_limit < .5 && baseline_samples >= 2 && baseline_samples <= 10000;
+}
+void PitchAdmittance::reset()
+{
+  const auto c = config;
+  *this = PitchAdmittance();
+  config = c;
+}
+void PitchAdmittance::observe(double torque, double stamp, bool no_cut)
+{
+  if(!std::isfinite(torque) || !std::isfinite(stamp) || stamp <= stamp_)
+    return;
+  const double dt = stamp_ > 0 ? stamp - stamp_ : 0;
+  stamp_ = stamp;
+  if(!baseline_ready && dt > .15)
+  {
+    sum_ = 0;
+    samples = 0;
+  }
+  if(!baseline_ready && !enabled && no_cut)
+  {
+    sum_ += torque;
+    ++samples;
+    if(samples >= config.baseline_samples)
+    {
+      bias = sum_ / samples;
+      baseline_ready = true;
+    }
+  }
+  if(!baseline_ready || dt <= 0 || dt > .15)
+  {
+    contact = false;
+    on_ = off_ = 0;
+    return;
+  }
+  filtered += (1 - std::exp(-dt / config.filter_time)) * (torque - bias - config.reference_torque - filtered);
+  if(!enabled)
+  {
+    contact = false;
+    on_ = off_ = 0;
+    return;
+  }
+  if(!contact)
+  {
+    off_ = 0;
+    on_ = -filtered > config.on_threshold ? on_ + dt : 0;
+    if(on_ >= config.on_dwell)
+    {
+      contact = true;
+      on_ = 0;
+    }
+  }
+  else
+  {
+    on_ = 0;
+    off_ = -filtered < config.off_threshold ? off_ + dt : 0;
+    if(off_ >= config.off_dwell)
+    {
+      contact = false;
+      off_ = 0;
+    }
+  }
+}
+bool PitchAdmittance::step(double dt, bool fresh, bool relief_only, double available_relief)
+{
+  if(!config.valid() || !std::isfinite(dt) || dt <= 0 || dt > .15)
+    return false;
+  const double negative_limit =
+      available_relief < 0 ? config.angle_limit : std::min(config.angle_limit, available_relief);
+  if(!std::isfinite(negative_limit) || negative_limit < 0 || offset < -negative_limit - 1e-9)
+    return false;
+  if(!fresh)
+  {
+    contact = false;
+    on_ = off_ = 0;
+  }
+  const double torque = enabled && fresh && contact
+                            ? std::clamp(filtered, -config.torque_limit, relief_only ? 0.0 : config.torque_limit)
+                            : 0;
+  const double proposed = relief_only && enabled && !fresh
+                              ? 0
+                              : (config.inertia * rate + dt * (torque - config.stiffness * offset)) /
+                                    (config.inertia + dt * config.damping + dt * dt * config.stiffness);
+  double v = std::clamp(proposed, rate - config.acceleration_limit * dt, rate + config.acceleration_limit * dt);
+  v = std::clamp(v, -config.rate_limit, config.rate_limit);
+  // Braking distance prevents hitting the angle clamp at nonzero velocity.
+  const double a = config.acceleration_limit;
+  auto safe = [&](double gap, double old)
+  {
+    // Include the final partial-speed discrete step, which a continuous
+    // v^2/(2a) envelope omits. Future scalar steps are bounded by 0.15 s.
+    const double b = a * (dt + .15);
+    return std::max(0.0, (-b + std::sqrt(std::max(0.0, b * b - 4 * a * dt * old + 8 * a * gap))) * .5);
+  };
+  v = std::clamp(v, -safe(negative_limit + offset, -rate),
+                 safe((relief_only ? 0.0 : config.angle_limit) - offset, rate));
+  const double next_acceleration = (v - rate) / dt, next_offset = offset + .5 * (rate + v) * dt;
+  if(!std::isfinite(next_offset) || next_offset < -negative_limit - 1e-9 ||
+     next_offset > (relief_only ? 0.0 : config.angle_limit) + 1e-9 ||
+     std::abs(next_acceleration) > config.acceleration_limit + 1e-7)
+    return false;
+  acceleration = next_acceleration;
+  offset = next_offset;
+  rate = v;
+  return true;
+}
+bool compliantReference(const Kinematics& m, const Reference& nominal, const Reference& previous, double delta,
+                        double rate, double acceleration, double dt, const PlanningConfig& config, Reference& out,
+                        std::string& reason)
+{
+  const Eigen::Matrix3d correction = expSO3(Eigen::Vector3d::UnitY() * delta);
+  const Eigen::Matrix3d desired = nominal.body.linear() * correction;
+  Eigen::Vector3d q = previous.eta;
+  Eigen::Matrix3d j;
+  Eigen::Isometry3d body, cog;
+  for(int i = 0; i < 8; ++i)
+  {
+    if(!m.evaluate(q, body, cog) || !m.jacobian(q, j))
+    {
+      reason = "compliant FK/Jacobian unavailable";
+      return false;
+    }
+    Eigen::JacobiSVD<Eigen::Matrix3d> svd(j, Eigen::ComputeFullU | Eigen::ComputeFullV);
+    if(svd.singularValues().minCoeff() < config.min_singular_value)
+    {
+      reason = "compliant singularity";
+      return false;
+    }
+    const Eigen::Vector3d error = logSO3(body.linear().transpose() * desired);
+    if(error.norm() < 1e-9)
+      break;
+    Eigen::Vector3d step = svd.solve(error);
+    if(step.norm() > .1)
+      step *= .1 / step.norm();
+    q += step;
+  }
+  if(!m.evaluate(q, body, cog) || logSO3(body.linear().transpose() * desired).norm() > 1e-7 ||
+     !mechanismAllowed(m, q, config, reason) || !m.jacobian(q, j))
+  {
+    reason = "compliant pose/limits: " + reason;
+    return false;
+  }
+  const Eigen::Vector3d omega = correction.transpose() * nominal.body_omega + Eigen::Vector3d::UnitY() * rate;
+  const Eigen::Vector3d angular_acc =
+      correction.transpose() * nominal.body_acceleration -
+      (Eigen::Vector3d::UnitY() * rate).cross(correction.transpose() * nominal.body_omega) +
+      Eigen::Vector3d::UnitY() * acceleration;
+  Eigen::JacobiSVD<Eigen::Matrix3d> svd(j, Eigen::ComputeFullU | Eigen::ComputeFullV);
+  const Eigen::Vector3d velocity = svd.solve(omega);
+  Eigen::Matrix3d jp, jm;
+  if(!m.jacobian(q + 1e-4 * velocity, jp) || !m.jacobian(q - 1e-4 * velocity, jm))
+    return false;
+  const Eigen::Vector3d acc = svd.solve(angular_acc - (jp - jm) / (2e-4) * velocity);
+  if(!std::isfinite(dt) || dt <= 0 || (velocity.cwiseAbs().array() > config.limits.velocity.array()).any() ||
+     (acc.cwiseAbs().array() > config.limits.acceleration.array()).any() ||
+     ((q - previous.eta).cwiseAbs().array() > config.limits.velocity.array() * dt + 1e-6).any() ||
+     ((velocity - previous.velocity).cwiseAbs().array() > config.limits.acceleration.array() * dt + 1e-5).any())
+  {
+    reason = "compliant joint rate/acceleration bound";
+    return false;
+  }
+  if(!mechanismReference(m, q, velocity, acc, out) || out.cog_velocity.norm() > config.cog_speed_limit ||
+     out.cog_acceleration.norm() > config.cog_acceleration_limit)
+  {
+    reason = "compliant CoG derivatives";
+    return false;
+  }
+  out.desired = {desired, omega, angular_acc};
+  return true;
+}
+bool advanceCompliance(const Kinematics& model, const Reference& nominal, const Reference& previous, double dt,
+                       bool fresh, const PlanningConfig& config, PitchAdmittance& state, Reference& out,
+                       std::string& reason)
+{
+  const auto before = state;
+  auto proposal = state;
+  if(!proposal.step(dt, fresh))
+  {
+    reason = "invalid admittance integration step";
+    return false;
+  }
+  // Bound local work and apply anti-windup in the scalar state itself. Reduced
+  // acceleration and a final braking candidate are tried without moving the goal.
+  for(int attempt = 0; attempt < 7; ++attempt)
+  {
+    auto candidate = proposal;
+    const double a =
+        attempt == 6 ? std::clamp(-before.rate / dt, -state.config.acceleration_limit, state.config.acceleration_limit)
+                     : proposal.acceleration * std::pow(.5, attempt);
+    candidate.acceleration = a;
+    candidate.rate = before.rate + a * dt;
+    candidate.offset = before.offset + .5 * (before.rate + candidate.rate) * dt;
+    if(std::abs(candidate.offset) > state.config.angle_limit || std::abs(candidate.rate) > state.config.rate_limit)
+      continue;
+    if(compliantReference(model, nominal, previous, candidate.offset, candidate.rate, a, dt, config, out, reason))
+    {
+      state = candidate;
+      reason = attempt == 0 ? "compliant reference accepted" : "compliant acceleration constrained; anti-windup";
+      return true;
+    }
+  }
+  return false;
 }
 }  // namespace roll_yaw

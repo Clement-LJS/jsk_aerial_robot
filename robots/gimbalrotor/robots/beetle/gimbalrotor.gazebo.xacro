@@ -12,7 +12,7 @@
 
   <xacro:if value="$(arg simulate_roll_yaw_contact)">
     <gazebo>
-      <plugin name="roll_yaw_passive_contact" filename="libroll_yaw_perching_gazebo.so">
+      <plugin name="roll_yaw_passive_contact" filename="libgimbalrotor_perching_gazebo.so">
         <robotNamespace>$(arg robot_name)</robotNamespace>
       </plugin>
     </gazebo>

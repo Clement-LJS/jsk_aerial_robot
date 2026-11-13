@@ -2,7 +2,7 @@
 #pragma once
 
 #include <gimbalrotor/control/gimbalrotor_admittance_controller.h>
-#include <gimbalrotor/perching_geometry.h>
+#include <gimbalrotor/gimbalrotor_perching.h>
 
 #include <geometry_msgs/PointStamped.h>
 #include <geometry_msgs/PoseStamped.h>

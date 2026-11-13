@@ -33,7 +33,7 @@ h       : print help
 CTRL-C  : quit (leaves the current robot/perching state unchanged)
 
 Notes:
-  - This script is for GimbalrotorMultilinkPerchingNavigator.
+  - This script uses GimbalrotorPerchingNavigator with perching_configuration=multilink.
   - Starting this keyboard does not adopt an externally enabled lock.
   - e requests a fresh navigator lock, even when perching is already enabled.
   - Physically perch, press e, then z; wait for ready, press r, then cut.

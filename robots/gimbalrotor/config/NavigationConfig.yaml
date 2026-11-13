@@ -1,6 +1,7 @@
 # Teleop Basic Param
 
 navigation:
+  perching_configuration: baseline
   xy_control_mode: 0
   # World Pos Control Mode: 0
   # World Vel Control Mode: 2

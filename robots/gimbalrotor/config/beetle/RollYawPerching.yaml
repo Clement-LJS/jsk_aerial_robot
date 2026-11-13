@@ -5,6 +5,7 @@ controller:
   # Host yaw PID consumes target rate; FourAxisCommand has no separate rate field.
   gimbal_calc_in_fc: true
 navigation:
+  perching_configuration: roll_yaw
   perching_enable: false
   roll_yaw_perching:
     # Common base lifecycle: enable/capture -> nominal target -> update/FK -> controller.
