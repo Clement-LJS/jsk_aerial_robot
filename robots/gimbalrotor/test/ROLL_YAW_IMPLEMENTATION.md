@@ -1,3 +1,13 @@
+# Current status: diagnostic observer removed (2026-11-13)
+
+The optional articulated diagnostic dynamics/momentum observer, its worker and
+command-wrench subscription, and the `diagnostic_dynamics` and
+`admittance/observer_gain` parameters have been removed. The active configured
+external-wrench input, wrench projection, tare/filtering and path admittance
+remain unchanged. Statements about the optional diagnostic mode and all
+verification results below are historical records of earlier revisions, not
+validation of this removal.
+
 # Manual navigation and feedback recovery correction (2026-11-06)
 
 The local source and the locally available `be4b999` object confirmed the

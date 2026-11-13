@@ -462,66 +462,6 @@ TEST(Admittance,BaselineDistinctContactSignsLimitsAndSmoothRelease)
     EXPECT_LT(std::abs(a.offset),1e-7); EXPECT_LT(std::abs(a.rate),1e-7);
   }
 }
-TEST(Dynamics,EnergyMassGravityMomentumAndTaskPower)
-{
-  Fixture f; ArticulatedDynamics d(f.model,f.tree,f.inertia,{},"body",1,0,Vec(0,0,-9.80665));
-  const Vec q(.1,.2,-.3),v(.04,-.03,.02); KDL::JntArray rates(2);
-  auto terms=d.evaluate(q,v,f.joints,rates,Vec::Zero(),Vec::Zero(),Vec::Zero(),.05,{});
-  ASSERT_TRUE(terms.ok)<<terms.reason;
-  EXPECT_LT((terms.mass-terms.mass.transpose()).norm(),1e-10);
-  EXPECT_LT((terms.momentum-terms.mass*v).norm(),1e-7);
-  EXPECT_NEAR(terms.kinetic,.5*v.dot(terms.mass*v),1e-8);
-  auto stationary=d.evaluate(q,Vec::Zero(),f.joints,rates,Vec::Zero(),Vec::Zero(),Vec::Zero(),.05,{});
-  ASSERT_TRUE(stationary.ok);
-  Mat j; Pose b,g; f.model.jacobian(q,j); f.model.evaluate(q,b,g);
-  EXPECT_NEAR(terms.potential,2.5*9.80665*g.translation().z(),1e-10);
-  const Vec gravity_torque=(g.translation()-f.model.pivotLock().translation()).cross(Vec(0,0,-2.5*9.80665));
-  EXPECT_NEAR(stationary.drift[0],(f.model.pivotLock().linear()*Vec::UnitY()).dot(gravity_torque),1e-6);
-  const Vec compensating_torque=b.linear()*j.transpose().fullPivLu().solve(-stationary.drift);
-  auto balanced=d.evaluate(q,Vec::Zero(),f.joints,rates,Vec::Zero(),compensating_torque,Vec::Zero(),.05,{});
-  ASSERT_TRUE(balanced.ok); EXPECT_LT(balanced.drift.norm(),1e-7);
-  const Vec effort(0,.3,-.2);
-  auto actuated=d.evaluate(q,Vec::Zero(),f.joints,rates,Vec::Zero(),compensating_torque,effort,.05,{});
-  EXPECT_LT((actuated.drift-effort).norm(),1e-7); // no second scaling or sign change
-  const Vec external(.3,-.2,.1); const double pitch_rate=-.05;
-  EXPECT_NEAR(external.dot(terms.pitch_map*pitch_rate),terms.pitch_map.dot(external)*pitch_rate,1e-14);
-  MomentumObserver observer; DynamicsTerms sample; sample.ok=true; sample.pitch_map=terms.pitch_map;
-  EXPECT_FALSE(observer.update(sample,1,.15));
-  for(int i=1;i<=300;++i) { sample.momentum=external*(i*.01); ASSERT_TRUE(observer.update(sample,1+i*.01,.15)); }
-  EXPECT_LT((observer.residual-external).norm(),1e-8);
-  EXPECT_NEAR(observer.torque,terms.pitch_map.dot(external),1e-8);
-  EXPECT_FALSE(observer.update(sample,10,.15)); // reinitialize across source gap
-}
-TEST(Dynamics,ExtraModuleCountedExactlyOnce)
-{
-  Fixture f; const KDL::Vector center(.1,.02,.03);
-  const KDL::Segment payload("body",KDL::Joint(KDL::Joint::None),KDL::Frame(center),
-    KDL::RigidBodyInertia(.4,KDL::Vector::Zero(),KDL::RotationalInertia(.002,.002,.002)));
-  const std::map<std::string,KDL::Segment> extra={{"tool",payload}};
-  ArticulatedDynamics plain(f.model,f.tree,f.inertia,{},"body",1,0,Vec(0,0,-9.80665));
-  ArticulatedDynamics loaded(f.model,f.tree,f.inertia,extra,"body",1,0,Vec(0,0,-9.80665));
-  KDL::JntArray rates(2); const Vec q(.1,.2,.3);
-  auto a=plain.evaluate(q,Vec::Zero(),f.joints,rates,Vec::Zero(),Vec::Zero(),Vec::Zero(),.05,{});
-  auto b=loaded.evaluate(q,Vec::Zero(),f.joints,rates,Vec::Zero(),Vec::Zero(),Vec::Zero(),.05,{});
-  ASSERT_TRUE(a.ok); ASSERT_TRUE(b.ok); Pose body,cog; f.model.evaluate(q,body,cog);
-  EXPECT_NEAR(b.potential-a.potential,.4*9.80665*(body*Vec(center.x(),center.y(),center.z())).z(),1e-10);
-  EXPECT_GT((b.mass-a.mass).trace(),0);
-}
-TEST(Dynamics,MeasuredGimbalMotionContributesToGeneralizedMomentum)
-{
-  Fixture f;
-  ASSERT_TRUE(f.tree.addSegment(KDL::Segment("gimbal",KDL::Joint("gimbal_joint",KDL::Joint::RotY),
-    KDL::Frame(KDL::Vector(.2,.1,0))),"body"));
-  f.inertia["gimbal"]=KDL::RigidBodyInertia(.3,KDL::Vector(.08,0,.02),KDL::RotationalInertia(.01,.01,.01));
-  KDL::JntArray joints(3),rates(3); joints(2)=.4; rates(2)=.2;
-  ArticulatedDynamics d(f.model,f.tree,f.inertia,{},"body",1,0,Vec(0,0,-9.80665));
-  auto moving=d.evaluate(Vec::Zero(),Vec::Zero(),joints,rates,Vec::Zero(),Vec::Zero(),Vec::Zero(),.05,{});
-  rates.data.setZero();
-  auto frozen=d.evaluate(Vec::Zero(),Vec::Zero(),joints,rates,Vec::Zero(),Vec::Zero(),Vec::Zero(),.05,{});
-  ASSERT_TRUE(moving.ok); ASSERT_TRUE(frozen.ok);
-  EXPECT_GT(moving.momentum.norm(),1e-4); EXPECT_GT(moving.kinetic,0);
-  EXPECT_LT(frozen.momentum.norm(),1e-12); EXPECT_DOUBLE_EQ(frozen.kinetic,0);
-}
 TEST(Worker,BoundedQueueCancellationAndNonblockingTake)
 {
   Worker<Plan> worker; std::atomic<bool> started{false};
@@ -584,8 +524,4 @@ TEST(ActualUrdf,JacobianCogAndOfflinePlan)
     auto stroke=prepare(model,a.align.knots.back().eta,b.linear(),r,c);
     ASSERT_TRUE(stroke.ok)<<stroke.reason; EXPECT_GT(stroke.proxy_drop,0);
   }
-  ArticulatedDynamics dynamics(model,tree,inertia,{},"fc",roll,yaw,Vec(0,0,-9.80665));
-  KDL::JntArray rates(joints.rows());
-  const double began=steadySeconds(); auto t=dynamics.evaluate(Vec(.1,.2,.3),Vec(.01,.02,-.01),joints,rates,Vec::Zero(),Vec::Zero(),Vec::Zero(),.05,{});
-  ASSERT_TRUE(t.ok)<<t.reason; std::cout<<"Current URDF dynamics sample wall seconds: "<<steadySeconds()-began<<"\n";
 }

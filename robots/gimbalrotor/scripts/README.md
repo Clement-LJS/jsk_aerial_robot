@@ -284,10 +284,7 @@ is wrench ON the robot: `wrench_scale: 1`, `wrench_sign: +1`. These conventions
 are not physical calibration. This momentum observer uses model mass/inertia
 and commanded input; perch reaction, model error and actuator error contaminate
 it. `command_wrench_estimate`, pivot reaction alone and tracking error are not
-isolated saw-force inputs. The articulated observer remains diagnostic only and is not scheduled by default.
-Set `navigation/roll_yaw_perching/diagnostic_dynamics: true` only to opt in to
-that workload. This setting does not disable the built-in external-wrench
-estimator or affect path admittance.
+isolated saw-force inputs.
 
 The built-in source defaults are `external_wrench_topic: estimated_external_wrench`,
 `wrench_frame: world`, `wrench_point: cog`, `wrench_sign: 1.0`, and
@@ -393,7 +390,7 @@ flow through the existing flight controller. No saw command is sent.
 
 No flight/cutting outcome or hardware calibration follows from the offline
 checks. Commission the pivot, model assumptions, actuator tracking and
-optional observer source before physical operation.
+the configured external-wrench source before physical operation.
 
 ### `keyboard_changerpy.py`
 

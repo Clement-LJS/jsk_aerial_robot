@@ -1032,8 +1032,7 @@ bool GimbalrotorPerchingNavigator::perchingAdmittanceTarget(
 
 GimbalrotorPerchingNavigator::~GimbalrotorPerchingNavigator()
 {
-  // Join the selected workers while all navigator state is still alive.
-  dynamics_worker_.reset();
+  // Join the planning worker while all navigator state is still alive.
   prepare_worker_.reset();
 }
 
@@ -3179,7 +3178,6 @@ bool readVector(ros::NodeHandle& nh, const std::string& key, Eigen::Vector3d& va
 void GimbalrotorPerchingNavigator::initializeRollYaw(ros::NodeHandle nh, ros::NodeHandle nhp)
 {
   prepare_worker_ = std::make_unique<roll_yaw::Worker<roll_yaw::Plan>>();
-  dynamics_worker_ = std::make_unique<roll_yaw::Worker<DynamicsResult>>();
   rollYawRosParamInit(nh, nhp);
   ros::NodeHandle pn(nh, "navigation/roll_yaw_perching");
   std::string joint_topic, command_topic, body_topic;
@@ -3196,8 +3194,6 @@ void GimbalrotorPerchingNavigator::initializeRollYaw(ros::NodeHandle nh, ros::No
   ack_pub_ = nh.advertise<std_msgs::String>(roll_yaw_prefix_ + "/command_ack", 1);
   subscriptions_.push_back(
       nh.subscribe("perching/admittance_enable", 1, &GimbalrotorPerchingNavigator::admittanceCallback, this));
-  subscriptions_.push_back(nh.subscribe("perching/roll_yaw/command_wrench_estimate", 1,
-                                        &GimbalrotorPerchingNavigator::wrenchCallback, this));
   subscriptions_.push_back(
       nh.subscribe(interaction_topic_, 1, &GimbalrotorPerchingNavigator::externalWrenchCallback, this));
   subscriptions_.push_back(
@@ -3250,7 +3246,6 @@ void GimbalrotorPerchingNavigator::initializeRollYaw(ros::NodeHandle nh, ros::No
 void GimbalrotorPerchingNavigator::rollYawRosParamInit(ros::NodeHandle nh, ros::NodeHandle nhp)
 {
   ros::NodeHandle pn(nh, "navigation/roll_yaw_perching");
-  pn.param("diagnostic_dynamics", diagnostic_dynamics_, false);
   pn.param<std::string>("roll_joint", roll_, "joint_roll");
   pn.param<std::string>("yaw_joint", yaw_, "joint_yaw");
   pn.param<std::string>("contact_link", contact_, "roll_hand_link");
@@ -3294,7 +3289,6 @@ void GimbalrotorPerchingNavigator::rollYawRosParamInit(ros::NodeHandle nh, ros::
   an.param("on_dwell", a.on_dwell, a.on_dwell);
   an.param("off_dwell", a.off_dwell, a.off_dwell);
   an.param("baseline_samples", a.baseline_samples, a.baseline_samples);
-  an.param("observer_gain", observer_.gain, observer_.gain);
   an.param<std::string>("external_wrench_topic", interaction_topic_, "estimated_external_wrench");
   an.param<std::string>("wrench_frame", interaction_frame_, "world");
   an.param<std::string>("wrench_point", interaction_point_, "cog");
@@ -3481,39 +3475,6 @@ void GimbalrotorPerchingNavigator::rollYawJointCallback(const sensor_msgs::Joint
 {
   std::lock_guard<std::recursive_mutex> l(perchingStateMutex());
   const double source = m->header.stamp.toSec(), receipt = ros::Time::now().toSec();
-  if(diagnostic_dynamics_ && source > 0 && receipt - source >= -feedback_config_.future_tolerance &&
-     receipt - source <= feedback_config_.timeout)
-  {
-    const auto indices = robot_model_->getJointIndexMap();
-    for(int rotor = 1; rotor <= 4; ++rotor)
-    {
-      const auto name = "gimbal" + std::to_string(rotor);
-      const auto it = std::find(m->name.begin(), m->name.end(), name);
-      if(it == m->name.end())
-        continue;
-      const auto i = static_cast<std::size_t>(it - m->name.begin());
-      if(std::count(m->name.begin(), m->name.end(), name) != 1 || i >= m->position.size() ||
-         !std::isfinite(m->position[i]))
-        articulation_samples_[name].rate = std::numeric_limits<double>::quiet_NaN();
-    }
-    for(std::size_t i = 0; i < m->name.size() && i < m->position.size(); ++i)
-    {
-      if(!indices.count(m->name[i]) || !std::isfinite(m->position[i]) ||
-         std::count(m->name.begin(), m->name.end(), m->name[i]) != 1)
-        continue;
-      auto& sample = articulation_samples_[m->name[i]];
-      if(source < sample.stamp && receipt < sample.stamp - feedback_config_.future_tolerance)
-        sample = ArticulationSample();
-      if(source <= sample.stamp)
-        continue;
-      const double dt = source - sample.stamp;
-      const double rate = i < m->velocity.size() ? m->velocity[i]
-                                                 : (sample.stamp > 0 && dt > 1e-4 && dt <= feedback_config_.timeout
-                                                        ? (m->position[i] - sample.position) / dt
-                                                        : std::numeric_limits<double>::quiet_NaN());
-      sample = {m->position[i], rate, source};
-    }
-  }
   // Other publishers may send gimbal-only messages on this shared topic.
   if(std::find(m->name.begin(), m->name.end(), roll_) == m->name.end() &&
      std::find(m->name.begin(), m->name.end(), yaw_) == m->name.end())
@@ -3580,17 +3541,7 @@ void GimbalrotorPerchingNavigator::rollYawJointCallback(const sensor_msgs::Joint
   }
   joint_bootstrap_ = q;
   joint_bootstrap_stamp_ = stamp;
-  servo_effort_.setConstant(std::numeric_limits<double>::quiet_NaN());
-  for(int i = 1; i < 3; ++i)
-  {
-    const auto it = std::find(m->name.begin(), m->name.end(), i == 1 ? roll_ : yaw_);
-    const auto index = std::distance(m->name.begin(), it);
-    if(static_cast<std::size_t>(index) < m->effort.size() && std::isfinite(m->effort[index]))
-      servo_effort_[i] = m->effort[index];
-  }
-  servo_effort_[0] = 0;
-  effort_stamp_ = stamp;
-  effort_receipt_ = joint_receipt_ = now;
+  joint_receipt_ = now;
   measured_.eta = q;
   measured_.joint_rate = rate;
   measured_.joint_stamp = stamp;
@@ -3733,12 +3684,6 @@ bool GimbalrotorPerchingNavigator::tryLockRollYaw(const std::string& cause)
                          tfVector(model_.pivotLock().translation()));
   roll_yaw_lock_stamp_ = perchingSession().lock_stamp;
   resetCompliance();
-  const auto indices = robot_model_->getJointIndexMap();
-  if(diagnostic_dynamics_)
-    dynamics_model_ = std::make_shared<roll_yaw::ArticulatedDynamics>(
-        model_, robot_model_->getTree(), robot_model_->getInertiaMap(), robot_model_->getExtraModuleMap(),
-        robot_model_->getBaselinkName(), indices.at(roll_), indices.at(yaw_),
-        -Eigen::Vector3d(robot_model_->getGravity3d()));
   planning_model_ = std::make_shared<roll_yaw::Kinematics>(model_);
   reason_ = "measured contact captured by " + cause + "; independent nominal targets initialized";
   publishRollYawDiagnostics();
@@ -3763,7 +3708,6 @@ void GimbalrotorPerchingNavigator::resetRollYawLock()
   feedback_waiting_ = false;
   roll_yaw_lock_stamp_ = ros::Time();
   resetCompliance();
-  dynamics_model_.reset();
   manual_path_ = roll_yaw::Path();
   stop_pending_ = false;
   preparation_window_.reset();
@@ -4639,13 +4583,7 @@ void GimbalrotorPerchingNavigator::advancePreparedConnection()
 }
 void GimbalrotorPerchingNavigator::resetCompliance()
 {
-  dynamics_worker_->cancel();
-  dynamics_pending_ = false;
-  observer_.reset();
   admittance_.reset();
-  torque_valid_ = false;
-  last_dynamics_stamp_ = torque_stamp_ = torque_receipt_ = 0;
-  observer_started_ = roll_yaw::steadySeconds();
   external_wrench_ = geometry_msgs::WrenchStamped();
   tare_requested_ = false;
   interaction_valid_ = false;
@@ -4876,134 +4814,6 @@ void GimbalrotorPerchingNavigator::updateInteraction(const roll_yaw::Feedback& f
   planner_->relief_angle_limit = admittance_.config.angle_limit;
   planner_->relief_rate_limit = admittance_.config.rate_limit;
   planner_->relief_acceleration_limit = admittance_.config.acceleration_limit;
-}
-void GimbalrotorPerchingNavigator::wrenchCallback(const geometry_msgs::WrenchStampedConstPtr& msg)
-{
-  std::lock_guard<std::recursive_mutex> l(perchingStateMutex());
-  const double stamp = msg->header.stamp.toSec(), now = ros::Time::now().toSec();
-  const auto& f = msg->wrench.force;
-  const auto& t = msg->wrench.torque;
-  if(stamp <= input_wrench_.header.stamp.toSec())
-    return;
-  if(frameName(msg->header.frame_id) != frameName(world_) || stamp <= 0 || now - stamp > feedback_config_.timeout ||
-     now - stamp < -feedback_config_.future_tolerance || !Eigen::Vector3d(f.x, f.y, f.z).allFinite() ||
-     !Eigen::Vector3d(t.x, t.y, t.z).allFinite())
-  {
-    load_reason_ = "invalid command-derived wrench frame/stamp/value";
-    torque_valid_ = false;
-    return;
-  }
-  input_wrench_ = *msg;
-  wrench_receipt_ = roll_yaw::steadySeconds();
-}
-void GimbalrotorPerchingNavigator::updateDynamics(const roll_yaw::Feedback& f)
-{
-  if(!diagnostic_dynamics_)
-  {
-    torque_valid_ = false;
-    load_reason_ = "disabled: diagnostic_dynamics=false";
-    return;
-  }
-  const double now = roll_yaw::steadySeconds();
-  if(auto result = dynamics_worker_->take())
-  {
-    dynamics_pending_ = false;
-    dynamics_wall_ = result->wall;
-    if(result->session == roll_yaw_lock_stamp_.toNSec() && now - result->submitted <= feedback_config_.timeout &&
-       f.now - result->stamp <= feedback_config_.timeout && result->terms.ok)
-    {
-      const bool observed = observer_.update(result->terms, result->stamp, feedback_config_.timeout);
-      if(!observed)
-        observer_started_ = now;
-      torque_valid_ = observed && now - observer_started_ >= 1;
-      if(torque_valid_)
-      {
-        torque_stamp_ = result->stamp;
-        torque_receipt_ = now;
-        // Diagnostic only; raw servo current scaling and command-derived
-        // wrench do not establish an external cutting interaction estimate.
-      }
-      load_reason_ =
-          torque_valid_ ? result->reason : "diagnostic observer initializing/recovering; not an interaction input";
-    }
-    else
-    {
-      torque_valid_ = false;
-      load_reason_ = "rejected dynamics: " + result->reason;
-    }
-  }
-  if(now - torque_receipt_ > feedback_config_.timeout)
-    torque_valid_ = false;
-  if(dynamics_pending_ || now - last_dynamics_ < .05 || f.body_stamp <= last_dynamics_stamp_)
-    return;
-  const double source = input_wrench_.header.stamp.toSec();
-  auto fresh = [&](double stamp)
-  {
-    return stamp > 0 && f.now - stamp >= -feedback_config_.future_tolerance &&
-           f.now - stamp <= feedback_config_.timeout;
-  };
-  if(!dynamics_model_ || !contactRejection(f).empty() || !servo_effort_.allFinite() || !fresh(effort_stamp_) ||
-     !fresh(source) || now - wrench_receipt_ > feedback_config_.timeout ||
-     std::abs(source - f.body_stamp) > synchronization_tolerance_ ||
-     std::abs(effort_stamp_ - f.body_stamp) > synchronization_tolerance_)
-  {
-    load_reason_ = "no computable dynamics: require synchronized body, active effort and command-wrench samples";
-    torque_valid_ = false;
-    return;
-  }
-  roll_yaw::Estimate estimate;
-  Eigen::Matrix3d j;
-  if(!model_.estimate(f.body, f.eta, estimate))
-    return;
-  Eigen::Vector3d q = f.eta, v = f.joint_rate;
-  q[0] = estimate.alpha;
-  if(!model_.jacobian(q, j))
-    return;
-  v[0] = j.col(0).dot(f.body_omega - j.col(1) * v[1] - j.col(2) * v[2]);
-  auto joints = robot_model_->getJointPositions();
-  KDL::JntArray rates(joints.rows());
-  rates.data.setZero();
-  unsigned missing = 0;
-  for(const auto& joint : robot_model_->getJointIndexMap())
-  {
-    if(joint.second >= rates.rows())
-      continue;
-    const auto found = articulation_samples_.find(joint.first);
-    if(found != articulation_samples_.end() && fresh(found->second.stamp) &&
-       std::abs(found->second.stamp - f.body_stamp) <= synchronization_tolerance_ && std::isfinite(found->second.rate))
-    {
-      joints(joint.second) = found->second.position;
-      rates(joint.second) = found->second.rate;
-    }
-    else if(joint.first != roll_ && joint.first != yaw_)
-      ++missing;
-  }
-  const auto& force = input_wrench_.wrench.force;
-  const auto& torque = input_wrench_.wrench.torque;
-  const Eigen::Vector3d fw(force.x, force.y, force.z), tw(torque.x, torque.y, torque.z), effort = servo_effort_;
-  const auto model = dynamics_model_;
-  const auto session = roll_yaw_lock_stamp_.toNSec();
-  const double stamp = f.body_stamp, sigma = planning_config_.min_singular_value;
-  dynamics_pending_ = dynamics_worker_->submit(
-      [model, q, v, joints, rates, fw, tw, effort, session, stamp, now, sigma,
-       missing](const std::function<bool()>& cancelled)
-      {
-        DynamicsResult out;
-        out.session = session;
-        out.stamp = stamp;
-        out.submitted = now;
-        const double began = roll_yaw::steadySeconds();
-        out.terms = model->evaluate(q, v, joints, rates, fw, tw, effort, sigma,
-                                    [cancelled, began] { return cancelled() || roll_yaw::steadySeconds() - began > .1; });
-        out.reason = out.terms.reason + "; unmeasured other joint rates frozen=" + std::to_string(missing);
-        out.wall = roll_yaw::steadySeconds() - began;
-        return out;
-      });
-  if(dynamics_pending_)
-  {
-    last_dynamics_ = now;
-    last_dynamics_stamp_ = f.body_stamp;
-  }
 }
 void GimbalrotorPerchingNavigator::resetRollYawPitchRezeroState()
 {
@@ -5472,7 +5282,6 @@ void GimbalrotorPerchingNavigator::updateRollYaw()
   }
   if(lock_valid_ && !faulted_ && roll_yaw_pitch_rezero_state_ == RollYawPitchRezeroState::IDLE)
   {
-    updateDynamics(feedback());
     if(!planner_)
       updateInteraction(feedback());
   }
@@ -5502,8 +5311,7 @@ void GimbalrotorPerchingNavigator::publishRollYawDiagnostics()
     return;
   last_diagnostics_ = now;
   if(lock_valid_)
-    ROS_INFO_STREAM_THROTTLE(2.0, "[RollYaw] " << transition << ": " << reason_ << "; diagnostic observer: "
-                                               << load_reason_ << "; " << admittance_reason_);
+    ROS_INFO_STREAM_THROTTLE(2.0, "[RollYaw] " << transition << ": " << reason_ << "; " << admittance_reason_);
   std_msgs::UInt64 session;
   session.data = lock_valid_ ? roll_yaw_lock_stamp_.toNSec() : 0;
   session_pub_.publish(session);
@@ -5624,7 +5432,6 @@ void GimbalrotorPerchingNavigator::publishRollYawDiagnostics()
   field("producer_generation", producer_generation_);
   field("first_fault", previous_failure_);
   field("feedback_waiting", feedback_waiting_);
-  field("diagnostic_dynamics_enabled", diagnostic_dynamics_);
   field("stopping", stop_pending_);
   field("manual_callback_wall_s", manual_wall_);
   const bool jog_valid = lock_valid_ && jog_.session == roll_yaw_lock_stamp_.toNSec() && jog_.session != 0;
@@ -5762,7 +5569,6 @@ void GimbalrotorPerchingNavigator::publishRollYawDiagnostics()
   field("interaction_point", interaction_point_);
   field("interaction_sign", interaction_sign_);
   field("interaction_scale", interaction_scale_);
-  field("command_observer_torque_UNVERIFIED_Nm", torque_valid_ ? observer_.torque : nan);
   field("torque_age_s", interaction_stamp_ > 0 ? f.now - interaction_stamp_ : nan);
   field("reference_torque_Nm", admittance_.config.reference_torque);
   field("filtered_contact_torque_Nm", admittance_.baseline_ready ? admittance_.filtered : nan);
@@ -5775,12 +5581,6 @@ void GimbalrotorPerchingNavigator::publishRollYawDiagnostics()
   field("offset_rad", admittance_.offset);
   field("offset_rate_rad_s", admittance_.rate);
   field("offset_acceleration_rad_s2", admittance_.acceleration);
-  field("load_source", load_reason_);
-  field("servo_roll_effort_Nm_estimate", f.now - effort_stamp_ <= feedback_config_.timeout ? servo_effort_[1] : nan);
-  field("servo_yaw_effort_Nm_estimate", f.now - effort_stamp_ <= feedback_config_.timeout ? servo_effort_[2] : nan);
-  field("effort_stamp_s", effort_stamp_);
-  field("command_wrench_stamp_s", input_wrench_.header.stamp.toSec());
-  field("dynamics_wall_s", dynamics_wall_);
   field("navigation_wall_s", navigation_wall_);
   array.status.push_back(std::move(diagnostic));
   status_pub_.publish(array);

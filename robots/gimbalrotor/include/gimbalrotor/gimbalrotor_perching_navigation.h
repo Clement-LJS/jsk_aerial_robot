@@ -562,32 +562,12 @@ private:
   std::uint64_t producer_generation_ = 0, pending_generation_ = 0;
   Eigen::Matrix3d neutral_ = Eigen::Matrix3d::Identity();
 
-  struct DynamicsResult
-  {
-    roll_yaw::DynamicsTerms terms;
-    std::string reason;
-    std::uint64_t generation = 0, session = 0;
-    double stamp = 0, submitted = 0, wall = 0;
-  };
-  std::unique_ptr<roll_yaw::Worker<DynamicsResult>> dynamics_worker_;
-  std::shared_ptr<roll_yaw::ArticulatedDynamics> dynamics_model_;
-  roll_yaw::MomentumObserver observer_;
   roll_yaw::PitchAdmittance admittance_;
-  bool diagnostic_dynamics_ = false, dynamics_pending_ = false, torque_valid_ = false;
   bool last_command_accepted_ = false;
-  double last_dynamics_stamp_ = 0, observer_started_ = 0;
-  double dynamics_wall_ = 0, last_dynamics_ = 0;
-  double torque_stamp_ = 0, torque_receipt_ = 0, control_pitch_ = 0;
+  double control_pitch_ = 0;
   std::uint64_t plan_id_ = 0;
-  std::string load_reason_ = "no computable input", admittance_reason_ = "disarmed";
-  Eigen::Vector3d servo_effort_ = Eigen::Vector3d::Constant(std::numeric_limits<double>::quiet_NaN());
-  double effort_stamp_ = 0, effort_receipt_ = 0, body_receipt_ = 0, joint_receipt_ = 0, wrench_receipt_ = 0;
-  geometry_msgs::WrenchStamped input_wrench_;
-  struct ArticulationSample
-  {
-    double position = 0, rate = 0, stamp = 0;
-  };
-  std::map<std::string, ArticulationSample> articulation_samples_;
+  std::string admittance_reason_ = "disarmed";
+  double body_receipt_ = 0, joint_receipt_ = 0;
   void admittanceCallback(const std_msgs::BoolConstPtr&);
   void externalWrenchCallback(const geometry_msgs::WrenchStampedConstPtr&);
   void tareCallback(const std_msgs::EmptyConstPtr&);
@@ -598,8 +578,6 @@ private:
          interaction_receipt_ = 0;
   double compliance_time_ = 0;
   geometry_msgs::WrenchStamped external_wrench_;
-  void wrenchCallback(const geometry_msgs::WrenchStampedConstPtr&);
-  void updateDynamics(const roll_yaw::Feedback&);
   void resetCompliance();
   ros::Publisher status_pub_, task_pub_, compliance_pub_, ack_pub_;
   std::string last_status_;
