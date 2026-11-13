@@ -272,12 +272,105 @@ endpoint orientation and mechanism tracking plus the configured settling window,
 not merely elapsed time. `task_pitch` plots nominal/measured/applied local pitch;
 the final requested goal remains separate in diagnostics.
 
+With `admittance/source: articulated_momentum` (the hardware configuration), a
+successful contact lock starts the articulated momentum observer automatically.
+The first coherent physical sample rebases it; subsequent advancing samples
+estimate the external generalized loads using `p = M(q) * q_dot` and the existing
+momentum residual. Estimation continues during contact hold, manual
+alpha/roll/yaw commands, body-local pitch jogs, alignment, preparation, READY,
+execution, pause and completion. No prepare, start, tare or admittance-enable
+step is needed to inspect it:
+
+```bash
+rostopic echo /gimbalrotor/perching/roll_yaw/generalized_external_load
+rostopic echo /gimbalrotor/perching/roll_yaw/generalized_external_load_valid
+rostopic echo /gimbalrotor/perching/roll_yaw/diagnostics_status
+```
+
+Under the configured roll–yaw debug prefix (default
+`/gimbalrotor/perching/roll_yaw`), `generalized_external_load` is a
+`sensor_msgs/JointState` with names `[alpha, configured_roll_joint,
+configured_yaw_joint]` (normally `[alpha, joint_roll, joint_yaw]`) and three
+`effort` values in N·m. Position and velocity arrays are empty. These are loads
+in generalized coordinates, not a Cartesian force/torque vector or isolated
+saw force; unmodelled loads and model/input errors also contribute.
+`generalized_external_load_valid` is a `std_msgs/Bool`, true only for a ready,
+current, physically valid result in this lock. Both topics publish on every
+navigation update, independently of the diagnostic throttle and subscribers.
+The numeric header keeps the actual observer/body sample timestamp; repeated
+samples never advance integration, refresh receipt time or fake a new timestamp.
+Readiness expires at `max_execution_step` in both sample age and steady time
+since the last coherent observation.
+Bootstrap, stale/invalid input and unperched operation publish false and NaN
+efforts. Reset invalidations publish promptly with stamp zero; a retained but
+expired sample keeps its original stamp and is also invalid/NaN.
+Diagnostics expose the same validity, age, stamp, coordinate order, loads and
+`articulated_status` rejection/bootstrap reason.
+
+The observer runs once in `applyRollYawTarget`, after physical feedback/contact
+and model guards and before path consumers. It retains the HOVER/attachment,
+timestamp, synchronization, inertia, finite-input and state-reconstruction
+checks. ServoBridge current-derived joint efforts are consumed directly without
+another calibration or sign/scale conversion.
+
+The three-coordinate reduced model explicitly neglects internal rotor-gimbal
+motion and its coupling dynamics. All represented masses and inertias, including
+motor/gimbal assemblies, remain included at the internal configuration captured
+at lock. Mass matrix, gravity, link geometry/Jacobians and predicted momentum
+rate use that same reference with current alpha/roll/yaw. Physical gimbals may
+move normally and remain at new angles without invalidating, rebasing or
+requiring relock/tare. No gimbal velocity, derived rate, fresh gimbal timestamp
+or comparison against the reference angle is required by the reduced observer.
+Gimbal-only messages do not reset or advance it. The exempt joints use the
+controller's exact rotor-indexed names verified against the rotor-arm-to-thrust
+URDF chains (`gimbal1` through `gimbal4` on Beetle), not a substring filter.
+Unsupported additional mechanism joints retain the existing position/rate
+checks (1e-4 rad and 1e-3 rad/s) and synchronized feedback requirements.
+
+For the articulated source, the CoG drift guard compares captured geometry to a
+local copy of the current joint configuration with only rotor gimbals replaced
+by their reference values. It therefore detects unsupported mechanism changes
+without rejecting permitted gimbal motion. Topology, joint mapping, fixed
+geometry, mass/inertia and extra-module changes remain faults. This comparison
+does not change the live robot model, controller geometry or physical commands.
+The legacy source retains its existing CoG guard.
+
+The known actuation input remains the current world-frame command wrench about
+the instantaneous CoG. Each accepted input retains the current body-to-CoG
+offset from the live model. The generalized-force mapping shifts its moment to
+body origin B exactly once using `moment_B = moment_CoG + (position_CoG -
+position_B) cross force`. This current application point is separate from the
+fixed internal inertial geometry; no live gimbal inertial terms are mixed into
+the reduced momentum model. Omitted dynamics and actuation/model errors can
+appear in the generalized residual: this is not exact Cartesian contact-wrench
+recovery. Missing/stale/nonfinite required body, roll/yaw or actuation inputs,
+or genuine contact/model faults, still produce unavailable output.
+
+Path/compliance resets preserve raw history and known-input caches. Disabling
+perching, relock, source/configuration changes, actual model/coordinate recapture and
+physical observation faults invalidate/rebase the observer. Rezero currently
+recaptures the coordinate model at admission, so it rebases once there and then
+observes throughout ACTIVE/HOLD while physically valid. Tare with unchanged
+source/model/lock preserves raw history. Physical faults clear the compliance
+baseline and cancel pending tare; raw recovery cannot re-arm compliance or
+restore that baseline. Explicit disarm/tare/enable is required after such a fault.
+
+For a prepared cut, the same timestamped residual is projected with its sampled
+Jacobian: `J * tangent = direction * UnitY`, then
+`task_torque = tangent.dot(generalized_external_load)`. `task_torque_valid`,
+`task_torque_Nm` and `compliance.vector.z` remain signed trajectory-projection
+outputs and may be unavailable before a cut exists. Missing/invalid paths or
+projection failures do not erase a valid raw estimate.
+
 Optional admittance uses this sequence:
 **align → prepare → measured READY → explicit no-cut tare → baseline ready →
 enable → start**. Ordinary cutting with admittance disabled needs no wrench
 or tare.
 
-The configured built-in `estimated_external_wrench` is a
+When `admittance/source: legacy_wrench` is explicitly selected, the existing
+wrench projection behavior is retained and the raw articulated output remains
+invalid; legacy values are never relabelled as generalized residuals.
+The built-in `estimated_external_wrench` is a
 `geometry_msgs/WrenchStamped`: force in world coordinates (N), moment in world
 coordinates about the CoG (N·m), timestamp from the IMU. The software convention
 is wrench ON the robot: `wrench_scale: 1`, `wrench_sign: +1`. These conventions
@@ -311,8 +404,9 @@ rostopic pub -1 /gimbalrotor/perching/admittance_enable std_msgs/Bool 'data: fal
 ```
 
 Tare works while disabled and at measured READY for a prepared cut. It asserts
-**no cutting contact**; it is never automatic during a cut. Quiet/contact failure
-or source gaps restart collection. A new
+**no cutting contact**; it is never automatic during a cut. Quiet-window failure
+restarts collection. Articulated physical/source faults cancel tare and require
+a fresh request after recovery; legacy source gaps retain their existing collection behavior. A new
 preparation, lock, stopped/cancelled motion or changed tare convention clears
 the baseline and disables admittance. Prepare therefore resets the previous cut's
 compliance state. Enabling requires a READY cut, valid source configuration,
@@ -353,7 +447,7 @@ Settings are read at these points (all under
 | Initialization | Geometry, topics/frames, mechanism/attitude/feedback/governor/settling limits, planning bounds/deadline, rezero settings, admittance dynamics/contact gains and sample count |
 | Enable/relock | Immutable URDF/inertia/extra-module snapshot, mechanism-limit intersection and captured contact; payload/geometry changes require recapture |
 | Prepare / numeric body target | `request/*` for cuts is read outside the navigation mutex; model, measured/applied start and generation are captured together under the state lock |
-| Explicit tare | `wrench_frame`, `wrench_point`, `wrench_sign`, `wrench_scale`; discards old baseline and requires new samples |
+| Explicit tare | Source/observer/effort settings and legacy `wrench_frame`, `wrench_point`, `wrench_sign`, `wrench_scale`; discards old baseline and requires new samples; unchanged articulated source preserves raw history |
 | Start / resume | Fresh body/joint/quiet/start checks and enabled interaction freshness; no sampled path re-solve |
 | Every active update | Feedback/contact/tracking guards, source age/synchronization, applied progress; held PLANNING/READY time is not integrated as motion |
 

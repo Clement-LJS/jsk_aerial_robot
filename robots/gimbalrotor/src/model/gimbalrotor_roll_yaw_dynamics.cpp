@@ -40,11 +40,14 @@ bool rollYawModel(const roll_yaw::Kinematics& geometry, const KDL::Tree& tree,
   }
   // Flatten once at capture. No tree iterators, solver references or mutable
   // scratch survive the snapshot: copies and concurrent evaluations are safe.
+  // Internal rotor-gimbal positions are modelling references, not physical
+  // setpoints. Their masses/inertias remain included; their motion and coupling
+  // dynamics are neglected consistently in geometry, energy and momentum.
   struct Node
   {
     KDL::Segment segment;
     std::size_t parent;
-    double frozen;
+    double reference_position;
     int coordinate;
     unsigned descendants;
   };
@@ -114,7 +117,7 @@ bool rollYawModel(const roll_yaw::Kinematics& geometry, const KDL::Tree& tree,
     for(std::size_t i = 1; i < nodes.size(); ++i)
     {
       const auto& node = nodes[i];
-      poses[i] = poses[node.parent] * node.segment.pose(node.coordinate ? q[node.coordinate] : node.frozen);
+      poses[i] = poses[node.parent] * node.segment.pose(node.coordinate ? q[node.coordinate] : node.reference_position);
     }
     const Eigen::Isometry3d world_root = out.body * roll_yaw::fromKdl(poses[body_index].Inverse());
     std::array<Eigen::Vector3d, 3> axes, origins;

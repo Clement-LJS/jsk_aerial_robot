@@ -19,6 +19,7 @@
 #include <sensor_msgs/JointState.h>
 #include <std_msgs/String.h>
 #include <map>
+#include <set>
 #include <vector>
 #include <kdl/frames.hpp>
 #include <Eigen/Core>
@@ -576,10 +577,16 @@ private:
   perching_dynamics::MultilinkModel articulated_model_;
   perching_dynamics::MomentumObserver momentum_observer_;
   bool articulated_model_valid_ = false;
+  bool articulated_valid_ = false;
+  double articulated_receipt_ = 0;
+  Eigen::Matrix3d articulated_jacobian_ = Eigen::Matrix3d::Zero();  // Same sample as the residual.
   std::string articulated_reason_ = "no locked dynamics snapshot";
   std::function<bool(const roll_yaw::Kinematics&, perching_dynamics::MultilinkModel&, std::string&)> dynamics_factory_;
   std::function<bool()> dynamics_snapshot_current_;
-  std::map<std::string, double> frozen_joints_;
+  // Rotor gimbals move physically; only the reduced model keeps their lock configuration.
+  std::set<std::string> rotor_gimbal_joints_;
+  std::map<std::string, double> fixed_mechanism_joints_;
+  std::function<bool(const Eigen::Vector3d&, Eigen::Isometry3d&)> reduced_cog_check_;
   struct DynamicsJoint
   {
     double position = 0, rate = 0, effort = std::numeric_limits<double>::quiet_NaN();
@@ -588,14 +595,19 @@ private:
   };
   std::map<std::string, DynamicsJoint> dynamics_joints_;
   geometry_msgs::WrenchStamped command_wrench_;
+  Eigen::Vector3d command_cog_offset_ = Eigen::Vector3d::Constant(std::numeric_limits<double>::quiet_NaN());
   ros::Subscriber command_wrench_sub_;
   double command_wrench_receipt_ = 0, articulated_joint_stamp_ = 0, articulated_command_stamp_ = 0;
-  void loadInteractionSource();
+  bool loadInteractionSource();
   bool interactionConfigurationValid() const;
   void captureDynamicsJoints(const sensor_msgs::JointState&, const std::string& producer);
   void commandWrenchCallback(const geometry_msgs::WrenchStampedConstPtr&);
-  bool observeArticulatedSample(const roll_yaw::Feedback&, double direction);
+  bool observeArticulatedSample(const roll_yaw::Feedback&);
+  bool articulatedLoadValid(const roll_yaw::Feedback&) const;
+  void publishArticulatedLoad();
+  void resetArticulatedSession(const std::string&);
   void invalidateArticulated(const std::string&);
+  void invalidateInteraction();
   bool last_command_accepted_ = false;
   double control_pitch_ = 0;
   std::uint64_t plan_id_ = 0;
@@ -613,6 +625,7 @@ private:
   geometry_msgs::WrenchStamped external_wrench_;
   void resetCompliance();
   ros::Publisher status_pub_, task_pub_, compliance_pub_, ack_pub_;
+  ros::Publisher generalized_load_pub_, generalized_load_valid_pub_;
   std::string last_status_;
   double last_diagnostics_ = 0, navigation_wall_ = 0;
 

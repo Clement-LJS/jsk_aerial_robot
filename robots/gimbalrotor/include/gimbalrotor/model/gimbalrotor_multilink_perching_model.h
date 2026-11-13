@@ -10,7 +10,7 @@
 namespace perching_dynamics
 {
 // Pure reduced-coordinate dynamics. Adapters define the independent coordinates
-// and must enforce the validity of any omitted/frozen coordinates.
+// and which omitted dynamics are approximated versus physically constrained.
 // Rotor spin/angular momentum is omitted, as in RobotModel's inertia map.
 class MultilinkModel
 {
@@ -43,6 +43,9 @@ public:
 
   bool configure(std::vector<std::string> coordinates, std::vector<Link> links, Geometry geometry,
                  std::string& reason, DifferentialGeometry differential = {});
+  // Wrench origin u may be the current physical CoG, independently of the
+  // adapter's reduced inertial geometry. body_offset_u is B->u in body axes;
+  // evaluate shifts the world moment to B exactly once, without differentiating u.
   bool evaluate(const Eigen::VectorXd& q, const Eigen::VectorXd& rate,
                 const Eigen::VectorXd& joint_load, const Eigen::Vector3d& force_world,
                 const Eigen::Vector3d& moment_world_at_u, const Eigen::Vector3d& body_offset_u,

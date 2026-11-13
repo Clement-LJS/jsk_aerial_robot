@@ -5,8 +5,10 @@
 
 namespace perching_dynamics
 {
-// Locked roll-yaw adapter only: q = [alpha, roll, yaw]. Omitted joints remain
-// captured; the navigator must enforce their existing position/rate policy.
+// Locked roll-yaw adapter only: q = [alpha, roll, yaw]. Internal rotor-gimbal
+// geometry remains at its captured reference, retaining all mass/inertia while
+// neglecting gimbal motion/coupling dynamics. Physical gimbals may move normally.
+// The navigator still validates unsupported additional mechanism joints.
 bool rollYawModel(const roll_yaw::Kinematics& geometry, const KDL::Tree& tree,
                  const KDL::JntArray& joints, const std::map<std::string, KDL::RigidBodyInertia>& inertia,
                  const std::map<std::string, KDL::Segment>& extra, const std::string& body,

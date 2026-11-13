@@ -27,7 +27,11 @@ navigation:
     progress_timeout: 30.0
     admittance:
       source: articulated_momentum # legacy_wrench remains available; selected at startup/disarmed READY tare
-      # Built-in observer software convention: wrench ON robot, world force/moment
+      # Raw generalized loads start at contact lock: no prepare/tare/admittance enable.
+      # generalized_external_load (JointState effort): [alpha, roll_joint, yaw_joint], N.m.
+      # Check generalized_external_load_valid (Bool); invalid/bootstrap efforts are NaN.
+      # The following wrench mapping applies only when legacy_wrench is selected.
+      # Legacy observer software convention: wrench ON robot, world force/moment
       # about CoG in N and N.m; not a physically calibrated cutting-force measurement.
       # Command_wrench_estimate is never used as external cutting resistance.
       external_wrench_topic: estimated_external_wrench
@@ -37,6 +41,7 @@ navigation:
       wrench_scale: 1.0 # Built-in observer software units N, N.m; not physical calibration
       # Prepare -> READY, remove cutting load, admittance_tare -> baseline_ready,
       # then perching/admittance_enable=true. Disabling releases gradually.
+      # This sequence gates path compliance only, never raw articulated estimation.
       # Gains below are provisional, not hardware tuning.
       inertia: 0.40
       damping: 5.0
@@ -66,8 +71,12 @@ navigation:
       # backwards/gapped/invalid inputs clear tare and use the existing hold path.
       # YAML selects supported joint names, sources/topics, gains and limits only.
       # Different serial order/contact/DOF/task/actuation maps need a code adapter.
-      # First adapter requires ALL other model joints measured and frozen at lock:
-      # <=1e-4 rad position drift, <=1e-3 rad/s. Moving gimbals make it unavailable.
+      # Reduced model retains all masses/inertias at the captured internal gimbal
+      # configuration and neglects internal gimbal-motion/coupling dynamics.
+      # Physical rotor gimbals may move normally; no gimbal rate/freshness gate.
+      # Unsupported additional mechanism joints still require fixed positions/rates.
+      # Missing/stale/invalid required inputs still invalidate the estimate.
+      # Generalized N.m residual includes approximation error, not an exact Cartesian wrench.
       # Rotor spin momentum is omitted. A fault clears tare and requires disarm/retare.
     # Explicit setup: keyboard e -> z -> measured ready-HOLD -> b -> navigate.
     # Rezero uses only the configured passive hinge, with measured active joints frozen.
