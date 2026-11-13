@@ -126,26 +126,54 @@ class Interfaces(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     keyboard.Keyboard()
 
-    def load_launch(self, simulation):
+    def load_launch(self, simulation, robot_id=''):
         config = roslaunch.config.ROSLaunchConfig()
+        namespace = '/gimbalrotor' + robot_id
+        launch = 'roll_yaw_perching.launch'
+        args = ['simulation:=' + simulation]
+        if robot_id:
+            # robot_id is exposed by bringup, not the roll-yaw convenience launch.
+            launch = 'bringup.launch'
+            args += ['robot_id:=' + robot_id, 'real_machine:=true', 'airframe:=beetle',
+                     'roll_yaw_perching:=true', 'direct_model_name:=unused']
         roslaunch.xmlloader.XmlLoader().load(
-            str(ROOT / 'launch/roll_yaw_perching.launch'), config,
-            argv=['simulation:=' + simulation],
+            str(ROOT / 'launch' / launch), config, argv=args,
             verbose=False)
-        self.assertEqual(config.params['/gimbalrotor/aerial_robot_control_name'].value,
+        self.assertEqual(config.params[namespace + '/aerial_robot_control_name'].value,
                          'aerial_robot_control/gimbalrotor_controller')
-        self.assertEqual(config.params['/gimbalrotor/flight_navigation_plugin_name'].value,
+        self.assertEqual(config.params[namespace + '/flight_navigation_plugin_name'].value,
                          'aerial_robot_navigation/gimbalrotor_perching_navigation')
-        self.assertEqual(config.params['/gimbalrotor/navigation/perching_configuration'].value,
+        self.assertEqual(config.params[namespace + '/navigation/perching_configuration'].value,
                          'roll_yaw')
         return config
 
     def test_hardware_offline(self):
         config = self.load_launch('false')
         self.assertTrue(config.params['/gimbalrotor/navigation/roll_yaw_perching/settle_use_window'].value)
+        self.check_effort_source(config, '/gimbalrotor', 'servo_bridge_joint_states')
+
+    def check_effort_source(self, config, namespace, source):
+        prefix = namespace + '/navigation/roll_yaw_perching/'
+        self.assertEqual(config.params[prefix + 'admittance/source'].value, 'articulated_momentum')
+        self.assertEqual(config.params[prefix + 'dynamics/joint_effort/source'].value, source)
+        self.assertEqual(config.params[prefix + 'dynamics/joint_effort/topic'].value,
+                         config.params[prefix + 'joint_state_topic'].value)
+        if source == 'servo_bridge_joint_states':
+            self.assertNotIn(prefix + 'dynamics/joint_effort/producer', config.params)
+            self.assertNotIn(prefix + 'dynamics/joint_effort_contract', config.params)
+            self.assertTrue(any(node.name == 'servo_bridge' and node.namespace.rstrip('/') == namespace
+                                for node in config.nodes))
+
+    def test_hardware_effort_uses_robot_namespace(self):
+        config = self.load_launch('false', '7')
+        self.check_effort_source(config, '/gimbalrotor7', 'servo_bridge_joint_states')
 
     def test_simulation_override(self):
         config = self.load_launch('true')
+        self.check_effort_source(config, '/gimbalrotor', 'gazebo_ode_joint_states')
+        prefix = '/gimbalrotor/navigation/roll_yaw_perching/dynamics/'
+        self.assertEqual(config.params[prefix + 'joint_effort_contract'].value, 'joint_side_actuation_nm')
+        self.assertEqual(config.params[prefix + 'joint_effort/producer'].value, '/gazebo')
         self.assertFalse(config.params['/gimbalrotor/navigation/roll_yaw_perching/settle_use_window'].value)
         self.assertEqual(config.params['/gimbalrotor/navigation/roll_yaw_perching/settle_rate'].value, .08)
 

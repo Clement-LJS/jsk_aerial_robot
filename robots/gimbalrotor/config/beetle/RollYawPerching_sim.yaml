@@ -1,6 +1,8 @@
 # Gazebo-only overrides, loaded after RollYawPerching.yaml and Servo.yaml.
 navigation:
   roll_yaw_perching:
+    admittance:
+      source: articulated_momentum
     dynamics:
       # Explicit SIMULATION-ONLY contract for the shipped Gazebo ODE world,
       # AerialRobotHWSim/DefaultRobotHWSim + effort-controlled roll/yaw joints +
@@ -8,7 +10,7 @@ navigation:
       # in Nm in the URDF axis, not joint reaction or a PID target. No conversion.
       # Other physics engines, plugins and external torque writers are unsupported.
       # Runtime also requires /use_sim_time, matching controller/plugin and callerid.
-      # This does NOT select articulated admittance: legacy_wrench remains default.
+      # Uses the same articulated observer and admittance as the hardware adapter.
       joint_effort_contract: joint_side_actuation_nm
       joint_effort:
         source: gazebo_ode_joint_states

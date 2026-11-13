@@ -569,7 +569,7 @@ private:
   enum class InteractionSource { LEGACY_WRENCH, ARTICULATED_MOMENTUM, INVALID };
   InteractionSource interaction_source_ = InteractionSource::LEGACY_WRENCH;
   std::string interaction_source_name_ = "legacy_wrench", effort_contract_ = "unavailable";
-  // Only the audited Gazebo/ODE JointState producer is supported for SI effort.
+  // Existing ServoBridge nominal effort or the audited Gazebo/ODE JointState source.
   std::string effort_source_ = "unavailable", effort_topic_, effort_producer_;
   bool effort_source_valid_ = false;
   double observer_gain_ = 10;

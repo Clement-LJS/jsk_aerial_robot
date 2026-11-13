@@ -4659,6 +4659,20 @@ void GimbalrotorPerchingNavigator::loadInteractionSource()
   en.param<std::string>("units", units, "Nm");
   en.param<std::string>("sign", sign, "urdf");
   ros::NodeHandle(nh_, "navigation/roll_yaw_perching").param<std::string>("joint_state_topic", joint_topic, "joint_states");
+  const bool matching_topic = !effort_topic_.empty() &&
+      nh_.resolveName(effort_topic_) == nh_.resolveName(joint_topic);
+  if(effort_source_ == "servo_bridge_joint_states")
+  {
+    // ServoBridge already applies torque_scale * angle_sgn to the raw load.
+    // Use those nominal current-derived joint efforts directly; independent
+    // torque calibration is neither assumed nor required by this adapter.
+    effort_producer_ = nh_.resolveName("servo_bridge");
+    effort_contract_ = "servo_bridge_nominal_joint_effort";
+    effort_source_valid_ = matching_topic;
+    articulated_reason_ = effort_source_valid_ ? "waiting for synchronized ServoBridge joint effort" :
+        "ServoBridge effort topic must match the configured joint-state topic";
+    return;
+  }
   nh_.getParam("joint_state_controller/type", controller);
   nh_.getParam("robot_description", description);
   // Audited local simulation path: AerialRobotHWSim delegates read/writeSim
@@ -4667,15 +4681,14 @@ void GimbalrotorPerchingNavigator::loadInteractionSource()
   // ODE saves the limited SetForce torque, NOT contact reaction/GetForceTorque
   // or the position PID target. The installed ODE implementation was inspected.
   // No motor constant, gearbox conversion or second URDF sign is applied here.
-  // Hardware ServoBridge's torque_scale * angle_sgn * raw_load is NOT calibrated.
   effort_source_valid_ = effort_source_ == "gazebo_ode_joint_states" && ros::Time::isSimTime() &&
       effort_contract_ == "joint_side_actuation_nm" && units == "Nm" && sign == "urdf" &&
-      !effort_topic_.empty() && nh_.resolveName(effort_topic_) == nh_.resolveName(joint_topic) &&
+      matching_topic &&
       !effort_producer_.empty() && effort_producer_.front() == '/' &&
       controller == "joint_state_controller/JointStateController" &&
       description.find("gazebo_ros_control/AerialRobotHWSim") != std::string::npos;
   articulated_reason_ = effort_source_valid_ ? "waiting for synchronized Gazebo ODE joint-side torque" :
-      "unverified effort source/producer/topic/units/sign; hardware raw servo load is unavailable";
+      "unsupported effort source or invalid Gazebo ODE producer/topic/units/sign configuration";
 }
 
 bool GimbalrotorPerchingNavigator::interactionConfigurationValid() const
@@ -4693,13 +4706,14 @@ bool GimbalrotorPerchingNavigator::interactionConfigurationValid() const
 void GimbalrotorPerchingNavigator::captureDynamicsJoints(const sensor_msgs::JointState& msg,
                                                         const std::string& producer)
 {
-  if(!effort_source_valid_ || !ros::Time::isSimTime() || producer != effort_producer_)
+  if(!effort_source_valid_ || producer != effort_producer_ ||
+     (effort_source_ == "gazebo_ode_joint_states" && !ros::Time::isSimTime()))
   {
     dynamics_joints_.clear();
-    invalidateArticulated("joint effort producer unavailable or differs from the configured Gazebo source");
+    invalidateArticulated("joint effort producer unavailable or differs from the selected source");
     return;
   }
-  // The supported JointStateController publishes the complete registered set.
+  // ServoBridge and the supported JointStateController publish the complete set.
   // A partial roll/yaw sample cannot retain an older apparently valid torque.
   if(std::count(msg.name.begin(), msg.name.end(), roll_) != 1 ||
      std::count(msg.name.begin(), msg.name.end(), yaw_) != 1)
@@ -4754,7 +4768,7 @@ void GimbalrotorPerchingNavigator::captureDynamicsJoints(const sensor_msgs::Join
       sample.rate_valid = std::isfinite(sample.rate);
     }
     if(msg.effort.size() == msg.name.size())
-      sample.effort = msg.effort[i]; // Already in URDF joint sign; never multiply angle_sgn again.
+      sample.effort = msg.effort[i]; // Already converted; never apply torque_scale or angle_sgn again.
     previous = sample;
     if(!sample.rate_valid)
       invalidateArticulated("joint rate unavailable; awaiting advancing valid samples");
@@ -4818,8 +4832,8 @@ bool GimbalrotorPerchingNavigator::observeArticulatedSample(const roll_yaw::Feed
     return fail("invalid locked dynamics snapshot; recapture with valid inertias and geometry");
   if(!dynamics_snapshot_current_ || !dynamics_snapshot_current_())
     return fail("robot inertia/extra modules changed since lock; recapture required");
-  if(!effort_source_valid_ || !ros::Time::isSimTime())
-    return fail("unverified joint effort source: require configured Gazebo ODE producer; hardware raw load is unavailable");
+  if(!effort_source_valid_ || (effort_source_ == "gazebo_ode_joint_states" && !ros::Time::isSimTime()))
+    return fail("selected joint effort source is unavailable or incorrectly configured");
   const double wall = roll_yaw::steadySeconds();
   auto coherent = [&](double stamp, double receipt)
   {

@@ -441,6 +441,52 @@ TEST(Execution,GeometricReadinessAndPreparedMovement)
   e.tick(feedback(moved,time+.01)); EXPECT_FALSE(e.plan.ok); EXPECT_EQ(e.stage,Stage::CONTACT_LOCKED);
   EXPECT_NE(e.reason.find("prepared start moved"),std::string::npos);
 }
+TEST(Admittance,UnconstrainedStepSatisfiesDiscreteForceBalance)
+{
+  for(double dt : {.005, .025, .1}) for(double initial_rate : {-.01, .01}) {
+    PitchAdmittance a;
+    a.enabled = a.baseline_ready = a.contact = true;
+    a.offset = -.02;
+    a.rate = initial_rate;
+    a.filtered = -.06;
+    a.config.angle_limit = .4;
+    a.config.rate_limit = 1;
+    a.config.acceleration_limit = 10;
+    const double old_offset = a.offset, old_rate = a.rate;
+    ASSERT_TRUE(a.step(dt, true, true));
+    // Check the governing equations, independently of the solved velocity formula.
+    EXPECT_NEAR(a.offset - old_offset, .5 * dt * (old_rate + a.rate), 1e-14);
+    EXPECT_NEAR(a.config.inertia * (a.rate - old_rate) / dt + a.config.damping * a.rate +
+                a.config.stiffness * a.offset - a.filtered, 0, 1e-12);
+    EXPECT_LT(std::abs(a.rate), a.config.rate_limit);
+    EXPECT_LT(std::abs(a.acceleration), a.config.acceleration_limit);
+  }
+}
+TEST(Admittance,ReliefOnlyResistanceAndPositiveLoad)
+{
+  for(double load : {-.15, .15}) {
+    PitchAdmittance a;
+    a.enabled = a.baseline_ready = true;
+    for(int i = 0; i < 1500; ++i) {
+      a.observe(load, 1 + .01 * i, false);
+      ASSERT_TRUE(a.step(.01, true, true, .025));
+      EXPECT_LE(a.offset, 0);
+      EXPECT_GE(a.offset, -.025 - 1e-9);
+      EXPECT_LE(std::abs(a.rate), a.config.rate_limit);
+      EXPECT_LE(std::abs(a.acceleration), a.config.acceleration_limit + 1e-7);
+    }
+    EXPECT_EQ(a.contact, load < 0);
+    if(load < 0) EXPECT_LT(a.offset, -.02);
+    else EXPECT_DOUBLE_EQ(a.offset, 0);
+  }
+  // A lingering contact latch must not admit positive forward assistance either.
+  PitchAdmittance a;
+  a.enabled = a.baseline_ready = a.contact = true;
+  a.filtered = .15;
+  ASSERT_TRUE(a.step(.025, true, true));
+  EXPECT_DOUBLE_EQ(a.offset, 0);
+  EXPECT_DOUBLE_EQ(a.rate, 0);
+}
 TEST(Admittance,BaselineDistinctContactSignsLimitsAndSmoothRelease)
 {
   for(double direction:{-1.,1.}) {
@@ -455,7 +501,9 @@ TEST(Admittance,BaselineDistinctContactSignsLimitsAndSmoothRelease)
       EXPECT_LE(std::abs(a.rate),a.config.rate_limit+1e-8);
       EXPECT_LE(std::abs(a.acceleration),a.config.acceleration_limit+1e-7);
     }
-    EXPECT_TRUE(a.contact); EXPECT_GT(direction*a.offset,.02); EXPECT_DOUBLE_EQ(a.bias,1);
+    EXPECT_EQ(a.contact,direction<0); EXPECT_DOUBLE_EQ(a.bias,1);
+    if(direction<0) EXPECT_LT(a.offset,-.02);
+    else EXPECT_DOUBLE_EQ(a.offset,0); // Positive load does not trigger resisting contact.
     const double before=a.offset; a.enabled=false; ASSERT_TRUE(a.step(.01,true));
     EXPECT_LT(std::abs(a.offset-before),.001);
     for(int i=0;i<2000;++i) ASSERT_TRUE(a.step(.01,false));

@@ -2643,10 +2643,13 @@ bool PitchAdmittance::step(double dt, bool fresh, bool relief_only, double avail
   const double torque = enabled && fresh && contact
                             ? std::clamp(filtered, -config.torque_limit, relief_only ? 0.0 : config.torque_limit)
                             : 0;
+  // Implicit force balance with x_next = x + dt * (v_old + v_next) / 2.
+  // Active motion limits below make this a bounded approximation.
   const double proposed = relief_only && enabled && !fresh
                               ? 0
-                              : (config.inertia * rate + dt * (torque - config.stiffness * offset)) /
-                                    (config.inertia + dt * config.damping + dt * dt * config.stiffness);
+                              : (config.inertia * rate + dt * (torque - config.stiffness * offset) -
+                                 0.5 * dt * dt * config.stiffness * rate) /
+                                    (config.inertia + dt * config.damping + 0.5 * dt * dt * config.stiffness);
   double v = std::clamp(proposed, rate - config.acceleration_limit * dt, rate + config.acceleration_limit * dt);
   v = std::clamp(v, -config.rate_limit, config.rate_limit);
   // Braking distance prevents hitting the angle clamp at nonzero velocity.

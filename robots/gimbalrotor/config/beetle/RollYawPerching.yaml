@@ -26,7 +26,7 @@ navigation:
     goal_tolerance: 0.0087
     progress_timeout: 30.0
     admittance:
-      source: legacy_wrench # or articulated_momentum; selected at startup/disarmed READY tare
+      source: articulated_momentum # legacy_wrench remains available; selected at startup/disarmed READY tare
       # Built-in observer software convention: wrench ON robot, world force/moment
       # about CoG in N and N.m; not a physically calibrated cutting-force measurement.
       # Command_wrench_estimate is never used as external cutting resistance.
@@ -54,17 +54,12 @@ navigation:
       baseline_samples: 80
     dynamics:
       observer_gain: 10.0 # positive, inverse seconds; only articulated_momentum uses this
-      # Compatibility key retained; setting this label alone NEVER enables effort.
-      # ServoBridge: torque_scale * angle_sgn * raw_load has no established Nm
-      # calibration in Servo.yaml. Hardware articulated observation is unavailable.
-      joint_effort_contract: unavailable
       joint_effort:
-        # Only implemented SI source: gazebo_ode_joint_states (see sim override).
-        source: unavailable
+        # Existing ServoBridge current-derived nominal joint torques, consumed
+        # directly without another scale/sign conversion or calibration gate.
+        # The producer is resolved internally as servo_bridge in the robot namespace.
+        source: servo_bridge_joint_states
         topic: joint_states # MUST equal roll_yaw_perching/joint_state_topic
-        producer: "" # exact absolute ROS callerid required, checked on each message
-        units: Nm # only Nm accepted; revolute JOINT-SIDE actuation, not reaction
-        sign: urdf # only URDF positive joint direction; never angle_sgn twice
       # Effort shares the angle/rate sample; header and steady receipt age <=
       # feedback_timeout, future <= future_tolerance, full sample span <=
       # feedback_sync_tolerance. Duplicate stamps cannot refresh an observation;
