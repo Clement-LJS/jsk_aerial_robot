@@ -533,6 +533,75 @@ Manual publish robot's perching pith (using robot's pitch joint, robot's orienta
 
 ## Tasks
 
+### `auto_roll_yaw_body_pitch_experiment.py`
+
+After the existing roll–yaw perching/contact setup, this script publishes a
+signed **main-body local +Y angular velocity**. The body is the main robot body
+carrying the four rotors. Positive/negative follow its commanded local +Y at the
+current roll/yaw configuration; this does not imply globally downward/upward
+translation. The request is neither world Euler-pitch rate, CoG pitch, nor
+passive-alpha velocity. Keyboard angle commands and `perching/manual_pitch_delta`
+(absolute lock-relative passive alpha) keep their existing meanings.
+
+```bash
+# Illustrative arithmetic only; 0.1 deg/s is not a hardware-tuned recommendation.
+rosrun gimbalrotor auto_roll_yaw_body_pitch_experiment.py \
+  _angular_velocity_deg_s:=0.1 _interval_sec:=8.0 _num_steps:=8
+```
+
+`~angular_velocity_deg_s` is required, finite and numeric (not boolean); zero
+requests bounded braking and hold. The ROS payload is `std_msgs/Float64` in
+**rad/s** on `/gimbalrotor/perching/roll_yaw/body_pitch_velocity`. A legacy
+`~step_deg` parameter is an error. `~interval_sec` defaults to 8.0 positive finite
+seconds; `~num_steps` defaults to 8 and must be a positive integer, not boolean.
+It counts rate publications. `~robot_namespace` and `~debug_prefix` retain the
+same defaults and absolute-prefix handling as the keyboard.
+
+The script reads
+`<robot_namespace>/navigation/roll_yaw_perching/body_pitch_velocity_command_duration`
+once before publishing and requires it to match `~interval_sec`. The YAML sets
+8.0 seconds, inherited by simulation. Change both settings together; the script
+does not write navigator parameters. The navigator reads its duration at startup.
+Both expiry and sleeps use ROS time, including simulated time.
+
+After the one-second startup delay, the same rate is sent once at approximately
+0, 8, 16, 24, 32, 40, 48 and 56 seconds relative to the first publication, with
+eight sleeps including the last. Each accepted nonzero message replaces the
+requested rate and renews its lifetime from onboard acceptance; it adds neither
+speed nor future jobs. The navigator advances the reference between requests.
+With valid inputs and no takeover, the last interval expires around 64 seconds,
+followed by bounded braking. Transport/loop jitter can affect boundaries.
+
+The initial state is the coherent applied `final_target_`, including derivatives,
+with an existing producer braking before takeover when necessary. The contact is
+not recaptured. Each reference rotation right-multiplies the current body frame:
+`R_next = R_current * Exp(e_y * integral(u dt))`, so angular velocity is `[0,u,0]`
+in the commanded main body and `R_wb * [0,u,0]` in world. Constrained IK and its
+Jacobian derivative coordinate passive alpha, active roll and active yaw; fixed
+contact FK supplies body/CoG poses and feedforwards through the existing controller.
+This nominal command requires no admittance baseline and preserves raw observer
+history on refresh/takeover.
+
+The navigator uses continuous scalar rate/acceleration ramps and checks a short
+braking continuation before each advance, retaining that continuation if a new
+advance is infeasible. It checks joint, singularity, attitude and CoG bounds;
+nonlinear corridor checks are sampled, not a continuous feasibility proof.
+Conservative reserves can reduce achievable speed. Existing diagnostics report
+requested/applied rad/s, remaining lifetime and the limiting reason. No rejected
+advance accumulates a future angle. Reversals brake smoothly; equal refreshes
+preserve the running reference. Actual displacement integrates the bounded rate,
+including ramps, holds and limits: 0.1 deg/s for 64 seconds would be 6.4 degrees
+only in the ideal constant-rate case. This outer PID reference is not a guarantee
+of measured angular velocity or exact displacement.
+
+Temporary invalid feedback uses the existing emergency hold (derivatives cleared,
+not an acceleration-continuous stop). Recovery resumes from the held posture only
+within the original lifetime; missing time is never integrated. Invalid messages
+do not renew it. Stop/cancel, manual ownership, disable, relock and genuine faults
+prevent stale rate continuation. Ctrl+C simply ends publications: the last accepted
+request may run for its remaining lifetime, then brake. There is no hidden stop,
+enable/relock/prepare protocol, feedback polling, retry or actuator publication.
+
 ### `auto_perching_pitch_experiment.py`
 
 Runs a repeatable downward perching-pitch step experiment.

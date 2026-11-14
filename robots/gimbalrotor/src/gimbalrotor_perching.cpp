@@ -1328,6 +1328,90 @@ bool referenceAllowed(const Reference& r, const PlanningConfig& c, std::string& 
   }
   return true;
 }
+bool localPitchReference(const Kinematics& model, const Eigen::Matrix3d& rotation, const Eigen::Vector3d& seed,
+                         double rate, double acceleration, const PlanningConfig& config, Reference& out,
+                         std::string& error)
+{
+  Eigen::Vector3d q;
+  Eigen::Matrix3d j, jp, jm;
+  if(!std::isfinite(rate) || !std::isfinite(acceleration) ||
+     !inverseOrientation(model, rotation, seed, config, q, error) || !model.jacobian(q, j))
+    return false;
+  Eigen::JacobiSVD<Eigen::Matrix3d> svd(j, Eigen::ComputeFullU | Eigen::ComputeFullV);
+  if(svd.singularValues().minCoeff() < config.min_singular_value)
+  {
+    error = "local pitch singularity";
+    return false;
+  }
+  const Eigen::Vector3d omega = Eigen::Vector3d::UnitY() * rate;
+  const Eigen::Vector3d angular_acc = Eigen::Vector3d::UnitY() * acceleration;
+  const Eigen::Vector3d velocity = svd.solve(omega);
+  // Same body-frame Jdot convention as buildPath/compliantReference.
+  if(!model.jacobian(q + 1e-4 * velocity, jp) || !model.jacobian(q - 1e-4 * velocity, jm))
+    return false;
+  const Eigen::Vector3d acc = svd.solve(angular_acc - (jp - jm) / (2e-4) * velocity);
+  if(!mechanismReference(model, q, velocity, acc, out))
+    return false;
+  out.desired = {rotation, omega, angular_acc};
+  // FK supplies controller/CoG derivatives; never paste rate onto another path.
+  return referenceAllowed(out, config, error);
+}
+
+bool sampleLocalPitch(const Kinematics& model, const LocalPitchSegment& segment, double time,
+                      const PlanningConfig& config, Reference& out, std::string& error)
+{
+  const double duration = segment.duration;
+  if(!std::isfinite(duration) || duration <= 0 || !std::isfinite(time) ||
+     !std::isfinite(segment.end_rate) || !std::isfinite(segment.end_acceleration))
+  {
+    error = "invalid local pitch segment";
+    return false;
+  }
+  const double s = std::clamp(time / duration, 0.0, 1.0);
+  const double u = segment.start.desired.omega.y(), a = segment.start.desired.acceleration.y();
+  const double b = a * duration;
+  const double c = 3 * (segment.end_rate - u) - 2 * b - duration * segment.end_acceleration;
+  const double d = 2 * (u - segment.end_rate) + b + duration * segment.end_acceleration;
+  const double rate = u + s * (b + s * (c + s * d));
+  const double acceleration = (b + s * (2 * c + 3 * s * d)) / duration;
+  // Constant-rate continuation after a completed ramp (all online ramps end
+  // at zero acceleration) avoids losing the fractional final update interval.
+  if(time > duration && segment.end_acceleration != 0)
+    return false;
+  const double angle = duration * s * (u + s * (b / 2 + s * (c / 3 + s * d / 4))) +
+                       std::max(0.0, time - duration) * segment.end_rate;
+  const Eigen::Matrix3d rotation = segment.start.body.linear() * expSO3(Eigen::Vector3d::UnitY() * angle);
+  return localPitchReference(model, rotation, segment.start.eta, rate, acceleration, config, out, error);
+}
+
+bool localPitchAllowed(const Kinematics& model, const LocalPitchSegment& segment, double until,
+                       const PlanningConfig& config, std::string& error)
+{
+  // Fixed work, independent of command lifetime. Check the entire short braking
+  // corridor, not just the next position. Like existing nonlinear path validation
+  // this is a sampled check, not a continuous collision/interval proof.
+  if(!std::isfinite(until) || until <= 0 || (until > segment.duration && segment.end_acceleration != 0))
+    return false;
+  Reference previous = segment.start;
+  constexpr int samples = 16;
+  const double dt = until / samples;
+  for(int i = 1; i <= samples; ++i)
+  {
+    Reference next;
+    if(!sampleLocalPitch(model, segment, i * dt, config, next, error))
+      return false;
+    if(((next.eta - previous.eta).cwiseAbs().array() > config.limits.velocity.array() * dt + 1e-7).any() ||
+       ((next.velocity - previous.velocity).cwiseAbs().array() > config.limits.acceleration.array() * dt + 1e-6).any() ||
+       (next.cog_velocity - previous.cog_velocity).norm() > config.cog_acceleration_limit * dt + 1e-6)
+    {
+      error = "local pitch discrete rate/acceleration bound";
+      return false;
+    }
+    previous = next;
+  }
+  return true;
+}
+
 bool mechanismPath(const Kinematics& model, const Reference& from, const Eigen::Vector3d& goal,
                    const PlanningConfig& config, Path& path, std::string& error)
 {

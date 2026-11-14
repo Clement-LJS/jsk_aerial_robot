@@ -564,6 +564,20 @@ bool mechanismAllowed(const Kinematics&, const Eigen::Vector3d&, const PlanningC
 bool mechanismReference(const Kinematics&, const Eigen::Vector3d&, const Eigen::Vector3d&, const Eigen::Vector3d&,
                         Reference&);
 bool referenceAllowed(const Reference&, const PlanningConfig&, std::string&);
+// Short online local-Y continuation. Cubic scalar velocity preserves both
+// endpoint rates and accelerations; its analytic integral right-multiplies R_wb.
+// A zero end_rate/end_acceleration is a bounded braking continuation, not a goal.
+struct LocalPitchSegment
+{
+  Reference start;
+  double duration = 0, end_rate = 0, end_acceleration = 0;
+};
+bool localPitchReference(const Kinematics&, const Eigen::Matrix3d&, const Eigen::Vector3d& seed,
+                         double rate, double acceleration, const PlanningConfig&, Reference&, std::string&);
+bool sampleLocalPitch(const Kinematics&, const LocalPitchSegment&, double time, const PlanningConfig&,
+                      Reference&, std::string&);
+bool localPitchAllowed(const Kinematics&, const LocalPitchSegment&, double until, const PlanningConfig&,
+                       std::string&);
 // Cheap manual construction; automatic connections must use the validated helper.
 bool validatedMechanismPath(const Kinematics&, const Reference&, const Eigen::Vector3d&, const PlanningConfig&, Path&,
                             std::string&);

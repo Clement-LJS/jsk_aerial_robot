@@ -14,6 +14,10 @@ navigation:
     # One endpoint IK + bounded interpolation, including replacements during motion.
     # Larger commands are rejected; full cuts use request/pitch_increment below.
     body_pitch_jog_max_delta: 0.0174532925199433 # rad (1 degree); inherited by simulation
+    # body_pitch_velocity is main-body local +Y rad/s, independent of angle jogs.
+    # Each accepted nonzero message renews this ROS-time lifetime; expiry/zero
+    # brakes to hold. Match the automatic script's interval_sec; simulation inherits.
+    body_pitch_velocity_command_duration: 8.0 # seconds, finite and strictly positive
     prepare_deadline: 120.0 # steady-clock seconds; cooperative cancellation
     # Execution allowance, not overshoot or hardware-validated tuning.
     # Limits the nominal feed lead over measured progress.

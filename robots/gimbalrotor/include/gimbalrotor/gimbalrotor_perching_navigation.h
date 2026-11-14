@@ -466,6 +466,17 @@ private:
   void bodyCallback(const nav_msgs::OdometryConstPtr&);
   void bodyAlignmentCallback(const std_msgs::Float64ConstPtr&, int axis);
   void bodyPitchCallback(const std_msgs::Float64ConstPtr&);
+  void bodyPitchVelocityCallback(const std_msgs::Float64ConstPtr&);
+  bool admitPitchVelocity(double);
+  bool advancePitchVelocity(roll_yaw::Reference&);
+  struct PitchVelocity
+  {
+    bool active = false, pending = false, stopping = false, brake_valid = false, drive_valid = false;
+    double requested = 0, expires = 0, clock = 0, brake_time = 0, drive_time = 0;
+    roll_yaw::LocalPitchSegment brake, drive;
+    std::string limit = "idle";
+  } pitch_velocity_;
+  double body_pitch_velocity_command_duration_ = 8.0;
   bool admitPitchJog(double);
   void finishPitchJog(const std::string& phase, const std::string& why);
   std::string preparationRejection(const roll_yaw::Feedback&, const roll_yaw::Reference&) const;
