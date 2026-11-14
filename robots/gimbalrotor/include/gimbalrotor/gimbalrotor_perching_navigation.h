@@ -461,7 +461,7 @@ private:
   bool observeInteractionSample(const roll_yaw::Feedback&, double stamp, bool quiet);
   bool snapshotModel(roll_yaw::Kinematics&, std::string&);
   roll_yaw::Feedback feedback() const;
-  std::string contactRejection(const roll_yaw::Feedback&) const;
+  std::string contactRejection(const roll_yaw::Feedback&, bool* hard_fault = nullptr) const;
   void rollYawJointCallback(const ros::MessageEvent<sensor_msgs::JointState const>&);
   void bodyCallback(const nav_msgs::OdometryConstPtr&);
   void bodyAlignmentCallback(const std_msgs::Float64ConstPtr&, int axis);
@@ -504,7 +504,7 @@ private:
   Eigen::Vector3d nominal_ = Eigen::Vector3d::Zero();  // independent accepted destinations
   roll_yaw::Path manual_path_;
   double manual_time_ = 0, manual_phase_ = 0, manual_speed_ = 1, manual_wall_ = 0;
-  bool stop_pending_ = false, feedback_waiting_ = false;
+  bool stop_pending_ = false, feedback_waiting_ = false, retarget_pending_ = false;
   roll_yaw::SettlingWindow preparation_window_;
   roll_yaw::SettlingStatistics preparation_stats_;
   bool preparation_ready_ = false;
@@ -578,15 +578,13 @@ private:
   perching_dynamics::MomentumObserver momentum_observer_;
   bool articulated_model_valid_ = false;
   bool articulated_valid_ = false;
-  double articulated_receipt_ = 0;
+  double articulated_receipt_ = 0, articulated_body_stamp_ = 0, articulated_published_stamp_ = 0;
   Eigen::Matrix3d articulated_jacobian_ = Eigen::Matrix3d::Zero();  // Same sample as the residual.
   std::string articulated_reason_ = "no locked dynamics snapshot";
   std::function<bool(const roll_yaw::Kinematics&, perching_dynamics::MultilinkModel&, std::string&)> dynamics_factory_;
   std::function<bool()> dynamics_snapshot_current_;
   // Rotor gimbals move physically; only the reduced model keeps their lock configuration.
   std::set<std::string> rotor_gimbal_joints_;
-  std::map<std::string, double> fixed_mechanism_joints_;
-  std::function<bool(const Eigen::Vector3d&, Eigen::Isometry3d&)> reduced_cog_check_;
   struct DynamicsJoint
   {
     double position = 0, rate = 0, effort = std::numeric_limits<double>::quiet_NaN();
@@ -640,7 +638,7 @@ private:
                 body_invalid_messages_ = 0;
   double last_joint_message_stamp_ = 0, last_body_message_stamp_ = 0;
   bool configuration_valid_ = false, joint_valid_ = false, body_valid_ = false;
-  double synchronization_tolerance_ = .05, cog_model_tolerance_ = .005;
+  double synchronization_tolerance_ = .05;
   std::vector<ros::Subscriber> subscriptions_;
   ros::Publisher roll_yaw_joints_pub_, roll_yaw_state_pub_, session_pub_, reference_pub_, measured_pub_, cog_pub_, details_pub_;
   ros::Publisher angles_pub_, nominal_pub_, rezero_active_pub_, rezero_ready_pub_, rezero_failed_pub_, pitch_pub_;

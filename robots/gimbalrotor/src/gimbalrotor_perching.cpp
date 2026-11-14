@@ -1196,41 +1196,6 @@ bool inverseOrientation(const Kinematics& model, const Eigen::Matrix3d& desired,
   error = "orientation IK did not converge in 40 iterations";
   return false;
 }
-bool localPitchSample(const Kinematics& model, const Eigen::Vector3d& q, const Eigen::Isometry3d& body,
-                      const Eigen::Isometry3d& start, const Eigen::Isometry3d& previous, double delta,
-                      double previous_pitch, const PlanningConfig& c, double& pitch, std::string& error)
-{
-  Eigen::Matrix3d j;
-  double cross;
-  if(!q.allFinite() || !poseValid(body) || !poseValid(start) || !poseValid(previous) || !c.saw_point_valid ||
-     !c.saw_point.allFinite() || !model.jacobian(q, j) ||
-     !taskPitch(start.linear(), body.linear(), previous_pitch, pitch, cross))
-  {
-    error = "local pitch geometry/proxy unavailable";
-    return false;
-  }
-  if((q.array() < c.limits.lower.array() - 1e-9).any() || (q.array() > c.limits.upper.array() + 1e-9).any() ||
-     body.linear()(2, 2) < std::cos(c.max_tilt) ||
-     Eigen::JacobiSVD<Eigen::Matrix3d>(j).singularValues().minCoeff() < c.min_singular_value)
-  {
-    error = "local pitch mechanism/tilt/singularity limit";
-    return false;
-  }
-  const double direction = delta > 0 ? 1 : -1;
-  if(direction * pitch < -1e-9 || direction * pitch > std::abs(delta) + 1e-9 ||
-     direction * (pitch - previous_pitch) < -1e-9 ||
-     cross > std::min(c.orientation_tolerance, .1 * std::abs(delta)) + 1e-9)
-  {
-    error = "local pitch intermediate direction/off-axis bound";
-    return false;
-  }
-  if(direction * ((body * c.saw_point).z() - (previous * c.saw_point).z()) > 1e-8)
-  {
-    error = "local pitch saw-origin direction contradicts request";
-    return false;
-  }
-  return true;
-}
 bool mechanismAllowed(const Kinematics& m, const Eigen::Vector3d& q, const PlanningConfig& c, std::string& error)
 {
   Eigen::Isometry3d b, g;
@@ -1838,7 +1803,7 @@ bool Executor::accept(Plan p)
   if(!config.governorValid(planning))
   {
     p.ok = false;
-    p.reason = "invalid soft/hard tracking or trajectory limits";
+    p.reason = "invalid tracking governor or trajectory limits";
   }
   if(!p.ok)
   {
@@ -1929,8 +1894,15 @@ bool Executor::command(const std::string& cmd, std::uint64_t id)
     reason = "executing geometrically validated pitch stroke";
     return true;
   }
+  if(cmd == "pause" && stage == Stage::PAUSED)
+  {
+    resume_after_feedback_ = false;
+    reason = "explicit pause; coherent reference held until resume";
+    return true;
+  }
   if((cmd == "pause" || cmd == "cancel") && (stage == Stage::PRE_ALIGN || stage == Stage::EXECUTING))
   {
+    resume_after_feedback_ = false;
     stopping_ = true;
     cancel_ = cmd == "cancel";
     resetSettling();
@@ -1952,6 +1924,7 @@ bool Executor::command(const std::string& cmd, std::uint64_t id)
   if(cmd == "cancel" && (stage == Stage::PAUSED || stage == Stage::PLANNING || stage == Stage::CONTACT_LOCKED ||
                          stage == Stage::READY || stage == Stage::COMPLETED_HOLD))
   {
+    resume_after_feedback_ = false;
     plan = Plan();
     resetSettling();
     stage = Stage::COMPLETED_HOLD;
@@ -2001,6 +1974,7 @@ void Executor::waitForFeedback(double now, const std::string& why)
     return;
   if(stage == Stage::PRE_ALIGN || stage == Stage::EXECUTING)
   {
+    resume_after_feedback_ = !stopping_;
     paused_align_ = stage == Stage::PRE_ALIGN;
     stage = cancel_ ? Stage::COMPLETED_HOLD : Stage::PAUSED;
     if(cancel_)
@@ -2028,7 +2002,7 @@ void Executor::waitForFeedback(double now, const std::string& why)
 void Executor::reset()
 {
   stage = Stage::FREE_FLIGHT;
-  feedback_waiting_ = false;
+  feedback_waiting_ = resume_after_feedback_ = false;
   ++session;
   plan = Plan();
   first_fault.clear();
@@ -2047,9 +2021,14 @@ void Executor::tick(const Feedback& s)
   reference_updated = false;
   if(!owns())
     return;
-  if(!std::isfinite(s.now) || s.now < last_time_)
+  if(!std::isfinite(s.now))
   {
-    fault("execution clock moved backwards/invalid");
+    fault("invalid execution clock");
+    return;
+  }
+  if(s.now < last_time_)
+  {
+    waitForFeedback(s.now, "execution clock moved backwards");
     return;
   }
   const auto status = roll_yaw::feedbackStatus(s, config, planning);
@@ -2063,16 +2042,9 @@ void Executor::tick(const Feedback& s)
     fault(feedbackRejection(s));
     return;
   }
-  if(feedback_waiting_)
-  {
-    feedback_waiting_ = false;
-    last_time_ = s.now;
-    motion_clock_pending_ = true;
-    reason = "feedback restored; explicit resume required for paused motion";
-  }
   if(!model.estimate(s.body, s.eta, measured))
   {
-    fault("passive hinge estimation failed");
+    waitForFeedback(s.now, "passive hinge estimation failed");
     return;
   }
   Eigen::Vector3d measured_q = s.eta;
@@ -2088,19 +2060,21 @@ void Executor::tick(const Feedback& s)
     std::ostringstream why;
     why << "pivot=" << measured.pivot_error << "/" << config.pivot_tolerance << " m; hinge=" << measured.hinge_residual
         << "/" << config.hinge_tolerance << " rad";
-    fault(why.str());
+    waitForFeedback(s.now, why.str());
     return;
   }
   const Reference& tracking = applied_valid ? applied : target;
   const double joint_error = (measured_q - tracking.eta).cwiseAbs().maxCoeff();
   const double body_error = logSO3(s.body.linear().transpose() * tracking.body.linear()).norm();
-  if(joint_error > config.tracking_tolerance || body_error > config.orientation_tolerance)
+  if(feedback_waiting_)
   {
-    std::ostringstream why;
-    why << "effective tracking: mechanism=" << joint_error << "/" << config.tracking_tolerance
-        << " rad; body=" << body_error << "/" << config.orientation_tolerance << " rad";
-    fault(why.str());
-    return;
+    feedback_waiting_ = false;
+    last_time_ = s.now;
+    motion_clock_pending_ = true;
+    if(resume_after_feedback_ && stage == Stage::PAUSED && plan.ok)
+      stage = paused_align_ ? Stage::PRE_ALIGN : Stage::EXECUTING;
+    resume_after_feedback_ = false;
+    reason = "coherent feedback restored; retained trajectory reference";
   }
   const double dt = s.now - last_time_;
   last_time_ = s.now;
@@ -2117,7 +2091,7 @@ void Executor::tick(const Feedback& s)
   }
   if(moving && (!std::isfinite(dt) || dt < 0 || dt > config.max_execution_step))
   {
-    fault("invalid execution clock step");
+    waitForFeedback(s.now, "execution clock gap");
     return;
   }
   if(moving && dt == 0)
@@ -2130,7 +2104,7 @@ void Executor::tick(const Feedback& s)
     if(!task.observe(pre, s.body.linear(), s.body_stamp, plan.goal.pitch_start, plan.goal.pitch_end,
                      config.progress_filter_time, config.orientation_tolerance))
     {
-      fault("degenerate measured task twist");
+      waitForFeedback(s.now, "degenerate measured task twist");
       return;
     }
     goal_error = plan.goal.pitch_end - task.raw;
@@ -2284,12 +2258,6 @@ void Executor::tick(const Feedback& s)
      (std::abs(speed_) < .01 && !resisting_load && relief >= -1e-10 && upper - progress < 1e-4 &&
       upper < path.duration() - 1e-7))
     governor_hold_ = true;
-  if(interaction_hold && !stopping_)
-  {
-    stopping_ = true;
-    cancel_ = false;
-    reason = "interaction input unavailable; braking to PAUSED; explicit resume required";
-  }
   double next_nominal = nominal_progress;
   double destination = upper;
   if(cut)
@@ -2314,7 +2282,7 @@ void Executor::tick(const Feedback& s)
   const bool reverse_requested = correcting && destination < progress - 1e-8 && lower < progress - 1e-8;
   // A forward-feed latch must not forbid safe retreat inside the same symmetric
   // tracking allowance. It still freezes the nominal schedule.
-  const bool brake = stopping_ || (governor_hold_ && !reverse_requested) || invalid_band || outside_band;
+  const bool brake = stopping_ || interaction_hold || (governor_hold_ && !reverse_requested) || invalid_band || outside_band;
   const double desired_speed =
       brake ? 0
             : (destination > progress + 1e-8 ? speed_cap
@@ -2337,24 +2305,24 @@ void Executor::tick(const Feedback& s)
           0.0, (-b + std::sqrt(std::max(0.0, b * b - 4 * dv * old + 8 * speed_acc * std::max(0.0, remaining)))) * .5);
     };
     const double safe = safeSpeed(gap), minimum = std::max(0.0, old - dv);
-    // Only the admissible boundary is a protective constraint. A moving scalar
-    // destination can cross the braking envelope: brake through zero, then return.
+    double commanded = std::min(std::abs(new_speed), safe);
     if(gap < -1e-8 || (safe + 1e-8 < minimum && old > 1e-8))
     {
-      fault("tracking/relief boundary contracted inside braking envelope; protective reference hold");
-      return;
+      // A push can move the tracking envelope faster than bounded braking.
+      // Brake along the validated path, preserving the goal and physical bounds.
+      // Tracking error is not a physical endpoint or evidence of detachment.
+      governor_hold_ = true;
+      commanded = minimum;
     }
-    double commanded = std::min(std::abs(new_speed), safe);
-    if(!brake)
+    else if(!brake)
       commanded = std::min(commanded, safeSpeed(moving_direction * (destination - progress)));
     new_speed = moving_direction * std::max(minimum, commanded);
   }
   const double next_progress = progress + (speed_ + new_speed) * .5 * dt;
   const double phase_acc = (new_speed - speed_) / dt;
-  if(next_progress < -1e-9 || next_progress > path.duration() + 1e-9 ||
-     (!outside_band && !invalid_band && (next_progress < lower - 1e-8 || next_progress > upper + 1e-8)))
+  if(next_progress < -1e-9 || next_progress > path.duration() + 1e-9)
   {
-    fault("signed phase step exceeds prepared/tracking bounds");
+    fault("signed phase step exceeds physical prepared path bounds");
     return;
   }
   Reference next;
@@ -2367,8 +2335,6 @@ void Executor::tick(const Feedback& s)
   // Preserve the acceleration term at zero crossing; only a completed hold zeros it.
   scaleReference(next, new_speed, phase_acc);
   if(!referenceAllowed(next, planning, sample_error) ||
-     (next.eta - measured_q).cwiseAbs().maxCoeff() > config.tracking_tolerance ||
-     logSO3(s.body.linear().transpose() * next.body.linear()).norm() > config.orientation_tolerance ||
      (correcting && (next.desired.omega.norm() > relief_rate_limit + 1e-8 ||
                      next.desired.acceleration.norm() > relief_acceleration_limit + 1e-8)))
   {
@@ -2395,13 +2361,12 @@ void Executor::tick(const Feedback& s)
       lag_since_ = s.now;
     if((cut || progress_lag) && pending_progress && s.now - lag_since_ > config.progress_timeout)
     {
-      stopping_ = true;
-      cancel_ = false;
-      reason = "no meaningful measured forward progress; braking to PAUSED, original goal pending";
+      reason = "no meaningful measured forward progress; original goal retained, automatic feed recovery";
     }
     else if(pending_progress)
     {
-      reason = governor_hold_ && !reverse_requested    ? "tracking hold; original goal pending"
+      reason = interaction_hold                      ? "interaction hold; original goal retained"
+               : governor_hold_ && !reverse_requested ? "tracking hold; original goal pending"
                : speed_ < -1e-8                        ? "bounded on-path relief retreat; original goal pending"
                : resisting_load                        ? (relief_limited ? "relief limit reached; original goal pending"
                                                                          : "resisting-load hold; original goal pending")
@@ -2528,11 +2493,6 @@ void Executor::tick(const Feedback& s)
         detail << "; pitch error=" << goal_error << " full SO(3) error=" << goal_orientation_error;
     }
     settling_elapsed = s.now - ready_since_;
-    if(settling_elapsed > config.settle_timeout)
-    {
-      fault("settling timed out: " + detail.str());
-      return;
-    }
     if(qualified)
     {
       if(stage == Stage::PRE_ALIGN && !plan.goal.align_only)
@@ -2548,7 +2508,8 @@ void Executor::tick(const Feedback& s)
       resetSettling();
     }
     else
-      reason = "waiting for measured settling: " + detail.str();
+      reason = (settling_elapsed > config.settle_timeout ? "settling delayed; goal retained: "
+                                                         : "waiting for measured settling: ") + detail.str();
   }
 }
 }  // namespace roll_yaw

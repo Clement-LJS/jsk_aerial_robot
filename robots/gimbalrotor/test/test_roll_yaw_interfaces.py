@@ -83,17 +83,17 @@ class Interfaces(unittest.TestCase):
 
     def test_body_pitch_keys_are_separate_relative_inputs(self):
         k = self.make_keyboard()
-        original = list(k.commanded)
         k.key('o')
         self.assertAlmostEqual(k.pubs['body_pitch'].publish.call_args[0][0].data, math.radians(.2))
         k.key('u')
         self.assertAlmostEqual(k.pubs['body_pitch'].publish.call_args[0][0].data, -math.radians(.2))
-        self.assertEqual(k.commanded, original)
+        self.assertIsNone(k.commanded)  # Reconcile the navigator's coordinated nominal vector.
         self.assertEqual(k.pending_axes, [False] * 3)
         for axis in ('pitch', 'roll', 'yaw', 'stop'):
             k.pubs[axis].publish.assert_not_called()
         k.state_callback(keyboard.String('PRE_ALIGN: body-local pitch jog moving'))
-        k.key('o')  # Navigator rejects busy; publication never requests takeover.
+        k.key('o')  # Navigator accepts a replacement through the normal nominal path.
+        self.assertEqual(k.pubs['body_pitch'].publish.call_count, 3)
         k.pubs['stop'].publish.assert_not_called()
         k.had_feedback = True
         k.state_time = time.monotonic() - 2

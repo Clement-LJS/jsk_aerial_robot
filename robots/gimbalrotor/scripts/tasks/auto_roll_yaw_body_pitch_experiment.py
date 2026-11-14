@@ -14,7 +14,9 @@ From the repository root, after the usual perching setup and positioning:
 The first request follows a one-second startup delay. Sleep interval_sec after
 each publication, including the last. num_steps counts requests published, not
 verified movements. The navigator enforces its per-jog limit (at most one degree,
-possibly configured smaller) and may reject requests, including while busy.
+possibly configured smaller). Valid requests update the accepted destination
+even during motion; invalid feedback, limits or unreachable IK can reject them.
+Each increment is published once: repeating it would request additional motion.
 This publisher does not wait for completion, retry, or adjust its schedule.
 Ctrl+C stops future publications; an accepted jog remains the navigator's
 responsibility. This script sends no cancellation.

@@ -34,13 +34,13 @@ Roll/yaw are URDF joint coordinates: positive joints can rotate the body negativ
 The body reference/measurement is published separately; no passive actuator exists.
 Body alignment uses separate body_yaw_target/body_roll_target Float64 topics.
 Cut commands use prepare/start/stop with current session; wait for measured READY before start.
-During an automatic motion, a manual key requests braking and is rejected: retry after stop complete.
+Manual keys replace the nominal destination during motion; any needed braking is handled onboard.
 Mechanism keys update only their own accumulated nominal destination, like multilink.
-o/u are discrete coordinated jogs about applied body +Y; wait for reference completion (measured error is reported separately).
-Busy jog requests are rejected, never accumulated or used to cancel the active jog.
+o/u compose relative body +Y increments from the accepted nominal orientation, including while moving.
+Reference completion and measured endpoint error are reported separately.
 body_pitch_delta is a relative increment in radians; ~body_pitch_step_deg is separate
 from passive ~pitch_step_deg. Navigator rejects increments above 1 degree. Watch command_ack for moving/terminal status.
-Feedback loss cancels a finite jog: restore feedback and send a fresh key. Automatic cuts use explicit resume.
+Feedback loss holds the accepted destination and resumes when coherent feedback returns. New invalid requests are rejected.
 Jogs are geometric only: no admittance/tare. Prepare a cut, reach READY, tare, enable,
 then start for compliant cutting. Space cancels preparation or motion and holds.
 Other destinations survive quick axis changes. Space holds without zeroing joints.
@@ -58,8 +58,7 @@ class Keyboard:
         self.angles_frame = ''
         self.commanded = None
         self.pending_axes = [False] * 3
-        self.jog_busy = False
-        self.jog_status_time = self.jog_request_time = self.nominal_after_jog = 0.
+        self.nominal_after_jog = 0.
         self.command_times = [0.] * 3
         self.position_limits = {'lower': None, 'upper': None}  # wire: roll, alpha, yaw
         self.limit_times = {'lower': 0., 'upper': 0.}
@@ -120,14 +119,9 @@ class Keyboard:
                 now = time.monotonic()
                 phase = re.search(r'\bphase=(\w+)\b', msg.data)
                 if phase and phase[1] == 'moving':
-                    self.jog_busy, self.jog_status_time = True, now
-                    self.commanded = None
-                    self.pending_axes = [False] * 3
-                elif phase and phase[1] in ('reference_complete', 'cancelled', 'failed', 'rejected', 'noop'):
-                    self.jog_busy = False
-                    self.commanded = None
-                    self.pending_axes = [False] * 3
                     self.nominal_after_jog = now
+                    self.commanded = None
+                    self.pending_axes = [False] * 3
                 print('\nNavigator: ' + msg.data, flush=True)
 
     def state_callback(self, msg):
@@ -150,20 +144,12 @@ class Keyboard:
                 self.commanded = None
                 self.pending_axes = [False] * 3
             now = time.monotonic()
-            active = re.search(r'\bjog_active=(0|1)\b', reason)
-            if active and (active[1] == '1' or now - self.jog_request_time > .5):
-                if self.jog_busy and active[1] == '0':
-                    self.commanded = None
-                    self.pending_axes = [False] * 3
-                    self.nominal_after_jog = now
-                self.jog_busy, self.jog_status_time = active[1] == '1', now
             self.state, self.state_time = (stage, reason), now
 
     def session_callback(self, msg):
         with self.lock:
             if self.session != msg.data:
-                self.jog_busy = False
-                self.jog_status_time = self.jog_request_time = self.nominal_after_jog = 0.
+                self.nominal_after_jog = 0.
                 self.angles = self.commanded = self.applied = None
                 self.pending_axes = [False] * 3
                 self.position_limits = {'lower': None, 'upper': None}
@@ -402,12 +388,10 @@ class Keyboard:
                 raise RuntimeError(rejection)
             with self.lock:
                 now = time.monotonic()
-                # Fresh status renews busy; a missing acknowledgement expires.
-                # Navigator admission remains authoritative and never queues keys.
-                if self.jog_busy and now - max(self.jog_status_time, self.jog_request_time) < 1:
-                    raise RuntimeError('Body-local pitch busy; key suppressed (not queued).')
+                # Each publication is one relative increment. The navigator
+                # composes it from its accepted destination and handles takeover.
                 self.publish('body_pitch', Float64(self.steps['body_pitch'] * (1 if key == 'o' else -1)))
-                self.jog_busy, self.jog_request_time = True, now
+                self.nominal_after_jog = now
                 self.commanded = None
                 self.pending_axes = [False] * 3
             print('\nBody-local pitch jog sent; awaiting navigator acknowledgement (no input backlog).', flush=True)

@@ -115,7 +115,7 @@ TEST(Execution,MeasuredPositiveGoal)
 TEST(Execution,BlockedRobotConsumesFiniteLeadWithoutSuccess)
 {
   Fixture f; double time; auto e=executor(f,f.plan(),time);
-  // Isolate progress governor from the independent physical tracking fault.
+  // Exercise the progress governor with a wider tracking allowance.
   e.config.tracking_tolerance=e.config.orientation_tolerance=.2; e.config.progress_timeout=100;
   const Reference stationary=e.target;
   double last=0;
@@ -141,9 +141,10 @@ TEST(Execution,NominalTenControlNineMeasuredNineIsPending)
   EXPECT_TRUE(e.path_end_commanded); EXPECT_EQ(e.plan.goal.pitch_end,goal);
   EXPECT_NEAR(e.goal_error,M_PI/180,.003);
   for(int i=0;i<1100&&e.stage==Stage::EXECUTING;++i) { time+=.01; e.tick(feedback(effective,time)); }
-  EXPECT_EQ(e.stage,Stage::FAULT_HOLD); EXPECT_NE(e.first_fault.find("timed out"),std::string::npos);
-  EXPECT_EQ(e.plan.goal.pitch_end,goal);
-  const auto first=e.first_fault; e.fault("later feedback gap"); EXPECT_EQ(e.first_fault,first);
+  EXPECT_EQ(e.stage,Stage::EXECUTING); EXPECT_TRUE(e.first_fault.empty());
+  EXPECT_FALSE(e.goal_reached); EXPECT_EQ(e.plan.goal.pitch_end,goal);
+  e.fault("invalid generated reference");
+  const auto first=e.first_fault; e.fault("later fault"); EXPECT_EQ(e.first_fault,first);
 }
 TEST(Planning,Cancellation)
 {
@@ -191,10 +192,9 @@ TEST(Execution,StaleFeedbackWrongSessionAndDuplicateSettlingSamples)
   EXPECT_DOUBLE_EQ(e.progress,phase); EXPECT_EQ(e.target.velocity.norm(),0);
   EXPECT_EQ(e.target.cog_acceleration.norm(),0); EXPECT_EQ(e.target.desired.omega.norm(),0);
   EXPECT_FALSE(e.command("resume",1));
-  e.tick(feedback(e.target,time+3)); EXPECT_EQ(e.stage,Stage::PAUSED);
+  e.tick(feedback(e.target,time+3)); EXPECT_EQ(e.stage,Stage::EXECUTING);
   EXPECT_EQ((e.target.eta-held.eta).norm(),0); EXPECT_DOUBLE_EQ(e.progress,phase);
-  ASSERT_TRUE(e.command("resume",1));
-  e.tick(feedback(e.target,time+3.01)); EXPECT_DOUBLE_EQ(e.progress,phase);
+  e.tick(feedback(e.target,time+3.01)); EXPECT_GT(e.progress,phase);
   e.tick(feedback(e.target,time+3.02)); EXPECT_GT(e.progress,phase);
   EXPECT_NE(e.stage,Stage::FAULT_HOLD)<<e.reason;
   // Source duplicates should not represent elapsed measured quiet time.
@@ -217,14 +217,15 @@ TEST(Execution,ObservationWaitCancelAlignmentAndRealFaults)
     if(cause==0) bad.body.translation().x()+=.1;
     if(cause==1) bad.eta[1]=2;
     if(cause==2) bad.now=time-1;
-    x.tick(bad); EXPECT_EQ(x.stage,Stage::FAULT_HOLD)<<cause;
-    x.tick(feedback(x.target,time+.02)); EXPECT_EQ(x.stage,Stage::FAULT_HOLD);
+    x.tick(bad); EXPECT_EQ(x.stage,cause==1?Stage::FAULT_HOLD:Stage::PAUSED)<<cause;
+    x.tick(feedback(x.target,time+.02));
+    EXPECT_EQ(x.stage,cause==1?Stage::FAULT_HOLD:Stage::EXECUTING)<<cause;
   }
   auto x=executor(f,f.plan(),time,false);
   x.stage=Stage::PRE_ALIGN; const auto goal=x.plan.goal.pitch_end;
   auto skew=feedback(x.target,time+.02); skew.joint_stamp-=.06;
   x.tick(skew); EXPECT_EQ(x.stage,Stage::PAUSED);
-  x.tick(feedback(x.target,time+1)); ASSERT_TRUE(x.command("resume",1));
+  x.tick(feedback(x.target,time+1));
   EXPECT_EQ(x.stage,Stage::PRE_ALIGN); EXPECT_EQ(x.plan.goal.pitch_end,goal);
 }
 TEST(Planning,ManualRetargetAppliedDerivativesAndBoundedStop)
@@ -409,10 +410,8 @@ TEST(Execution,LocalPitchJogPauseResumeAndMeasuredCompletion)
   e.waitForFeedback(time+.2,"missing observation"); ASSERT_EQ(e.stage,Stage::PAUSED);
   EXPECT_FALSE(e.command("resume",17));
   time+=2; e.tick(feedback(e.target,time));
-  EXPECT_EQ(e.stage,Stage::PAUSED); EXPECT_EQ(e.progress,progress);
+  EXPECT_EQ(e.stage,Stage::PRE_ALIGN); EXPECT_EQ(e.progress,progress); // no time catch-up
   EXPECT_DOUBLE_EQ(e.plan.goal.pitch_start,jog.pitch_start);
-  ASSERT_TRUE(e.command("resume",17));
-  time+=1; e.tick(feedback(e.target,time)); EXPECT_EQ(e.progress,progress); // no time catch-up
   for(int i=0;i<30000&&e.stage==Stage::PRE_ALIGN;++i) { time+=.01; e.tick(feedback(e.target,time)); }
   ASSERT_EQ(e.stage,Stage::READY)<<e.reason;
   EXPECT_LT(logSO3(e.target.body.linear().transpose()*expSO3(Vec::UnitY()*jog.pitch_start)).norm(),1e-8);

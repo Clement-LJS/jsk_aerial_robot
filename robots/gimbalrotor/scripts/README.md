@@ -26,7 +26,7 @@ rosrun gimbalrotor keyboard_roll_yaw_perching.py _body_pitch_step_deg:=0.2
 ```
 
 Tap a paired motion key for a small step (default 0.2 degrees). Mechanism keys
-update independent destinations; body-local pitch keys submit finite asynchronous jogs.
+update independent destinations; body-local pitch keys update the nominal destination through endpoint IK.
 
 | Key | Action |
 | --- | --- |
@@ -35,7 +35,7 @@ update independent destinations; body-local pitch keys submit finite asynchronou
 | `j`, `l` | Active yaw joint − / + |
 | `a`, `f` | Active roll joint − / + |
 | `i`, `k` | Passive-hinge alpha + / −, relative to the current lock |
-| `o`, `u` | One coordinated body-local pitch jog down (+) / up (−); wait for completion |
+| `o`, `u` | Relative body-local pitch down (+) / up (−), including during motion |
 | `z` | Explicit body pitch rezero with measured roll/yaw joints frozen |
 | `b` | Final relock after fresh rezero ready/not-active/not-failed feedback |
 | Space | Brake all mechanism/body motion together, then hold contact; discard the cut |
@@ -104,40 +104,37 @@ rostopic pub -1 /gimbalrotor/perching/roll_yaw/yaw_target std_msgs/Float64 'data
 rostopic pub -1 /gimbalrotor/perching/roll_yaw/alpha_target std_msgs/Float64 'data: 0.05'
 ```
 
-The separate `body_pitch_delta` (`std_msgs/Float64`) input requests one small
-relative rotation about the held applied body +Y: `R_goal = R_start * Ry(delta)`.
+The separate `body_pitch_delta` (`std_msgs/Float64`) requests one small relative
+rotation about the accepted nominal body +Y: `R_goal = R_nominal * Ry(delta)`.
 Keyboard `o/u` sends positive/negative `~body_pitch_step_deg` (default 0.2°).
 `i/k` remains passive alpha. The navigator's `body_pitch_jog_max_delta` defaults
-to 1° in radians. Larger or nonfinite increments are rejected; zero is a no-op.
+to 1° in radians. Larger, nonfinite or unreachable increments are rejected;
+zero is a no-op. Each publication applies one increment; do not repeat an
+increment as if it were an absolute destination.
 
-Admission performs one bounded endpoint IK and constructs the existing two-knot
-manual mechanism interpolation. All three coordinates may change. The endpoint
-matches the requested SO(3) rotation; intermediate joint interpolation is a small
-approximation to pure body-Y rotation. Nine body-only samples check limits,
-singularity, signed pitch, off-axis error and URDF saw-origin direction. Each
-actual next candidate repeats these geometry checks and the normal articulated
-CoG/rate/acceleration checks before coherent body/CoG/joint publication.
-This is a geometric proxy, not a physical tooth-clearance or force guarantee.
+Admission uses endpoint IK and the existing bounded mechanism interpolation.
+All three coordinates may change. New increments retain unfinished accepted
+motion, while interpolation starts from the coherent applied position, velocity
+and acceleration. Reversals and mechanism-key takeovers are accepted during
+motion; if a smooth replacement needs braking, the navigator retains one nominal
+destination and connects automatically after braking. No key queue, prepare,
+per-key settling, tracking-error admission gate or saw-point assumption is used.
+Intermediate joint interpolation approximates pure body-Y rotation; the endpoint
+matches the requested SO(3) orientation. Generated references still obey physical
+position, attitude, joint rate/acceleration and CoG rate/acceleration checks.
 
-Jogs require fresh synchronized HOVER/contact feedback, an idle held reference
-and sufficient live soft tracking allowance for the whole step. They do not use
-the offline worker, automatic quiet window or measured settling transaction.
-Busy keys are rejected without queuing or cancelling an active command. The
-keyboard suppresses repeated pitch keys while fresh status says a jog is busy.
+`command_ack` reports `moving`, `replaced`, `reference_complete`, `cancelled`,
+`failed`, `rejected` or `noop`. Reference completion means the commanded endpoint
+was reached; measured pitch and endpoint error are reported separately. The
+keyboard reconciles accepted nominal feedback before later joint steps.
 
-`command_ack` reports `moving`, `reference_complete`, `cancelled`, `failed`,
-`rejected` or `noop`. **Reference completion means the commanded endpoint was
-reached, not that the measured body accurately executed the increment.** Applied
-pitch, measured pitch and measured endpoint error are reported separately.
-The keyboard reconciles the accepted nominal vector before later joint steps.
-
-Space brakes then cancels; a mechanism-key takeover requests the same stop and
-rejects that key, so retry after stop completion. Feedback loss cancels the finite
-jog at the last coherent applied reference; send a fresh jog after recovery.
-Disable/relock/fault clears ownership. A completed jog cannot be replayed with
-`start` or `resume`. Automatic cuts retain explicit measured READY/start/resume.
-Jogs neither need nor enable tare/admittance; accepting one clears an inactive
-prepared cut and its compliance ownership.
+Space brakes then cancels. Temporary invalid feedback or geometric residuals
+hold the accepted goal and resume automatically when usable measurements return.
+Requests received during invalid feedback are rejected without changing that
+goal. Disable/relock and genuine physical/model faults retain their explicit
+meanings. Optional preplanned cuts still use prepare and start. Manual commands
+need no tare/admittance; taking ownership releases planned compliance without
+resetting a physically valid raw observer.
 
 Examples for an already-running robot stack (namespace defaults shown):
 
@@ -246,27 +243,27 @@ acknowledgement. `pause` decelerates on the existing path; `resume` continues it
 then discard the plan and report `stop complete`. An already-held stop completes
 immediately. They do not command zero thrust or zero joint angles.
 
-Temporary missing/stale feedback, derivative bootstrap and body/joint timestamp
-skew hold the last coherent reference with all command derivatives zero. Rejected
-packets retain the accepted measurement and its original timestamp; empty joint
-velocity arrays require two advancing fresh samples. The timeout remains 0.15 s
-and synchronization tolerance 0.05 s. Ordinary joint destinations and contact identity
-survive this wait (finite local-pitch jogs are cancelled): coherent contact/tracking checks precede a fresh bounded
-transition from the held reference, without catching up elapsed outage time.
-Stop/cancel/disable override pending movement. Moving automatic paths enter
-`PAUSED`, retain the original goal, and require explicit `resume` after fresh
-quiet/contact checks. Pending preparation is cancelled if its coherent start is
-lost. A computed plan retains its fixed applied start while transient quiet/tracking
-readiness is missing, up to `settle_timeout`, without replanning. READY/start
-compare live measurements with the fixed prepared start using `preparation_tolerance`. Rezero never
-counts the gap as settling and retains its original timeout. An observation
-hold zeros feedforwards immediately; it is not an acceleration-continuous physical
-stop. Actual geometry, hard tracking, bounds and clock faults remain latched.
-A fault requires resolving the cause and recapturing contact. A lock change, accepted manual target, or
-a changed applied cut-start reference invalidates the cut. Measured readiness
-fluctuations within hard contact/tracking limits withhold start without discarding geometry. Manual takeover during automatic
-motion first brakes: wait for stop complete and retry the key/target. Independent
-axis destinations and immediate reversal at a limit are preserved.
+Temporary missing/stale feedback, derivative bootstrap, body/joint timestamp
+skew and pivot/hinge residuals hold the last coherent reference. Rejected packets
+never refresh accepted measurements; empty joint velocity arrays require two
+advancing fresh samples. The timeout remains 0.15 s and synchronization tolerance
+0.05 s. Nominal joint and body-pitch destinations and contact identity survive.
+Recovery uses a bounded transition from the held reference without integrating
+outage time or silently recapturing contact. Moving prepared paths also resume
+automatically after observation recovery; an explicit pause still requires resume.
+Pending preparation may need resubmission if its coherent start is lost; this
+optional interface is not required for manual commands or raw observation.
+
+Ordinary tracking deviations do not latch faults or reset the raw observer.
+Prepared-path feeding brakes and holds when tracking/progress is inadequate and
+recovers automatically. Physical position/tilt violations, changed topology or
+inertias, invalid generated references and invalid trajectory ownership remain
+hard control faults. Nonfinite/missing physical inputs never yield valid loads.
+Persistent geometric disagreement keeps a specific invalid reason and the same
+captured contact. Invalid-observation holds zero feedforwards immediately and do
+not claim acceleration-continuous physical stopping. Explicit stop/cancel/disable
+override pending movement. Optional rezero retains its setup limits and timeout.
+
 Prepared plans are never reused across sessions. Completion requires measured
 endpoint orientation and mechanism tracking plus the configured settling window,
 not merely elapsed time. `task_pitch` plots nominal/measured/applied local pitch;
@@ -295,20 +292,28 @@ configured_yaw_joint]` (normally `[alpha, joint_roll, joint_yaw]`) and three
 in generalized coordinates, not a Cartesian force/torque vector or isolated
 saw force; unmodelled loads and model/input errors also contribute.
 `generalized_external_load_valid` is a `std_msgs/Bool`, true only for a ready,
-current, physically valid result in this lock. Both topics publish on every
-navigation update, independently of the diagnostic throttle and subscribers.
-The numeric header keeps the actual observer/body sample timestamp; repeated
-samples never advance integration, refresh receipt time or fake a new timestamp.
-Readiness expires at `max_execution_step` in both sample age and steady time
-since the last coherent observation.
-Bootstrap, stale/invalid input and unperched operation publish false and NaN
-efforts. Reset invalidations publish promptly with stamp zero; a retained but
-expired sample keeps its original stamp and is also invalid/NaN.
+current, physically valid result in this lock. Validity publishes at navigation
+cadence and promptly on invalidation, independently of plotting subscribers.
+Numeric loads publish only once per finite, ready observation, with its actual
+body sample timestamp. Bootstrap, stale/invalid input and unperched operation
+publish false and leave a gap in the numeric series: no NaNs, invented zeros or
+restamped old values. Consumers must check validity **and freshness**; a retained
+last number is not indefinitely valid. Readiness expires at `max_execution_step`
+in both sample age and steady time since the last coherent observation.
+Optional `task_pitch` and `compliance` vectors publish only when every represented
+field is available and finite. Structured diagnostics retain finite control state
+and validity flags, omitting unavailable numeric values.
+
+The exact UInt64 `/session` remains command metadata. Exclude it from PlotJuggler
+numeric import, or accept precision loss only for display; never use a rounded
+display value as a command ID. There is no controller plotting dependency.
+
 Diagnostics expose the same validity, age, stamp, coordinate order, loads and
 `articulated_status` rejection/bootstrap reason.
 
-The observer runs once in `applyRollYawTarget`, after physical feedback/contact
-and model guards and before path consumers. It retains the HOVER/attachment,
+The observer runs once in `applyRollYawTarget`, before control early returns and
+path consumers, with its own physical feedback/contact and model guards. It
+retains the HOVER/attachment,
 timestamp, synchronization, inertia, finite-input and state-reconstruction
 checks. ServoBridge current-derived joint efforts are consumed directly without
 another calibration or sign/scale conversion.
@@ -321,19 +326,20 @@ rate use that same reference with current alpha/roll/yaw. Physical gimbals may
 move normally and remain at new angles without invalidating, rebasing or
 requiring relock/tare. No gimbal velocity, derived rate, fresh gimbal timestamp
 or comparison against the reference angle is required by the reduced observer.
-Gimbal-only messages do not reset or advance it. The exempt joints use the
-controller's exact rotor-indexed names verified against the rotor-arm-to-thrust
-URDF chains (`gimbal1` through `gimbal4` on Beetle), not a substring filter.
-Unsupported additional mechanism joints retain the existing position/rate
-checks (1e-4 rad and 1e-3 rad/s) and synchronized feedback requirements.
+Hand/lock/gimbal-only messages do not reset or refresh articulation feedback,
+including messages from other publishers. The authoritative transformable-model
+`getLinkJointNames()` / `getLinkJointIndices()` correspondence selects configured
+roll/yaw inputs by name, independent of message or KDL order. Alpha is reconstructed
+from the fixed-contact geometry and measured body motion, with no pitch servo
+feedback or passive actuation torque. Other real link articulations are rejected
+explicitly at capture rather than silently frozen.
 
-For the articulated source, the CoG drift guard compares captured geometry to a
-local copy of the current joint configuration with only rotor gimbals replaced
-by their reference values. It therefore detects unsupported mechanism changes
-without rejecting permitted gimbal motion. Topology, joint mapping, fixed
-geometry, mass/inertia and extra-module changes remain faults. This comparison
-does not change the live robot model, controller geometry or physical commands.
-The legacy source retains its existing CoG guard.
+The captured internal geometry is a modelling approximation, never a constraint
+on live actuator angles. There is no live CoG drift comparison that can reset the
+session when gimbals move. Topology, joint mapping, fixed link geometry,
+mass/inertia and extra-module changes remain checked. Command speed caps constrain
+references, not externally imposed measured rates; the constrained angular-rate
+residual remains a physical consistency check.
 
 The known actuation input remains the current world-frame command wrench about
 the instantaneous CoG. Each accepted input retains the current body-to-CoG
@@ -344,7 +350,10 @@ fixed internal inertial geometry; no live gimbal inertial terms are mixed into
 the reduced momentum model. Omitted dynamics and actuation/model errors can
 appear in the generalized residual: this is not exact Cartesian contact-wrench
 recovery. Missing/stale/nonfinite required body, roll/yaw or actuation inputs,
-or genuine contact/model faults, still produce unavailable output.
+or genuine contact/model disagreement, still produce unavailable output. The
+three generalized torques cannot uniquely determine six independent wrench
+components: with a matching body-origin Jacobian, `Q_ext = J_O^T w_O` is a
+3-by-6 mapping. No external force contact point is assumed for the raw estimate.
 
 Path/compliance resets preserve raw history and known-input caches. Disabling
 perching, relock, source/configuration changes, actual model/coordinate recapture and
@@ -428,13 +437,16 @@ schedule. Current measured progress, separately from its historical maximum,
 limits forward and reverse lead. Clearing resistance or disabling admittance
 releases the correction with bounded motion, without changing the original goal.
 
-Enabled stale/invalid wrench input brakes to PAUSED and requires explicit valid
-resume. Tracking protection remains active with admittance disabled. Lack of
-meaningful net measured forward improvement times out to PAUSED; relief cycles
-cannot keep resetting that timeout. PAUSED freezes progress and scalar integration,
-while fresh wrench observation can continue. Disable while paused does not resume.
-Stop/cancel and manual takeover clear compliance after bounded stopping;
-feedback loss during cancellation completes cleanup at the held reference.
+Enabled stale/invalid interaction input brakes feeding and retains the goal.
+Feeding recovers when the required input/baseline is usable, without an automatic
+resume command. A raw-observer rebase invalidates the optional compliance baseline;
+re-arming compliance still requires an explicit no-cut tare, never a silent bias
+reset. Tracking protection remains active with admittance disabled. Lack of net
+measured forward progress is reported without faulting or discarding the goal.
+An explicit PAUSED state freezes progress and scalar integration while raw
+observation continues; disabling compliance does not undo an explicit pause.
+Stop/cancel and manual takeover release compliance; feedback loss during
+cancellation completes cleanup at the held reference.
 Relock/reset/fault invalidates the associated tare and correction.
 The roll–yaw launch selects the ordinary `gimbalrotor_controller`, so the older
 perching-admittance controller cannot inject a second correction.
@@ -461,14 +473,16 @@ Common blocking reasons and recovery:
 | Prepared, waiting for live readiness | Hold; the same connection begins once readiness passes, or expires at `settle_timeout` |
 | Applied start/session changed | Reprepare; old geometry is invalidated |
 | Invalid admittance configuration/source, wrong frame/point, no baseline | Validate source/convention, explicitly tare at quiet no-cut READY, wait baseline, then enable |
-| Enabled wrench stale or tracking blockage | Restore source/remove blockage; explicit resume after PAUSED; goal remains pending |
-| Hard tracking/contact/clock fault, settling timeout | Resolve the reported cause, recapture contact and prepare again; do not weaken hard limits |
+| Tracking blockage or transient observation failure | Goal/contact retained; feeding resumes automatically once usable feedback returns |
+| Physical position/tilt violation or changed topology/inertia | Resolve the concrete cause before explicit reset/recapture; do not weaken physical limits |
 
-The default lead/soft/hard hierarchy remains 0.018 / 0.024 / 0.04 rad. At the
+The prepared-path lead/soft/tracking allowances remain 0.018 / 0.024 / 0.04 rad;
+tracking allowances do not define contact faults. At the
 0.05 s maximum moving step, the reserved half-rates give 0.00375 rad maximum
 single-joint travel and 0.00875 rad summed body-rotation bound, below the
-0.016 rad soft-to-hard margin. The governor additionally reserves discrete
-braking distance. `manual_callback_wall_s` and `navigation_wall_s` report observed
+0.016 rad soft-to-tracking margin. The governor reserves discrete braking
+distance; an externally displaced tracking boundary triggers bounded braking,
+not a claim that measured tracking error can always be kept within that margin. `manual_callback_wall_s` and `navigation_wall_s` report observed
 costs, including mutex wait for manual callbacks and updates. Callback timing
 covers admission, construction and diagnostics; it is published on the next
 diagnostics cycle. Source checks and standalone timing do not establish

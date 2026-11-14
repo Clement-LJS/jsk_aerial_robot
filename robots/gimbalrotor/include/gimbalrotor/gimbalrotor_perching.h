@@ -569,10 +569,6 @@ bool validatedMechanismPath(const Kinematics&, const Reference&, const Eigen::Ve
                             std::string&);
 bool mechanismPath(const Kinematics&, const Reference&, const Eigen::Vector3d&, const PlanningConfig&, Path&,
                    std::string&);
-// Fixed-size manual jog geometry check; caller supplies already evaluated body FK.
-bool localPitchSample(const Kinematics&, const Eigen::Vector3d&, const Eigen::Isometry3d& body,
-                      const Eigen::Isometry3d& start, const Eigen::Isometry3d& previous, double delta,
-                      double previous_pitch, const PlanningConfig&, double& pitch, std::string&);
 bool inverseOrientation(const Kinematics&, const Eigen::Matrix3d&, const Eigen::Vector3d& seed, const PlanningConfig&,
                         Eigen::Vector3d&, std::string&);
 Plan prepare(const Kinematics&, const Eigen::Vector3d& initial, const Eigen::Matrix3d& neutral, const Request&,
@@ -687,7 +683,7 @@ private:
   SettlingWindow settling_window_;
   double last_time_ = 0, stable_since_ = 0, ready_since_ = 0, speed_ = 1;
   double lag_since_ = 0, settling_stamp_ = 0, best_forward_ = 0;
-  bool governor_hold_ = false, feedback_waiting_ = false;
+  bool governor_hold_ = false, feedback_waiting_ = false, resume_after_feedback_ = false;
   bool stopping_ = false, cancel_ = false, paused_align_ = false, motion_clock_pending_ = false;
 };
 }  // namespace roll_yaw

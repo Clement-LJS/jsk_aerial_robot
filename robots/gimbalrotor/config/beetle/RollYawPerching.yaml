@@ -10,17 +10,18 @@ navigation:
   roll_yaw_perching:
     # Common base lifecycle: enable/capture -> nominal target -> update/FK -> controller.
     # Manual targets always mean [passive alpha, active roll, active yaw].
-    # Finite manual body-Y jog: one endpoint IK + bounded joint interpolation.
+    # Relative body-Y increments compose from the accepted nominal orientation.
+    # One endpoint IK + bounded interpolation, including replacements during motion.
     # Larger commands are rejected; full cuts use request/pitch_increment below.
     body_pitch_jog_max_delta: 0.0174532925199433 # rad (1 degree); inherited by simulation
     prepare_deadline: 120.0 # steady-clock seconds; cooperative cancellation
     # Execution allowance, not overshoot or hardware-validated tuning.
     # Limits the nominal feed lead over measured progress.
     reference_lead: 0.018 # rad, strictly below soft body tracking bound
-    soft_tracking_fraction: 0.6 # 0.024 rad soft vs 0.04 rad hard, body AND joints
-    resume_fraction: 0.5 # release latched hold below half the soft errors
+    soft_tracking_fraction: 0.6 # prepared-path feed hold, never a contact/session fault
+    resume_fraction: 0.5 # automatically release feed hold below half the soft errors
     max_execution_step: 0.05 # seconds; nominal navigation 40 Hz
-    preparation_tolerance: 0.03 # rad live start consistency; strictly below body/joint hard tracking limits
+    preparation_tolerance: 0.03 # rad live start consistency; below body/joint tracking allowances
     preparation_quiet_time: 0.3 # seconds: fresh RMS/current/mean-rate window before prepare
     progress_filter_time: 0.15
     goal_tolerance: 0.0087
@@ -29,7 +30,9 @@ navigation:
       source: articulated_momentum # legacy_wrench remains available; selected at startup/disarmed READY tare
       # Raw generalized loads start at contact lock: no prepare/tare/admittance enable.
       # generalized_external_load (JointState effort): [alpha, roll_joint, yaw_joint], N.m.
-      # Check generalized_external_load_valid (Bool); invalid/bootstrap efforts are NaN.
+      # Require generalized_external_load_valid (Bool) AND a fresh observation stamp.
+      # Invalid/bootstrap periods publish false and no numeric load (a plotting gap).
+      # PlotJuggler: omit /session metadata; never reuse rounded display IDs in commands.
       # The following wrench mapping applies only when legacy_wrench is selected.
       # Legacy observer software convention: wrench ON robot, world force/moment
       # about CoG in N and N.m; not a physically calibrated cutting-force measurement.
@@ -74,11 +77,13 @@ navigation:
       # Reduced model retains all masses/inertias at the captured internal gimbal
       # configuration and neglects internal gimbal-motion/coupling dynamics.
       # Physical rotor gimbals may move normally; no gimbal rate/freshness gate.
-      # Unsupported additional mechanism joints still require fixed positions/rates.
+      # The model link-joint API selects roll/yaw; extra link articulations are rejected
+      # at setup. Hand/lock servos and rotor gimbals are not feedback dependencies.
       # Missing/stale/invalid required inputs still invalidate the estimate.
       # Generalized N.m residual includes approximation error, not an exact Cartesian wrench.
-      # Rotor spin momentum is omitted. A fault clears tare and requires disarm/retare.
-    # Explicit setup: keyboard e -> z -> measured ready-HOLD -> b -> navigate.
+      # Rotor spin momentum is omitted. Data/model invalidity clears the compliance
+      # baseline; raw observation automatically rebases without tare or relock.
+    # Enable/capture once, then navigate. Optional intentional setup: z -> ready-HOLD -> b.
     # Rezero uses only the configured passive hinge, with measured active joints frozen.
     pitch_rezero_target_pitch: 0.0
     pitch_rezero_kp: 1.0
@@ -133,9 +138,9 @@ navigation:
     feedback_sync_tolerance: 0.05
     pivot_tolerance: 0.01
     hinge_residual_tolerance: 0.03
+    # Prepared-path feed/preparation allowances; not fault thresholds for pushes.
     tracking_tolerance: 0.04
     body_tracking_tolerance: 0.04
-    cog_model_tolerance: 0.005
     # Automatic orientation endpoints wait for measured settling; manual jogs report reference_complete.
     # Enable/relock capture current measurements without a zero-rate prerequisite.
     settle_rate: 0.01 # Legacy strict policy (settle_use_window=false).
