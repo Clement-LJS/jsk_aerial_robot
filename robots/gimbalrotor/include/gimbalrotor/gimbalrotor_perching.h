@@ -179,13 +179,22 @@ bool rotationValid(const Mat& r);
 bool poseValid(const Pose& p);
 Pose fromKdl(const KDL::Frame& f);
 
+// Exact first/second directional derivatives of a rigid transform.
+struct TransformJet
+{
+  Pose pose = Pose::Identity();
+  Mat rotation_rate = Mat::Zero(), rotation_acceleration = Mat::Zero();
+  Vec velocity = Vec::Zero(), acceleration = Vec::Zero();
+};
+using CogDerivatives = std::function<bool(const Vec&, const Vec&, const Vec&, TransformJet&)>;
+
 // Inertia-weighted CoG reconstruction from a copied articulated model. relative
 // is R_GB, exactly RobotModel::getCogDesireOrientation(), not principal axes.
 std::function<bool(const Vec&, Pose&)> articulatedCogModel(KDL::Tree tree, KDL::JntArray joints,
                                                            std::map<std::string, KDL::RigidBodyInertia> inertia,
                                                            std::map<std::string, KDL::Segment> extra, std::string base,
                                                            KDL::Rotation relative, unsigned roll_index,
-                                                           unsigned yaw_index);
+                                                           unsigned yaw_index, CogDerivatives* derivatives = nullptr, double* radius = nullptr);
 
 struct Estimate
 {
@@ -199,11 +208,16 @@ class Kinematics
 public:
   bool configure(const KDL::Chain& body_contact, const std::string& roll, const std::string& yaw,
                  const Pose& contact_pivot, const Vec& axis, std::function<bool(const Vec&, Pose&)> body_cog,
-                 std::string& error);
+                 std::string& error, CogDerivatives derivatives = {}, double cog_radius = 0);
   bool bodyPivot(const Vec& eta, Pose& bp) const;
   bool lock(const Pose& measured_body, const Vec& measured_eta);
   bool evaluateBody(const Vec& eta, Pose& body) const;
   bool evaluate(const Vec& eta, Pose& body, Pose& cog) const;
+  bool derivatives(const Vec&, const Vec&, const Vec&, TransformJet& body, TransformJet& cog) const;
+  // Triangle bounds over the product of hinge, inverse contact chain and mass groups.
+  Vec travelWeights() const { return Vec(1, 3, 3); }
+  double radiusBound() const { return radius_bound_; }
+  bool analyticDerivatives() const { return bool(cog_derivatives_); }
   bool jacobian(const Vec& eta, Mat& j) const;
   bool numericalJacobian(const Vec& eta, Mat& j, double h = 1e-6) const;
   bool estimate(const Pose& body, const Vec& measured_eta, Estimate& result) const;
@@ -221,6 +235,8 @@ private:
   Pose cp_ = Pose::Identity(), lock_ = Pose::Identity();
   Vec axis_ = Vec::UnitY();
   std::function<bool(const Vec&, Pose&)> cog_;
+  CogDerivatives cog_derivatives_;
+  double radius_bound_ = 0;
   bool configured_ = false, locked_ = false;
 };
 }  // namespace roll_yaw
@@ -574,9 +590,11 @@ bool mechanismReference(const Kinematics&, const Eigen::Vector3d&, const Eigen::
                         Reference&);
 bool referenceAllowed(const Reference&, const PlanningConfig&, std::string&);
 // One bounded double-integrator step; braking retains the accepted destination.
-// The caller substeps actual elapsed ROS time and commits only a validated interval.
+// The caller caps elapsed ROS time and commits only a validated interval.
 bool followMechanism(const Kinematics&, const Reference&, const Eigen::Vector3d& goal,
-                     double dt, double integration_step, bool brake, const PlanningConfig&, Reference&, std::string&);
+                     double dt, double integration_step, bool brake, const PlanningConfig&, Reference&, std::string&, const Vec& feed = Vec::Ones());
+bool referenceIntervalBounds(const Kinematics&, const Reference&, const Reference&, double dt,
+                             const PlanningConfig&, Vec& travel, Vec& lower, Vec& upper, std::string&);
 bool mechanismBrakingAllowed(const Kinematics&, const Reference&, double integration_step, const PlanningConfig&, std::string&);
 // Short online local-Y continuation. Cubic scalar velocity preserves both
 // endpoint rates and accelerations; its analytic integral right-multiplies R_wb.

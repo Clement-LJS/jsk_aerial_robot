@@ -80,6 +80,55 @@ Eigen::Isometry3d fromKdl(const KDL::Frame& f)
 }
 namespace
 {
+Mat skew(const Vec& v)
+{
+  Mat s;
+  s << 0, -v.z(), v.y(), v.z(), 0, -v.x(), -v.y(), v.x(), 0;
+  return s;
+}
+TransformJet fixedJet(const Pose& p) { TransformJet j; j.pose = p; return j; }
+TransformJet product(const TransformJet& x, const TransformJet& y)
+{
+  TransformJet z;
+  z.pose = x.pose * y.pose;
+  z.rotation_rate = x.rotation_rate * y.pose.linear() + x.pose.linear() * y.rotation_rate;
+  z.rotation_acceleration = x.rotation_acceleration * y.pose.linear() +
+      2 * x.rotation_rate * y.rotation_rate + x.pose.linear() * y.rotation_acceleration;
+  z.velocity = x.velocity + x.rotation_rate * y.pose.translation() + x.pose.linear() * y.velocity;
+  z.acceleration = x.acceleration + x.rotation_acceleration * y.pose.translation() +
+      2 * x.rotation_rate * y.velocity + x.pose.linear() * y.acceleration;
+  return z;
+}
+TransformJet inverse(const TransformJet& x)
+{
+  TransformJet z;
+  z.pose = x.pose.inverse();
+  z.rotation_rate = x.rotation_rate.transpose();
+  z.rotation_acceleration = x.rotation_acceleration.transpose();
+  z.velocity = -z.rotation_rate * x.pose.translation() - z.pose.linear() * x.velocity;
+  z.acceleration = -z.rotation_acceleration * x.pose.translation() -
+      2 * z.rotation_rate * x.velocity - z.pose.linear() * x.acceleration;
+  return z;
+}
+TransformJet segmentJet(const KDL::Segment& segment, double q, double v, double a)
+{
+  TransformJet z = fixedJet(fromKdl(segment.pose(q)));
+  const auto twist = segment.twist(q, 1);
+  const Vec w(twist.rot.x(), twist.rot.y(), twist.rot.z());
+  const Vec dp(twist.vel.x(), twist.vel.y(), twist.vel.z());
+  z.rotation_rate = skew(w * v) * z.pose.linear();
+  z.rotation_acceleration = (skew(w * a) + skew(w * v) * skew(w * v)) * z.pose.linear();
+  z.velocity = dp * v;
+  z.acceleration = dp * a + w.cross(dp) * v * v;
+  return z;
+}
+// Revolute segment translation <= |origin| + |tip-origin|, including reversed chains.
+double segmentRadius(const KDL::Segment& s)
+{
+  return s.getJoint().JointOrigin().Norm() +
+      (s.pose(0).p - s.getJoint().JointOrigin()).Norm();
+}
+Vec vee(const Mat& m) { return Vec(m(2, 1)-m(1, 2), m(0, 2)-m(2, 0), m(1, 0)-m(0, 1)) * .5; }
 // Collapse only edges whose joint positions are captured constants. Each active
 // joint starts a new rigid mass group; membership follows topology, never names.
 // Evaluation has three groups, two joint poses, and stack-local scratch. The
@@ -170,6 +219,42 @@ public:
              masses == inertia.size() && std::isfinite(mass_) && mass_ > 0;
   }
 
+  double radius() const
+  {
+    double radius = group_to_body_.p.Norm();
+    for(const auto& g : groups_)
+      radius += 2 * (g.parent_to_joint.p.Norm() + segmentRadius(g.segment)) +
+          (g.mass > 0 ? g.moment.Norm() / g.mass : 0);
+    return radius;
+  }
+  bool derivatives(const Vec& q, const Vec& v, const Vec& a, TransformJet& bg) const
+  {
+    ++workCounters().fast_model;
+    if(!valid_ || !q.allFinite() || !v.allFinite() || !a.allFinite()) return false;
+    std::array<TransformJet, 3> poses;
+    Vec moment = Vec::Zero(), velocity = Vec::Zero(), acceleration = Vec::Zero();
+    for(std::size_t i = 0; i < groups_.size(); ++i)
+    {
+      const auto& g = groups_[i];
+      if(i) poses[i] = product(product(poses[g.parent], fixedJet(fromKdl(g.parent_to_joint))),
+          segmentJet(g.segment, q[g.coordinate], v[g.coordinate], a[g.coordinate]));
+      const Vec m(g.moment.x(), g.moment.y(), g.moment.z());
+      moment += poses[i].pose.linear() * m + g.mass * poses[i].pose.translation();
+      velocity += poses[i].rotation_rate * m + g.mass * poses[i].velocity;
+      acceleration += poses[i].rotation_acceleration * m + g.mass * poses[i].acceleration;
+    }
+    TransformJet center;
+    center.pose.translation() = moment / mass_;
+    center.velocity = velocity / mass_;
+    center.acceleration = acceleration / mass_;
+    const auto body = product(poses[body_group_], fixedJet(fromKdl(group_to_body_)));
+    bg = product(inverse(body), center);
+    bg.pose.linear() = fromKdl(KDL::Frame(relative_.Inverse())).linear();
+    bg.rotation_rate.setZero();
+    bg.rotation_acceleration.setZero();
+    return poseValid(bg.pose) && bg.velocity.allFinite() && bg.acceleration.allFinite();
+  }
+
   bool evaluate(const Eigen::Vector3d& q, Eigen::Isometry3d& bg) const
   {
     ++workCounters().fast_model;
@@ -194,14 +279,17 @@ public:
 std::function<bool(const Eigen::Vector3d&, Eigen::Isometry3d&)> articulatedCogModel(
     KDL::Tree tree, KDL::JntArray joints, std::map<std::string, KDL::RigidBodyInertia> inertia,
     std::map<std::string, KDL::Segment> extra, std::string base, KDL::Rotation relative, unsigned roll_index,
-    unsigned yaw_index)
+    unsigned yaw_index, CogDerivatives* derivatives, double* radius)
 {
   ArticulatedCogSnapshot snapshot(tree, joints, inertia, extra, base, relative, roll_index, yaw_index);
+  if(derivatives) *derivatives = [snapshot](const Vec& q, const Vec& v, const Vec& a, TransformJet& bg)
+      { return snapshot.derivatives(q, v, a, bg); };
+  if(radius) *radius = snapshot.radius();
   return [snapshot](const Eigen::Vector3d& q, Eigen::Isometry3d& bg) { return snapshot.evaluate(q, bg); };
 }
 bool Kinematics::configure(const KDL::Chain& chain, const std::string& roll, const std::string& yaw,
                            const Eigen::Isometry3d& cp, const Eigen::Vector3d& axis,
-                           std::function<bool(const Eigen::Vector3d&, Eigen::Isometry3d&)> cog, std::string& error)
+                           std::function<bool(const Eigen::Vector3d&, Eigen::Isometry3d&)> cog, std::string& error, CogDerivatives derivatives, double cog_radius)
 {
   configured_ = locked_ = false;
   if(chain.getNrOfJoints() != 2 || roll == yaw || !poseValid(cp) || !axis.allFinite() ||
@@ -224,6 +312,18 @@ bool Kinematics::configure(const KDL::Chain& chain, const std::string& roll, con
     }
     ++n;
   }
+  radius_bound_ = cog_radius + cp.translation().norm();
+  for(unsigned i = 0; i < chain.getNrOfSegments(); ++i)
+  {
+    const auto& s = chain.getSegment(i);
+    if(s.getJoint().twist(1).rot.Norm() > 1 + 1e-10)
+    { error = "unsupported scaled revolute axis"; return false; }
+    radius_bound_ += segmentRadius(s);
+  }
+  if(derivatives && (!std::isfinite(cog_radius) || cog_radius < 0 ||
+                     !std::isfinite(radius_bound_) || radius_bound_ <= 0))
+  { error = "invalid articulated geometry radius bound"; return false; }
+  cog_derivatives_ = std::move(derivatives);
   chain_ = chain;
   cp_ = cp;
   axis_ = axis;
@@ -273,6 +373,35 @@ bool Kinematics::evaluate(const Eigen::Vector3d& eta, Eigen::Isometry3d& body, E
     return false;
   cog = body * bg;
   return poseValid(cog);
+}
+bool Kinematics::derivatives(const Vec& q, const Vec& v, const Vec& a,
+                             TransformJet& body, TransformJet& cog) const
+{
+  if(!locked_ || !cog_derivatives_) return false;
+  ++workCounters().body_fk;
+  TransformJet bp;
+  unsigned joint = 0;
+  for(unsigned i = 0; i < chain_.getNrOfSegments(); ++i)
+  {
+    const auto& s = chain_.getSegment(i);
+    if(s.getJoint().getType() == KDL::Joint::None)
+      bp = product(bp, fixedJet(fromKdl(s.pose(0))));
+    else
+    {
+      const int k = joint++ == 0 ? 2 : 1;
+      bp = product(bp, segmentJet(s, q[k], v[k], a[k]));
+    }
+  }
+  bp = product(bp, fixedJet(cp_));
+  TransformJet hinge;
+  hinge.pose.linear() = expSO3(axis_ * q[0]);
+  hinge.rotation_rate = skew(axis_ * v[0]) * hinge.pose.linear();
+  hinge.rotation_acceleration = (skew(axis_ * a[0]) + skew(axis_ * v[0]) * skew(axis_ * v[0])) * hinge.pose.linear();
+  body = product(product(fixedJet(lock_), hinge), inverse(bp));
+  TransformJet bg;
+  if(!cog_derivatives_(q, v, a, bg)) return false;
+  cog = product(body, bg);
+  return poseValid(body.pose) && poseValid(cog.pose);
 }
 bool Kinematics::jacobian(const Eigen::Vector3d& eta, Eigen::Matrix3d& j) const
 {
@@ -1309,8 +1438,27 @@ bool mechanismReference(const Kinematics& m, const Eigen::Vector3d& q, const Eig
   r.eta = q;
   r.velocity = v;
   r.acceleration = a;
-  if(!q.allFinite() || !v.allFinite() || !a.allFinite() || !m.evaluate(q, r.body, r.cog))
+  if(!q.allFinite() || !v.allFinite() || !a.allFinite())
     return false;
+  r.desired.rotation = r.body.linear();
+  TransformJet body, cog;
+  if(m.analyticDerivatives())
+  {
+    if(!m.derivatives(q, v, a, body, cog)) return false;
+    r.body = body.pose;
+    r.cog = cog.pose;
+    r.body_omega = vee(body.pose.linear().transpose() * body.rotation_rate);
+    r.body_acceleration = vee(body.pose.linear().transpose() * body.rotation_acceleration);
+    r.cog_omega = vee(cog.pose.linear().transpose() * cog.rotation_rate);
+    r.cog_angular_acceleration = vee(cog.pose.linear().transpose() * cog.rotation_acceleration);
+    r.cog_velocity = cog.velocity;
+    r.cog_acceleration = cog.acceleration;
+    r.desired = {r.body.linear(), r.body_omega, r.body_acceleration};
+    return r.body_omega.allFinite() && r.body_acceleration.allFinite() &&
+        r.cog_velocity.allFinite() && r.cog_acceleration.allFinite() &&
+        r.cog_omega.allFinite() && r.cog_angular_acceleration.allFinite();
+  }
+  if(!m.evaluate(q, r.body, r.cog)) return false;
   r.desired.rotation = r.body.linear();
   // Differentiate FK along the interpolated configuration, including articulated
   // CoG translation and any configuration-dependent CoG orientation callback.
@@ -1439,10 +1587,22 @@ bool localPitchReference(const Kinematics& model, const Eigen::Matrix3d& rotatio
   const Eigen::Vector3d omega = Eigen::Vector3d::UnitY() * rate;
   const Eigen::Vector3d angular_acc = Eigen::Vector3d::UnitY() * acceleration;
   const Eigen::Vector3d velocity = svd.solve(omega);
-  // Same body-frame Jdot convention as buildPath/compliantReference.
-  if(!model.jacobian(q + 1e-4 * velocity, jp) || !model.jacobian(q - 1e-4 * velocity, jm))
-    return false;
-  const Eigen::Vector3d acc = svd.solve(angular_acc - (jp - jm) / (2e-4) * velocity);
+  TransformJet body, cog;
+  Vec jdot_v;
+  if(model.analyticDerivatives())
+  {
+    if(!model.derivatives(q, velocity, Vec::Zero(), body, cog))
+    { error = "analytic local pitch derivatives invalid"; return false; }
+    jdot_v = vee(body.pose.linear().transpose() * body.rotation_acceleration);
+  }
+  else
+  {
+    // Compatibility for standalone generic library models; never used by the
+    // captured roll-yaw navigator's analytic three-group model.
+    if(!model.jacobian(q + 1e-4 * velocity, jp) || !model.jacobian(q - 1e-4 * velocity, jm)) return false;
+    jdot_v = (jp-jm) / (2e-4) * velocity;
+  }
+  const Eigen::Vector3d acc = svd.solve(angular_acc - jdot_v);
   if(!mechanismReference(model, q, velocity, acc, out))
     return false;
   out.desired = {rotation, omega, angular_acc};
@@ -1532,7 +1692,7 @@ void followAxis(double q, double v, double goal, double lower, double upper,
 }
 
 bool followMechanism(const Kinematics& model, const Reference& from, const Eigen::Vector3d& goal,
-                     double dt, double integration_step, bool brake, const PlanningConfig& config, Reference& next, std::string& error)
+                     double dt, double integration_step, bool brake, const PlanningConfig& config, Reference& next, std::string& error, const Vec& feed)
 {
   if(!config.onlineValid() || !goal.allFinite() || !std::isfinite(dt) || dt <= 0 || !std::isfinite(integration_step) || integration_step < dt ||
      !from.eta.allFinite() || !from.velocity.allFinite())
@@ -1543,7 +1703,7 @@ bool followMechanism(const Kinematics& model, const Reference& from, const Eigen
   Eigen::Vector3d q, v;
   for(int axis = 0; axis < 3; ++axis)
     followAxis(from.eta[axis], from.velocity[axis], goal[axis], config.limits.lower[axis],
-               config.limits.upper[axis], .5 * config.limits.velocity[axis],
+               config.limits.upper[axis], .5 * config.limits.velocity[axis] * std::clamp(feed[axis], 0.0, 1.0),
                .5 * config.limits.acceleration[axis], dt, integration_step, brake, q[axis], v[axis]);
   const Eigen::Vector3d a = (v - from.velocity) / dt;
   // Check the interval midpoint as well as its endpoint, using the same constant
@@ -1562,51 +1722,77 @@ bool followMechanism(const Kinematics& model, const Reference& from, const Eigen
   return true;
 }
 
+bool referenceIntervalBounds(const Kinematics& model, const Reference& from, const Reference& next, double dt,
+                             const PlanningConfig& config, Vec& travel, Vec& lower, Vec& upper, std::string& error)
+{
+  if(!std::isfinite(dt) || dt <= 0) { error = "invalid interval duration"; return false; }
+  const auto p = controls(Knot{0, from.eta, from.velocity, from.acceleration},
+                          Knot{dt, next.eta, next.velocity, next.acceleration});
+  travel.setZero(); lower = upper = p[0];
+  Vec velocity = Vec::Zero(), acceleration = Vec::Zero();
+  for(int i=0; i<6; ++i)
+  {
+    lower = lower.cwiseMin(p[i]); upper = upper.cwiseMax(p[i]);
+    if(i<5)
+    {
+      travel += (p[i+1]-p[i]).cwiseAbs();
+      velocity = velocity.cwiseMax((5*(p[i+1]-p[i])/dt).cwiseAbs());
+    }
+    if(i<4) acceleration = acceleration.cwiseMax((20*(p[i+2]-2*p[i+1]+p[i])/(dt*dt)).cwiseAbs());
+  }
+  // Bernstein derivative hulls enclose the entire C2 interval, including local
+  // IK interpolation and possible coordinate reversals. Travel is total variation,
+  // not merely endpoint distance. The same product-of-rotations bound certifies CoG.
+  const double speed = model.travelWeights().dot(velocity);
+  const double acc = model.travelWeights().dot(acceleration);
+  if((lower.array() < config.limits.lower.array()-1e-9).any() ||
+     (upper.array() > config.limits.upper.array()+1e-9).any() ||
+     (velocity.array() > config.limits.velocity.array()+1e-8).any() ||
+     (acceleration.array() > config.limits.acceleration.array()+1e-7).any() ||
+     model.radiusBound() * speed > config.cog_speed_limit ||
+     model.radiusBound() * (acc + speed*speed) > config.cog_acceleration_limit)
+  { error = "continuous interval joint/CoG derivative hull"; return false; }
+  return true;
+}
+
 bool mechanismBrakingAllowed(const Kinematics& model, const Reference& from, double integration_step,
                              const PlanningConfig& config, std::string& error)
 {
   ValidationTimer validation_timer;
-  if(!config.onlineValid() || !std::isfinite(integration_step) || integration_step <= 0 ||
+  if(!model.analyticDerivatives() || !config.onlineValid() || !std::isfinite(integration_step) || integration_step <= 0 ||
      !from.eta.allFinite() || !from.velocity.allFinite())
   {
     error = "invalid braking reference/configuration";
     return false;
   }
-  // Certify a finite braking corridor before committing feed. Joint stop positions
-  // are analytic; nonlinear attitude/CoG checks are sampled, like localPitchAllowed.
-  const Eigen::Vector3d amax = .5 * config.limits.acceleration;
-  const Eigen::Vector3d times = from.velocity.cwiseAbs().cwiseQuotient(amax);
-  const Eigen::Vector3d stop = from.eta + .5 * from.velocity.cwiseProduct(
-      (times.array() + integration_step).matrix());
+  // Independent monotone axis braking. The last half-step covers the discrete
+  // stop. Every posture in the corridor lies in this coordinate box.
+  const Vec amax = .5 * config.limits.acceleration;
+  const Vec travel = (from.velocity.array().square() / (2 * amax.array()) +
+                      .5 * from.velocity.cwiseAbs().array() * integration_step).matrix();
+  const Vec stop = from.eta + from.velocity.cwiseSign().cwiseProduct(travel);
   if((stop.array() < config.limits.lower.array() - 1e-9).any() ||
      (stop.array() > config.limits.upper.array() + 1e-9).any())
-  {
-    error = "discrete braking position reserve";
-    return false;
-  }
-  const double duration = times.maxCoeff();
-  if(duration < 1e-12)
-    return referenceAllowed(from, config, error);
-  for(int sample = 0; sample <= 16; ++sample)
-  {
-    const double t = duration * sample / 16;
-    Eigen::Vector3d q, v, a;
-    for(int axis = 0; axis < 3; ++axis)
-    {
-      const double elapsed = std::min(t, times[axis]);
-      const double decel = -std::copysign(amax[axis], from.velocity[axis]);
-      q[axis] = from.eta[axis] + from.velocity[axis] * elapsed + .5 * decel * elapsed * elapsed;
-      v[axis] = t < times[axis] ? from.velocity[axis] + decel * elapsed : 0;
-      a[axis] = t < times[axis] ? decel : 0;
-    }
-    Reference r;
-    if(!mechanismReference(model, q, v, a, r) || !referenceAllowed(r, config, error))
-      return false;
-    // Also check the conservative outer corridor for a final discrete stop.
-    q += .5 * from.velocity * integration_step * (t / duration);
-    if(!mechanismReference(model, q, v, a, r) || !referenceAllowed(r, config, error))
-      return false;
-  }
+  { error = "discrete braking position reserve"; return false; }
+  const double angle = model.travelWeights().dot(travel);
+  const double body_tilt = std::acos(std::clamp(from.body.linear()(2, 2), -1.0, 1.0));
+  const double cog_tilt = std::acos(std::clamp(from.cog.linear()(2, 2), -1.0, 1.0));
+  // Geodesic triangle inequality bounds the entire rotation corridor. CoG tilt
+  // <= 1 implies both firmware Euler limits <= 1 (positive vertical component).
+  if(body_tilt + angle > config.max_tilt || cog_tilt + angle > 1.0)
+  { error = "continuous body/CoG braking attitude reserve"; return false; }
+  const double speed = model.travelWeights().dot(from.velocity.cwiseAbs());
+  Vec braking_acc = amax;
+  for(int i = 0; i < 3; ++i) if(from.velocity[i] == 0) braking_acc[i] = 0;
+  const double acceleration = model.travelWeights().dot(braking_acc);
+  const double radius = model.radiusBound();
+  // Each mass point is a sum of rotated fixed offsets: |p'| <= L*S,
+  // |p''| <= L*(A+S^2). Convex mass averaging preserves these inequalities.
+  // No sampled points are used as a proof of the intervening nonlinear path.
+  if(radius <= 0 || radius * speed > config.cog_speed_limit ||
+     radius * (acceleration + speed * speed) > config.cog_acceleration_limit)
+  { error = "continuous articulated CoG braking reserve"; return false; }
+  if(!referenceAllowed(from, config, error)) return false;
   return true;
 }
 

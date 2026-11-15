@@ -1,27 +1,13 @@
 #!/usr/bin/env python3
-"""Refresh a signed main-body local +Y angular velocity after perching setup.
+"""Stream signed main-body local-Y velocity for num_steps * interval_sec.
 
-Required: ~angular_velocity_deg_s (finite numeric degrees/second, zero allowed).
-Defaults: ~interval_sec=8.0, ~num_steps=8, ~robot_namespace=/gimbalrotor,
-~debug_prefix=perching/roll_yaw. ~step_deg is rejected. num_steps counts requests.
-The selected robot's navigation/roll_yaw_perching/body_pitch_velocity_command_duration
-must match interval_sec. This script reads it once and never changes it.
-
-Illustrative only, not a hardware-tuned recommendation:
-  rosrun gimbalrotor auto_roll_yaw_body_pitch_experiment.py \
-    _angular_velocity_deg_s:=0.1 _interval_sec:=8.0 _num_steps:=8
-
-Publish the same velocity in rad/s once per interval after a one-second startup
-sleep. Sleep after every request, including the eighth: default publication times
-are approximately 0, 8, ..., 56 s relative to the first request. The last accepted
-command expires about 64 s after the first, then brakes within navigator limits.
-Signs follow the commanded main body's local +Y, including nonzero roll/yaw;
-this is neither world Euler pitch nor passive-alpha velocity. The navigator uses
-the coherent applied posture and coordinates all joints about the fixed contact.
-Refreshes preserve orientation/rate; actual displacement integrates the bounded
-applied rate, including ramps and holds. Logs are requests, not confirmed motion.
-Ctrl+C stops future publications. The last request retains its remaining lifetime
-and then brakes to hold. No enable, relock, retry, polling or cancellation is sent.
+Required ~angular_velocity_deg_s is degrees/second (published as rad/s).
+~interval_sec=8 and ~num_steps=8 define a 64-second experiment, independently
+of keepalives. ~refresh_period_sec defaults to one quarter of the onboard lease
+and must be strictly shorter than it. No prepare/tare/enable is performed.
+At the normal experiment deadline send zero once for bounded braking. Ctrl+C
+ends refreshes; the last accepted command expires onboard. Rejected requests do
+not renew the onboard lease. Logs describe requests, not confirmed movement.
 """
 
 import math
@@ -70,24 +56,40 @@ def main():
     if not rospy.has_param(duration_param):
         raise ValueError('navigator command duration is missing: ' + duration_param)
     command_duration = finite_number(rospy.get_param(duration_param), duration_param)
-    if command_duration <= 0 or not math.isclose(command_duration, interval_sec, rel_tol=1e-9, abs_tol=1e-9):
-        raise ValueError('{} must be positive and match ~interval_sec ({} s); got {} s'.format(
-            duration_param, interval_sec, command_duration))
+    if command_duration <= 0:
+        raise ValueError(duration_param + ' must be positive')
+    refresh_period = finite_number(rospy.get_param('~refresh_period_sec', command_duration / 4),
+                                   '~refresh_period_sec')
+    if not 0 < refresh_period < command_duration:
+        raise ValueError('~refresh_period_sec must be positive and shorter than the navigator lease')
+    experiment_duration = interval_sec * num_steps
+    if not math.isfinite(experiment_duration):
+        raise ValueError('experiment duration must be finite')
     publisher = rospy.Publisher(topic_prefix + '/body_pitch_velocity', Float64, queue_size=1)
 
-    rospy.loginfo('Publishing %d body-local pitch velocity requests on %s: %+.6g deg/s, interval %.3f s',
-                  num_steps, topic_prefix + '/body_pitch_velocity', angular_velocity_deg_s, interval_sec)
+    rospy.loginfo('Requesting body-local pitch velocity on %s: %+.6g deg/s for %.3f s; refresh %.3f s, lease %.3f s',
+                  topic_prefix + '/body_pitch_velocity', angular_velocity_deg_s, experiment_duration,
+                  refresh_period, command_duration)
     rospy.sleep(1.0)
-
-    for request_number in range(1, num_steps + 1):
-        if rospy.is_shutdown():
+    started = rospy.get_time()
+    deadline = started + experiment_duration
+    previous = started
+    messages = 0
+    while not rospy.is_shutdown():
+        now = rospy.get_time()
+        if now < previous:
+            publisher.publish(Float64(data=0.0))
+            raise ValueError('ROS time moved backwards; stop requested, experiment abandoned')
+        if now >= deadline:
             break
         publisher.publish(Float64(data=angular_velocity_rad_s))
-        rospy.loginfo('Published body-local pitch velocity request %d/%d: %+.6g deg/s (%+.6g rad/s)',
-                      request_number, num_steps, angular_velocity_deg_s, angular_velocity_rad_s)
-        rospy.sleep(interval_sec)
-
-    rospy.loginfo('Request publishing finished; the last accepted command expires onboard, then brakes to hold.')
+        messages += 1
+        previous = now
+        # Schedule from the current time: no burst of missed keepalives.
+        rospy.sleep(min(refresh_period, deadline - now))
+    if not rospy.is_shutdown():
+        publisher.publish(Float64(data=0.0))
+        rospy.loginfo('Experiment duration finished after %d keepalives; zero requests bounded braking.', messages)
 
 
 if __name__ == '__main__':

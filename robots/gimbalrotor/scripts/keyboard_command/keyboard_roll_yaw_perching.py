@@ -36,7 +36,7 @@ Body alignment uses separate body_yaw_target/body_roll_target Float64 topics.
 Cut commands use prepare/start/stop with current session; wait for measured READY before start.
 Manual keys replace the nominal destination during motion; any needed braking is handled onboard.
 Mechanism keys update only their own accumulated nominal destination, like multilink.
-o/u compose relative body +Y increments from the accepted nominal orientation, including while moving.
+o/u queue ordered body +Y increments; each starts from applied pose after the preceding destination completes.
 Reference completion and measured endpoint error are reported separately.
 body_pitch_delta is a relative increment in radians; ~body_pitch_step_deg is separate
 from passive ~pitch_step_deg. Navigator rejects increments above 1 degree. Watch command_ack for moving/terminal status.
@@ -118,7 +118,7 @@ class Keyboard:
             if session and int(session[1]) == self.session and msg.data.startswith('action=body_pitch_delta '):
                 now = time.monotonic()
                 phase = re.search(r'\bphase=(\w+)\b', msg.data)
-                if phase and phase[1] == 'moving':
+                if phase and phase[1] in ('waiting', 'moving'):
                     self.nominal_after_jog = now
                     self.commanded = None
                     self.pending_axes = [False] * 3
@@ -389,7 +389,7 @@ class Keyboard:
             with self.lock:
                 now = time.monotonic()
                 # Each publication is one relative increment. The navigator
-                # composes it from its accepted destination and handles takeover.
+                # queues it after the preceding destination, without overwriting increments.
                 self.publish('body_pitch', Float64(self.steps['body_pitch'] * (1 if key == 'o' else -1)))
                 self.nominal_after_jog = now
                 self.commanded = None

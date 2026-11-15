@@ -8,6 +8,8 @@
 #include <cmath>
 #include <mutex>
 #include <string>
+#include <sstream>
+#include <iomanip>
 #include <aerial_robot_msgs/FlightNav.h>
 #include <geometry_msgs/PointStamped.h>
 #include <geometry_msgs/PoseStamped.h>
@@ -481,9 +483,10 @@ private:
   bool advancePitchVelocity(roll_yaw::Reference&, double dt, double now);
   struct PitchVelocity
   {
-    bool active = false, pending = false, stopping = false, brake_valid = false, drive_valid = false;
-    double requested = 0, expires = 0, clock = 0, brake_time = 0, drive_time = 0;
-    roll_yaw::LocalPitchSegment brake, drive;
+    bool active = false, pending = false, stopping = false;
+    double requested = 0, expires = 0, clock = 0;
+    Eigen::Matrix3d rotation = Eigen::Matrix3d::Identity();
+    bool rotation_valid = false;
     std::string limit = "idle";
   } pitch_velocity_;
   double body_pitch_velocity_command_duration_ = 8.0;
@@ -500,6 +503,15 @@ private:
     double delta = 0, progress = 0;
     std::string phase = "idle";
   } jog_;
+  struct JogAdmission
+  {
+    bool ok = false;
+    std::uint64_t session = 0;
+    Eigen::Vector3d goal = Eigen::Vector3d::Zero();
+    std::string reason;
+  };
+  std::unique_ptr<roll_yaw::Worker<JogAdmission>> jog_worker_;
+  bool jog_pending_ = false;
   double body_pitch_jog_max_delta_ = 0.0174532925199433, jog_admission_wall_ = 0;
   bool connection_pending_ = false;
   double connection_wait_started_ = 0;
@@ -507,9 +519,15 @@ private:
   bool body_alignment_valid_ = false;
   void mechanismTargetCallback(const std_msgs::Float64ConstPtr&, int axis);
   void manualCallback(const geometry_msgs::Vector3StampedConstPtr&);
-  bool setNominalTarget(const Eigen::Vector3d&, int changed_axis = -1, bool coordinated = false);
+  bool setNominalTarget(const Eigen::Vector3d&, int changed_axis = -1);
   bool buildFinalMechanismTarget(roll_yaw::Reference&, double now);
   bool advanceManualReference(roll_yaw::Reference&, double dt);
+  roll_yaw::PlanningConfig onlineLimits() const;
+  bool candidateTrackingAllowed(const roll_yaw::Reference&, const roll_yaw::PlanningConfig&, double dt, std::string&) const;
+  Eigen::Vector3d feed_scale_ = Eigen::Vector3d::Ones();
+  Eigen::Vector3d measured_coordinates_ = Eigen::Vector3d::Zero();
+  Eigen::Vector3d contact_rotation_residual_ = Eigen::Vector3d::Zero();
+  double contact_hold_since_ = 0;
   void commandRollYawBaselinkPose(const roll_yaw::Reference&);
   void publishRollYawJointTarget();
   void invalidatePlanner();
@@ -525,13 +543,11 @@ private:
   roll_yaw::Kinematics model_;
   std::shared_ptr<const roll_yaw::Kinematics> planning_model_;
   Eigen::Vector3d nominal_ = Eigen::Vector3d::Zero();  // independent accepted destinations
-  roll_yaw::Path manual_path_; // finite coordinated body-local endpoint jog only
-  bool manual_tracking_ = false, pending_coordinated_ = false, tracking_hold_ = false;
-  double manual_acceleration_scale_ = 1;
+  bool manual_tracking_ = false, tracking_hold_ = false;
   enum class HoldReason { NONE, FEEDBACK, CONTACT, CLOCK, TRACKING, FEASIBILITY };
   HoldReason hold_reason_ = HoldReason::NONE;
   double recovery_body_stamp_ = 0, recovery_joint_stamp_ = 0;
-  double manual_time_ = 0, manual_phase_ = 0, manual_speed_ = 1, manual_wall_ = 0;
+  double manual_time_ = 0, manual_wall_ = 0;
   bool stop_pending_ = false, feedback_waiting_ = false, retarget_pending_ = false;
   roll_yaw::SettlingWindow preparation_window_;
   roll_yaw::SettlingStatistics preparation_stats_;
@@ -635,13 +651,20 @@ private:
   struct PendingCommand
   {
     std::uint64_t sequence;
+    std::string key;
+    std::uint64_t session;
+    bool urgent;
     std::function<void()> apply;
   };
-  std::map<std::string, PendingCommand> pending_commands_;
+  std::deque<PendingCommand> pending_commands_;
+  std::map<std::string, PendingCommand> pending_observations_;
+  std::atomic<std::uint64_t> input_session_{0};
   std::uint64_t input_sequence_ = 0, urgent_sequence_ = 0, calculation_sequence_ = 0;
   std::uint64_t consumed_joint_sequence_ = 0, coalesced_joint_samples_ = 0;
   bool deferRollYawCommand(const std::string&, std::function<void()>, bool urgent = false);
   void drainRollYawCommands();
+  void cancelQueuedRollYawCommands(const std::string&, bool all = false);
+  std::uint64_t dispatch_sequence_ = 0;
   double input_lock_wait_ = 0, input_lock_held_ = 0;
   double joint_callback_wait_ = 0, body_callback_wait_ = 0, joint_queue_age_ = 0;
   double reference_wall_ = 0, observer_wall_ = 0, diagnostic_wall_ = 0, publication_wall_ = 0;
@@ -658,9 +681,22 @@ private:
   bool snapshot_feedback_valid_ = false, commit_feedback_valid_ = false;
   bool defer_diagnostics_ = false;
   std_msgs::String pending_reference_ack_;
-  // Exact comparison is retained: the base model has public module mutators
+  // Fixed-field comparison is retained: the base model has public module mutators
   // without a change generation. Check at snapshot/commit, without map copies.
-  std::function<bool()> dynamics_snapshot_check_;
+  struct ModelCheck
+  {
+    bool valid = true, available = true;
+    std::string category, name, captured, current;
+    double difference = 0;
+    std::string describe() const
+    {
+      std::ostringstream out;
+      out << category << ":" << name << " captured=" << captured << " current=" << current
+          << " difference=" << std::setprecision(17) << difference;
+      return out.str();
+    }
+  } model_check_;
+  std::function<ModelCheck()> dynamics_snapshot_check_;
   bool dynamics_snapshot_valid_ = false;
 
   roll_yaw::Feedback measured_;

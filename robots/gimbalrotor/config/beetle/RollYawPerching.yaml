@@ -10,23 +10,23 @@ navigation:
   roll_yaw_perching:
     # Common base lifecycle: enable/capture -> nominal target -> update/FK -> controller.
     # Manual targets always mean [passive alpha, active roll, active yaw].
-    # Relative body-Y increments compose from the accepted nominal orientation.
-    # One endpoint IK + bounded interpolation, including replacements during motion.
+    # Relative body-Y increments start from applied pose after preceding intent completes.
+    # Ordered jog queue: finish preceding destination, then worker endpoint IK + bounded follower.
     # Larger commands are rejected; full cuts use request/pitch_increment below.
     body_pitch_jog_max_delta: 0.0174532925199433 # rad (1 degree); inherited by simulation
     # body_pitch_velocity is main-body local +Y rad/s, independent of angle jogs.
     # Each accepted nonzero message renews this ROS-time lifetime; expiry/zero
-    # brakes to hold. Match the automatic script's interval_sec; simulation inherits.
-    # Equal lease/refresh intervals have no jitter grace; a late refresh may brake.
+    # brakes to hold. Simulation inherits. Script refresh_period_sec must be shorter
+    # than this lease (default lease/4); interval_sec counts experiment duration.
     body_pitch_velocity_command_duration: 8.0 # seconds, finite and strictly positive
     prepare_deadline: 120.0 # steady-clock seconds; cooperative cancellation
     # Execution allowance, not overshoot or hardware-validated tuning.
     # Limits the nominal feed lead over measured progress.
     reference_lead: 0.018 # rad, strictly below soft body tracking bound
-    soft_tracking_fraction: 0.6 # measured-to-applied feed hold, never a contact/session fault
-    resume_fraction: 0.5 # automatically release feed hold below half the soft errors
-    max_execution_step: 0.05 # s; numerical substep budget, not a feedback-age threshold
-    max_execution_gap: 0.15 # s; longer elapsed intervals hold without catch-up (at most 8 substeps)
+    soft_tracking_fraction: 0.6 # continuous slowdown starts here; no manual hysteresis latch
+    resume_fraction: 0.5 # retained for prepared-path governor; manual/velocity feed is memoryless
+    max_execution_step: 0.05 # s; manual/velocity step cap; extra elapsed time is discarded
+    max_execution_gap: 0.15 # s; longer elapsed intervals hold without catch-up
     observer_max_interval: 0.15 # s; independent implicit momentum-observer sample interval
     # Source freshness remains feedback_timeout; neither bound changes synchronization.
     # Ordinary 50–65 ms updates use bounded substeps and one real observation.

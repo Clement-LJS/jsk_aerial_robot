@@ -109,28 +109,34 @@ rostopic pub -1 /gimbalrotor/perching/roll_yaw/yaw_target std_msgs/Float64 'data
 rostopic pub -1 /gimbalrotor/perching/roll_yaw/alpha_target std_msgs/Float64 'data: 0.05'
 ```
 
-The separate `body_pitch_delta` (`std_msgs/Float64`) requests one small relative
-rotation about the accepted nominal body +Y: `R_goal = R_nominal * Ry(delta)`.
-Keyboard `o/u` sends positive/negative `~body_pitch_step_deg` (default 0.2°).
-`i/k` remains passive alpha. The navigator's `body_pitch_jog_max_delta` defaults
-to 1° in radians. Larger, nonfinite or unreachable increments are rejected;
-zero is a no-op. Each publication applies one increment; do not repeat an
-increment as if it were an absolute destination.
+The separate `body_pitch_delta` (`std_msgs/Float64`) requests a small relative
+main-body +Y rotation: `R_goal = R_applied * Exp(e_y * delta)`.
+Keyboard `o/u` sends positive/negative `~body_pitch_step_deg` (default 0.2°);
+`i/k` remains passive alpha. The 1° `body_pitch_jog_max_delta` is unchanged.
+Nonfinite, oversized or unreachable increments are explicitly rejected; zero
+is a no-op. Each publication is one increment, not an absolute refresh.
 
-Admission uses endpoint IK and the existing bounded mechanism interpolation.
-All three coordinates may change. New increments retain unfinished accepted
-motion, while interpolation starts from the coherent applied position, velocity
-and acceleration. Reversals and mechanism-key takeovers are accepted during
-motion; if a smooth replacement needs braking, the navigator retains one nominal
-destination and connects automatically after braking. No key queue, prepare,
-per-key settling, tracking-error admission gate or saw-point assumption is used.
-Intermediate joint interpolation approximates pure body-Y rotation; the endpoint
-matches the requested SO(3) orientation. Generated references still obey physical
-position, attitude, joint rate/acceleration and CoG rate/acceleration checks.
+**Ordering:** finish the preceding accepted destination before starting a jog.
+Thus yaw accepted at -36.22° with applied yaw at -11.99° stays pending and advances
+boundedly; a queued pitch jog waits instead of composing a tiny jog with that
+24.23° backlog. Two received increments occupy two ordered entries. Later commands
+cannot pass a jog. Space/stop/disable/relock explicitly cancel the queued intent.
+The 64-entry command queue rejects overflow and emits receipt/queue diagnostics;
+ROS transport drops before callback delivery remain outside this acknowledgement
+contract. Branch/point and wrench observations use separate latest-value slots.
 
-`command_ack` reports `moving`, `replaced`, `reference_complete`, `cancelled`,
+Endpoint IK runs once in a worker (16 iterations maximum), seeded from the
+coherent applied pose after the preceding destination finishes. Execution uses
+the same rate/acceleration follower and governor as mechanism commands, with no
+whole-distance polynomial or per-key settling requirement. Intermediate joint
+motion approximates a body-Y arc; the endpoint is the requested SO(3) rotation.
+No prepare/tare, saw geometry or observer readiness is required for these commands.
+
+`command_ack` distinguishes received/`queued`, accepted/`waiting`, `moving`, `replaced`,
+`reference_complete`, `cancelled`,
 `failed`, `rejected` or `noop`. Reference completion means the commanded endpoint
-was reached; measured pitch and endpoint error are reported separately. The
+was reached; measured pitch, endpoint error and `measured_goal_reached` are
+reported separately (also continuously in diagnostics). The
 keyboard reconciles accepted nominal feedback before later joint steps.
 
 Space brakes then cancels. Temporary invalid feedback or contact residuals hold
@@ -140,11 +146,15 @@ array and contact checks before recovery; no per-increment settling gate is adde
 True observation loss zeros derivatives once as an emergency hold, without claiming
 acceleration continuity. Manual tracking then restarts the bounded follower, whose
 progress does not depend on a whole-distance polynomial duration. Finite endpoint
-jogs retain their coordinated polynomial route and reconstruct it only after a real
-observation hold. Requests rejected during a hold do not become accepted later.
+jogs resume the same follower from the held pose, without reconstructing a path. Requests rejected during a hold do not become accepted later.
 
-Measured-to-applied tracking error and stopping travel govern soft braking, with
-hysteresis for resuming feed. Distance to the accepted future endpoint is not a
+Measured mechanism tracking, reachable-to-measured body rotation residual, raw
+commanded-to-measured body attitude error and independent pivot error are separate.
+Manual/jog/velocity feed uses a memoryless slowdown above `soft_tracking_fraction`
+of the existing hard tracking limits, plus candidate and stopping-reserve checks.
+There is no 0.012 rad release latch. A steady 0.020 rad raw residual permits a
+bounded step when the remaining envelope permits it; it is not subtracted away.
+Axis lead reduces its own feed; raw body limits independently protect all motion. Distance to the accepted future endpoint is not a
 tracking fault. Prepared trajectories retain progress and measured-goal completion
 checks; reference completion alone cannot report physical success. Explicit pause,
 cancel, stop and producer takeover override automatic recovery, including a pause
@@ -161,24 +171,18 @@ simulation):
 
 | Parameter | Default | Purpose |
 | --- | ---: | --- |
-| `max_execution_step` | 0.05 | Maximum numerical substep, not a source-age limit |
-| `max_execution_gap` | 0.15 | Maximum forward elapsed interval to integrate; longer intervals hold without catch-up |
+| `max_execution_step` | 0.05 | Manual/velocity step cap; prepared-path substep bound |
+| `max_execution_gap` | 0.15 | Outage threshold; manual/velocity discard elapsed time above the step cap |
 | `observer_max_interval` | 0.15 | Separate sample-interval limit for the existing implicit momentum observer |
 | `feedback_timeout` | 0.15 | Required source/receipt freshness; unchanged |
 | `feedback_sync_tolerance` | 0.05 | Required sample synchronization; unchanged |
 
-For a valid elapsed interval, `N=ceil(elapsed/max_execution_step)` (at most eight)
-and `h=elapsed/N` for scalar/path integration; 50–65 ms jitter therefore continues
-motion. Online local-pitch segments sample the whole real interval directly.
-The same real
-observation is used for the entire interval, without inventing substep timestamps
-or publishing catch-up bursts. Manual motion, finite jogs, velocity ramps/brakes,
-prepared alignment/cut paths and compliance use this policy. The 0.15 s forward
-allowance covers ordinary jitter while remaining within the default feedback timeout.
-The observer uses an implicit update; its independent interval allowance avoids
-rebasing a physically fresh sample merely because navigation needs two substeps.
-A genuine observer rebase still invalidates tare and never silently enables or
-re-tares compliance. Disabled admittance does not gate nominal navigation.
+Manual, jog and velocity updates integrate at most `max_execution_step` once;
+extra elapsed time is discarded. An interval exceeding `max_execution_gap` holds
+until advancing coherent samples return. There is no catch-up jump. Prepared
+paths retain their existing bounded subdivision policy. The observer retains its
+independent sample-interval limit; observer bootstrap or invalidity cannot gate
+manual position navigation. A real observer rebase still invalidates tare.
 
 Zero elapsed ROS time does not advance motion. Backward time holds the reference,
 resets affected histories and expires the old velocity lease; a new valid source
@@ -191,15 +195,18 @@ joint positions and attached extra masses are folded into each group's mass and
 first moment. Each evaluation computes two active joint poses and the exact
 mass-weighted articulated CoG; it retains the captured desired CoG orientation.
 Body/contact FK and the angular Jacobian use short, allocation-free chain passes.
-Derivative feedforward still uses centered finite differences of this exact model.
+Body/CoG directional derivatives use exact transform products, inverse derivatives
+and mass-weighted first/second derivatives. Generic library callbacks retain their
+finite-difference fallback; the captured roll–yaw model uses the analytic route.
 No rounded-angle cache or frozen lock-posture CoG is used.
 
 Feedback ingestion has its own short mutex. Body/joint callbacks validate and copy
 inputs there; joint rates are differentiated from consecutive advancing **source**
 stamps at the producer rate, with producer identity retained. The update owner
 copies that state, then runs reference/observer work without the ingestion mutex.
-Commands use bounded, coalesced topic/axis slots, ordered by arrival; acceptance
-and request-specific acknowledgements occur on the next update. An ordinary
+Commands use a bounded ordered queue with explicit overflow rejection. One command
+is admitted per update; observation slots are drained independently of jog barriers.
+Acceptance and request-specific acknowledgements occur on the update owner. An ordinary
 absolute refresh can wait for that update without invalidating an in-flight
 reference. Stop, zero velocity, pause, disable and relock mark the current
 calculation obsolete. Commit rechecks physical eligibility and installs body/CoG
@@ -208,46 +215,71 @@ A stop during feedback loss clears the owner before automatic recovery. The
 controller/session mutex still serializes controller readers and common navigation,
 but it is not acquired by roll/yaw feedback or command-ingestion callbacks.
 
-Work bounds for the motion kernels (excluding contact checks and the one observer
-sample) are below. `S` is the bounded subdivision count: at most 3 with shipped
-0.05/0.15 s settings, and at most 8 for any admitted configuration.
+Reference-kernel bounds (excluding contact/diagnostics and observer ingestion):
 
-| Kernel | Previously | Now |
-| --- | --- | --- |
-| Manual, first successful feed attempt | `108*S` full CoG evaluations | `6*S+102` fast CoG evaluations |
-| Manual, four failed attempts plus braking | at most `438*S` full CoG evaluations | at most `30*S+408` fast CoG evaluations (498 with shipped settings; 648 absolute) |
-| Online local-pitch velocity, four attempts plus saved brake | up to `532*S` full CoG evaluations | at most 532 fast evaluations per real update, plus 32 for tracking-reserve samples |
-| Finite coordinated jog | at most `72*S` full CoG evaluations | at most `72*S` fast evaluations (216 shipped; 576 absolute) |
-| Prepared execution/connection | bounded path sampling per substep | same path checks using fast geometry; no plan copy for commit rollback |
+| Kernel | Maximum synchronous work per update |
+| --- | --- |
+| Manual or admitted finite jog | 4 attempts × 2 analytic references, plus 2 for braking: 10 short-chain/CoG evaluations; zero IK |
+| Local-Y velocity | 4 attempts × one 8-iteration IK, two derivative evaluations and one endpoint validation, plus 2 for braking: at most 14 CoG evaluations and 83 body-chain/Jacobian passes |
+| Finite jog admission | Zero synchronous IK; one worker solve, at most 16 iterations |
+| Observer dynamics | Zero synchronous dynamics evaluations; at most one outstanding worker job |
 
-The old CoG evaluator called root-to-link tree FK once for the body and once per
-inertia-map entry on **each** evaluation (10 calls for the shipped model's 9
-entries). Those calls are removed from reference geometry. Manual midpoint and
-endpoint checks remain on every integration substep; the two 17-point nonlinear
-braking corridors run only for the final candidate state of each attempt. The
-last accepted acceleration scale defines the scalar braking continuation. Feed
-failure uses that continuation and retains the destination. Velocity extension
-and stopping corridors each retain 16 samples, but run once per real update;
-online local-pitch IK has an eight-iteration limit, with rejection/braking on
-nonconvergence. Finite jog/prepare IK retains its 40-iteration limit. These sampled
-nonlinear checks are not proofs over every intermediate configuration.
+Ordinary successful manual feed needs two analytic reference evaluations. A
+successful velocity attempt normally needs fewer than eight IK iterations, but
+timing must be measured. Contact checks, diagnostics and observer input validation
+add bounded short-chain evaluations; the counters include them. Allowing three
+contact evaluations (snapshot, newer commit samples, then diagnostic snapshot),
+one endpoint admission and one observer input reconstruction gives conservative
+whole-update bounds of 15 CoG / 23 body-chain passes for manual motion, and
+19 CoG / 96 body-chain passes for velocity. Ordinary successful updates use much
+less. These bounds exclude capture, explicit rezero and prepared-path operation.
+Model-signature
+checks still scale with fixed topology size, twice per update, without tree FK.
+No manual loop scales with endpoint distance, lease duration, missed periods or
+keypress backlog. Prepared offline planning remains on its existing worker.
 
-Raw articulated observation remains independent of prepare/tare/admittance. Its
-existing dynamics evaluator makes seven single tree passes per genuine coherent
-sample; duplicates are rejected before Jacobian/dynamics calculations. Contact
-geometry is reused for identical source stamps within a session. The base model
-has no complete revision API: exact topology/inertia/module comparisons are
-retained at update snapshot and commit, using references instead of copying maps.
-Changes require recapture. The underlying base-model module mutation API does not
-provide transactional synchronization with readers; concurrent live model editing
-is not validated by this repair.
+The online stopping certificate uses independent axis deceleration, with travel
+`v_i² / (2 a_i) + |v_i| h / 2`. Rotation travel is bounded by triangle inequalities;
+CoG speed/acceleration by `L S` and `L (A + S²)`, where L bounds all fixed offsets
+and S/A weight the revolute rates/accelerations in the product of transforms.
+Weights `[1,3,3]` conservatively include the hinge, inverse contact chain and
+mass-group/body transforms. Per-update Bernstein derivative hulls bound the
+entire connecting interval, including coordinate reversals; endpoint samples
+are not used as a proof. CoG tilt <= 1 rad is a sufficient conservative certificate
+for the existing firmware Euler bounds, not a widened physical limit. Conservative
+bounds can slow or hold otherwise feasible postures and report that reason.
+
+The observer's immutable-model worker returns source timestamps, Jacobian and
+momentum terms. The owner applies the existing momentum update only to current
+session/epoch results within source and wall-time freshness limits. Invalid or
+stale worker output never authorizes admittance. Observation continues independently
+of prepare/tare and position ownership. The source callbacks remain short.
+
+Model validation now reports the first mismatch with category, named field,
+captured/current values and numeric difference. It distinguishes temporary model
+unavailability (recoverable hold) from a fixed topology/geometry/inertia/module
+change (fault). It never compares live joint/gimbal angles, evolving FK, world
+pose or articulated CoG. Floating inertia comparisons use relative/absolute
+1e-12 numerical tolerance. The late bag fault cannot be reconstructed from its
+boolean diagnostic; no specific changed field is asserted here.
+
+**Configuration synchronization limitation:** the base RobotModel outside this
+folder has nonvirtual add/remove/set-extra-module methods and const-reference map
+getters, with no shared configuration lock or generation. This repair captures
+immutable calculation models and detects sequential fixed changes before use and
+commit, but cannot make concurrent external map mutation safe. Configuration
+writers must be quiescent while attached. A transactional writer/read-snapshot API
+requires edits in `aerial_robot_model`, outside the authorized folder; local mutexes
+or hidden derived setters cannot cover those base-class calls.
 
 Existing `diagnostics_status` now includes `completed_update_sequence`,
 `completed_update_stamp_s`, `navigation_wall_s`, `completed_*_wall_s`, input and
 session lock wait/held durations, subdivisions, fast-model/body-chain/dynamics-tree
 counts, and `navigation_over_25ms_count`. These timings/counts describe the
 **previous completed update**, as labeled by `timing_scope`; nonlinear validation
-time is included within reference time. Current snapshot/commit validity, hold
+time is included within reference time. `observer_worker_wall_s` and
+`observer_worker_tree_calls` separately describe the latest completed worker
+sample; they are not added to synchronous reference work. Current snapshot/commit validity, hold
 reason, pending destination, axis tracking errors, braking reserves, source/receipt
 ages, callback lock wait, joint callback queue age, coalesced joint samples and
 joint-command publication period distinguish execution from last-command status.
@@ -260,9 +292,39 @@ The configured main loop is 40 Hz and still invokes navigation then control on t
 same thread. Onboard acceptance remains: ordinary reference work of a few
 milliseconds, typical navigation near/below 10 ms, regular publications near
 25 ms, and sustained motion/reversal in one session. These are validation targets,
-not measured performance results. Source-only checks covered syntax, existing
-interfaces, independent KDL/CoG/Jacobian/derivative equivalence and numerical
-follower/ownership recovery cases; they do not execute the changed C++ navigator.
+not measured performance results. The starting local source matched reviewed revision `7d810631bef4a9263d3f61c6854c10dce6e31765`.
+The implementations at `b3ecbc5c3208fbdd34175847ac5bf2c516321bf3` were inspected:
+roll–yaw sampled an existing transition, while pitch/secondary evaluated bounded
+joint targets and consistent contact/CoG output. Neither bag proves the binary's
+exact SHA. Current manual contact rejection was already recoverable; this repair
+retains it and adds hold-duration diagnostics instead of claiming a new slip diagnosis.
+
+Checks performed for this repair: Python AST parsing, C++ lexical delimiter and
+interface review (not compilation), `git diff --check`, and in-memory mathematical
+checks. Synthetic nonzero postures used the URDF mounting offsets, yaw-before-roll,
+both axis signs, three mass groups and fixed body-to-CoG rotation. Maximum errors
+against centered differences were 1.3e-12 for first derivatives, 4.4e-8 for second
+derivatives and 4.6e-11 for the angular Jacobian; pivot closure error was 1.2e-16 m.
+These check the formulas, not the compiled KDL implementation or physical calibration.
+
+The full scalar follower/interval-hull/stopping recurrence with residual 0.020 rad,
+joint error 0.002 rad and illustrative radius bound 2 m reached yaw -36.22° from
+-11.99° in 4054 bounded 25 ms steps, with no brake fallback and maximum step
+0.00609°. This is a mathematical recurrence, not measured robot performance.
+The old 0.012 rad release condition fails on the same residual. Stale samples
+hold the last reference and discard time; valid advancing samples restart it.
+Reversal changes the retained destination and brakes before changing velocity
+sign. Pitch waits for that destination, then starts from the applied pose.
+
+In-memory script checks with a fake clock (no ROS import/node) produced 32
+keepalives plus final zero over 64 s; adding 9 ms sleep jitter kept all refresh
+gaps below the 8 s lease and final stop at 64.009 s. Equal refresh/lease was
+rejected before publication. Source traces checked session-bound queue entries,
+explicit preemption, worker epochs, unchanged lease on rejected requests, and
+only active roll/yaw publication. Disable/enable clears worker ownership and
+initializes a new applied/nominal pose and first-fault state; ordinary recovery
+retains the old contact identity. Baseline/pitch-secondary/free-flight dispatch
+and controller/PID configuration were not changed.
 The physical 0.03 rad hinge and 0.01 m pivot checks remain unchanged, so real contact
 residuals can still hold motion. No build, ROS launch, simulator or hardware run
 was performed for this repair.
@@ -691,28 +753,17 @@ requests bounded braking and hold. The ROS payload is `std_msgs/Float64` in
 **rad/s** on `/gimbalrotor/perching/roll_yaw/body_pitch_velocity`. A legacy
 `~step_deg` parameter is an error. `~interval_sec` defaults to 8.0 positive finite
 seconds; `~num_steps` defaults to 8 and must be a positive integer, not boolean.
-It counts rate publications. `~robot_namespace` and `~debug_prefix` retain the
-same defaults and absolute-prefix handling as the keyboard.
-
-The script reads
-`<robot_namespace>/navigation/roll_yaw_perching/body_pitch_velocity_command_duration`
-once before publishing and requires it to match `~interval_sec`. The YAML sets
-8.0 seconds, inherited by simulation. Change both settings together; the script
-does not write navigator parameters. The navigator reads its duration at startup.
-Both expiry and sleeps use ROS time, including simulated time.
-
-After the one-second startup delay, the same rate is sent once at approximately
-0, 8, 16, 24, 32, 40, 48 and 56 seconds relative to the first publication, with
-eight sleeps including the last. Each accepted nonzero message replaces the
-requested rate and renews its lifetime from onboard callback receipt (deferred
-acceptance does not extend that deadline); it adds neither
-speed nor future jobs. The navigator advances the reference between requests.
-With valid inputs and no takeover, the last interval expires around 64 seconds,
-followed by bounded braking. Refresh interval and lifetime are equal: there is
-no delivery-jitter grace period. At the expiry boundary, a refresh accepted before
-the update renews authorization; an update that observes expiry starts bounded
-braking. A late accepted refresh transitions from that applied state. No message
-silently extends the final command beyond its accepted lifetime.
+It counts experimental intervals, so the default experiment remains 64 seconds.
+`~robot_namespace` and `~debug_prefix` retain keyboard defaults and absolute-prefix
+handling. The script reads the positive onboard command lease once; it does not
+change parameters. `~refresh_period_sec` defaults to lease/4 (2 s for the 8 s YAML
+lease), and must be strictly shorter than the lease. Both time and sleeps use ROS
+time. After the one-second startup delay, keepalives repeat until the experiment
+deadline, independently of `num_steps`. A final zero requests bounded braking.
+There are no catch-up message bursts. Backward ROS time requests zero and aborts.
+Ctrl+C stops publications; the last accepted lease expires onboard. Lost final
+zero still leaves that finite lease. Rejection never renews it; logs are requests,
+not proof of motion or acceptance. No prepare/tare/enable is sent.
 
 The initial state is the coherent applied `final_target_`, including derivatives,
 with an existing producer braking before takeover when necessary. The contact is
@@ -726,25 +777,24 @@ history on refresh/takeover. `updateInteraction` still returns early without a v
 prepared plan: this velocity-refresh script does **not** exercise prepared-path
 admittance. It does not enable compliance or add a velocity/force-control law.
 
-The navigator uses continuous scalar rate/acceleration ramps and checks a short
-braking continuation before each advance, retaining that continuation if a new
-advance is infeasible. It checks joint, singularity, attitude and CoG bounds;
-nonlinear corridor checks are sampled, not a continuous feasibility proof.
-Conservative reserves can reduce achievable speed. Existing diagnostics report
-requested/applied rad/s, remaining lifetime and the limiting reason. No rejected
-advance accumulates a future angle. Reversals brake smoothly; equal refreshes
-preserve the running reference. Actual displacement integrates the bounded rate,
-including ramps, holds and limits: 0.1 deg/s for 64 seconds would be 6.4 degrees
-only in the ideal constant-rate case. This outer PID reference is not a guarantee
-of measured angular velocity or exact displacement.
+The navigator uses a small orientation Jacobian and bounded local endpoint IK
+with accumulated orientation error checked against a retained ideal rotation.
+Accepted rotation progress right-multiplies that ideal reference; rejected motion
+never accumulates future angle. Singularity, joint derivative limits, CoG limits,
+tracking and continuous stopping/interval bounds can reduce or stop feed. A
+rejected extension uses the common mechanism brake; local-Y feed resumes from
+its resulting coherent applied posture. Requested/applied rates, remaining lease,
+blocker and endpoint errors are diagnostic quantities. Actual displacement includes
+ramps, holds and conservative reductions; 0.1 deg/s for 64 s gives 6.4° only in
+the ideal constant-rate case, not a guarantee of measured displacement.
 
 Temporary invalid feedback uses the existing emergency hold (derivatives cleared,
 not an acceleration-continuous stop). Recovery resumes from the held posture only
 within the original lifetime; missing time is never integrated. Invalid messages
 do not renew it. Stop/cancel, manual ownership, disable, relock and genuine faults
-prevent stale rate continuation. Ctrl+C simply ends publications: the last accepted
-request may run for its remaining lifetime, then brake. There is no hidden stop,
-enable/relock/prepare protocol, feedback polling, retry or actuator publication.
+prevent stale rate continuation. Normal completion sends zero; Ctrl+C leaves
+only the remaining lease. No enable/relock/prepare, feedback polling, retry or
+direct actuator publication is added.
 
 ### `auto_perching_pitch_experiment.py`
 

@@ -80,7 +80,15 @@ public:
   double observerStamp() const override { return momentum_observer_.stamp(); }
   const Eigen::VectorXd& observerLoad() const override { return momentum_observer_.load(); }
   void captureModel(const Input&) override;
-  void clearModel() override { articulated_model_valid_ = false; }
+  void clearModel() override
+  {
+    articulated_model_valid_ = false;
+    ++observation_epoch_;
+    observation_worker_.cancel();
+    (void)observation_worker_.take();
+    observation_pending_ = false;
+    observation_model_.reset();
+  }
   void captureDynamicsJoints(const Input&, const sensor_msgs::JointState&, const std::string& producer, double receipt) override;
   bool observeArticulatedSample(const Input&, const roll_yaw::Feedback&) override;
   bool articulatedLoadValid(const Input&, const roll_yaw::Feedback&) const override;
@@ -134,6 +142,20 @@ private:
   ros::Publisher generalized_load_pub_, generalized_load_valid_pub_;
   double observer_gain_ = 10;
   perching_dynamics::MultilinkModel articulated_model_;
+  std::shared_ptr<const perching_dynamics::MultilinkModel> observation_model_;
+  struct Observation
+  {
+    bool ok = false;
+    std::uint64_t session = 0, epoch = 0;
+    double body_stamp = 0, joint_stamp = 0, command_stamp = 0, receipt = 0, wall_seconds = 0;
+    std::uint64_t tree_calls = 0;
+    Eigen::Matrix3d jacobian = Eigen::Matrix3d::Zero();
+    perching_dynamics::MultilinkModel::Evaluation value;
+    std::string reason;
+  };
+  roll_yaw::Worker<Observation> observation_worker_;
+  bool observation_pending_ = false;
+  std::uint64_t observation_epoch_ = 0;
   perching_dynamics::MomentumObserver momentum_observer_;
   bool articulated_model_valid_ = false, articulated_valid_ = false;
   double articulated_receipt_ = 0, articulated_body_stamp_ = 0, articulated_published_stamp_ = 0;
@@ -296,6 +318,12 @@ void RollYawInteractionRuntime::captureModel(const Input& c)
   articulated_model_valid_ = false;
   if(articulated() && c.dynamics_factory)
     articulated_model_valid_ = c.dynamics_factory(c.model, articulated_model_, articulated_reason_);
+  ++observation_epoch_;
+  observation_worker_.cancel();
+  (void)observation_worker_.take();
+  observation_pending_ = false;
+  observation_model_ = articulated_model_valid_ ?
+      std::make_shared<const perching_dynamics::MultilinkModel>(articulated_model_) : nullptr;
 }
 
 void RollYawInteractionRuntime::stopped()
@@ -558,6 +586,10 @@ void RollYawInteractionRuntime::commandWrenchCallback(const Input& c, const geom
 
 void RollYawInteractionRuntime::invalidateArticulated(const Input& c, const std::string& reason)
 {
+  ++observation_epoch_;
+  observation_worker_.cancel();
+  (void)observation_worker_.take();
+  observation_pending_ = false;
   momentum_observer_.reset(reason);
   articulated_reason_ = reason;
   articulated_valid_ = false;
@@ -570,6 +602,8 @@ void RollYawInteractionRuntime::invalidateArticulated(const Input& c, const std:
 void RollYawInteractionRuntime::resetArticulatedSession(const Input& c, const std::string& reason)
 {
   updateIdentity(c);
+  articulated_worker_wall_ = 0;
+  articulated_worker_tree_calls_ = 0;
   dynamics_joints_.clear();
   articulated_body_stamp_ = articulated_joint_stamp_ = articulated_command_stamp_ = 0;
   articulated_published_stamp_ = 0;
@@ -647,8 +681,6 @@ bool RollYawInteractionRuntime::observeArticulatedSample(const Input& c, const r
   const double wall = roll_yaw::steadySeconds();
   if(f.now - f.body_stamp > c.feedback_config.timeout)
     return fail("dynamics observation timestamp exceeds maximum age");
-  if(momentum_observer_.stamp() > 0 && f.body_stamp - momentum_observer_.stamp() > c.feedback_config.observer_max_interval)
-    return fail("coherent dynamics observation gap exceeds maximum dt; rebase required");
   auto coherent = [&](double stamp, double receipt)
   {
     return stamp > 0 && receipt > 0 && wall - receipt <= c.feedback_config.timeout &&
@@ -667,6 +699,9 @@ bool RollYawInteractionRuntime::observeArticulatedSample(const Input& c, const r
     joint_load[i] = it->second.effort;
   }
   const double input_stamp = command_wrench_.header.stamp.toSec();
+  const double session_stamp = static_cast<double>(c.session) * 1e-9;
+  if(f.body_stamp < session_stamp || f.joint_stamp < session_stamp || input_stamp < session_stamp)
+    return fail("awaiting body/joint/command samples from the current contact session");
   if(!coherent(input_stamp, command_wrench_receipt_))
     return fail("missing/stale/unsynchronized world command wrench about CoG");
   if(!command_cog_offset_.allFinite())
@@ -675,6 +710,28 @@ bool RollYawInteractionRuntime::observeArticulatedSample(const Input& c, const r
   newest = std::max(newest, input_stamp);
   if(newest - oldest > c.synchronization_tolerance)
     return fail("full dynamics sample exceeds feedback synchronization tolerance");
+  if(auto result = observation_worker_.take())
+  {
+    observation_pending_ = false;
+    if(result->epoch != observation_epoch_) return articulatedLoadValid(c, f);
+    if(result->session != c.session || f.now - result->body_stamp > c.feedback_config.timeout ||
+       wall - result->receipt > c.feedback_config.timeout || result->body_stamp > f.now + c.feedback_config.future_tolerance)
+      return fail("obsolete/stale dynamics worker output");
+    articulated_worker_wall_ = result->wall_seconds;
+    articulated_worker_tree_calls_ = result->tree_calls;
+    if(!result->ok) return fail(result->reason);
+    const bool ready = momentum_observer_.observe(result->value.momentum, result->value.predicted_rate,
+        result->body_stamp, observer_gain_, c.feedback_config.observer_max_interval);
+    articulated_reason_ = momentum_observer_.reason();
+    articulated_body_stamp_ = result->body_stamp;
+    articulated_joint_stamp_ = result->joint_stamp;
+    articulated_command_stamp_ = result->command_stamp;
+    articulated_jacobian_ = result->jacobian;
+    articulated_receipt_ = result->receipt; // Original source capture, never completion time.
+    articulated_valid_ = ready;
+    if(!ready && momentum_observer_.stamp() == 0) return fail(articulated_reason_);
+  }
+  if(observation_pending_) return articulatedLoadValid(c, f);
   // Recheck physical state even when only part of the synchronized sample advances.
   // Each body/joint/known-input sample is consumed at most once; repeated samples
   // retain both the residual's timestamp and its matching projection Jacobian.
@@ -714,23 +771,32 @@ bool RollYawInteractionRuntime::observeArticulatedSample(const Input& c, const r
   // command's instantaneous CoG to body B exactly once inside evaluate(). Only
   // this input application point is live; all reduced inertial geometry stays
   // at its captured internal configuration and current alpha/roll/yaw.
-  perching_dynamics::MultilinkModel::Evaluation result;
-  std::string reason;
-  if(!articulated_model_.evaluate(q, rate, joint_load, force, moment,
-                                 command_cog_offset_, result, reason))
-    return fail(reason);
-  const bool ready = momentum_observer_.observe(result.momentum, result.predicted_rate, f.body_stamp,
-                                                observer_gain_, c.feedback_config.observer_max_interval);
-  articulated_reason_ = momentum_observer_.reason();
-  if(!ready && momentum_observer_.stamp() == 0)
-    return fail(articulated_reason_);
-  articulated_body_stamp_ = f.body_stamp;
-  articulated_joint_stamp_ = f.joint_stamp;
-  articulated_command_stamp_ = input_stamp;
-  articulated_jacobian_ = j;
-  articulated_receipt_ = wall;
-  articulated_valid_ = ready;
-  return ready; // Bootstrap is not a valid zero-load observation.
+  if(!observation_model_) return fail("immutable dynamics model unavailable");
+  const auto model = observation_model_;
+  const auto offset = command_cog_offset_;
+  const auto session = c.session, epoch = observation_epoch_;
+  const double body_stamp = f.body_stamp, joint_stamp = f.joint_stamp;
+  observation_pending_ = observation_worker_.submit(
+      [model, q, rate, joint_load, force, moment, offset, session, epoch, body_stamp, joint_stamp, input_stamp, wall, j]
+      (const std::function<bool()>& cancelled)
+      {
+        Observation result;
+        result.session = session;
+        result.epoch = epoch;
+        result.body_stamp = body_stamp;
+        result.joint_stamp = joint_stamp;
+        result.command_stamp = input_stamp;
+        result.receipt = wall;
+        result.jacobian = j;
+        const double started = roll_yaw::steadySeconds();
+        roll_yaw::workCounters() = roll_yaw::WorkCounters();
+        result.ok = !cancelled() && model->evaluate(q, rate, joint_load, force, moment, offset, result.value, result.reason);
+        result.wall_seconds = roll_yaw::steadySeconds() - started;
+        result.tree_calls = roll_yaw::workCounters().full_tree;
+        return result;
+      });
+  return articulatedLoadValid(c, f); // Bootstrap and stale output never authorize admittance.
+
 }
 
 void RollYawInteractionRuntime::resetCompliance()
@@ -803,6 +869,12 @@ void RollYawInteractionRuntime::tareCallback(const Input& c, const TareRequest& 
   const bool source_changed = loadInteractionSource(c, retired, request.source);
   if(source_changed && interaction_source_ == InteractionSource::ARTICULATED_MOMENTUM && c.dynamics_factory && c.lock_valid)
     articulated_model_valid_ = c.dynamics_factory(c.model, articulated_model_, articulated_reason_);
+  ++observation_epoch_;
+  observation_worker_.cancel();
+  (void)observation_worker_.take();
+  observation_pending_ = false;
+  observation_model_ = articulated_model_valid_ ?
+      std::make_shared<const perching_dynamics::MultilinkModel>(articulated_model_) : nullptr;
   admittance_.reset();
   tare_requested_ = false;
   interaction_valid_ = false;

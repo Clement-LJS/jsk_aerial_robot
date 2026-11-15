@@ -54,6 +54,8 @@ struct RollYawInteractionDiagnostics
   std::string effort_source_ = "unavailable", effort_topic_, effort_producer_;
   bool effort_source_valid_ = false;
   std::string articulated_reason_ = "no locked dynamics snapshot";
+  double articulated_worker_wall_ = 0;
+  std::uint64_t articulated_worker_tree_calls_ = 0;
   std::string admittance_reason_ = "disarmed";
   bool interaction_valid_ = false;
   std::string interaction_frame_, interaction_point_, interaction_topic_;
