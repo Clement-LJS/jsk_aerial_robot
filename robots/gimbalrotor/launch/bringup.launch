@@ -73,7 +73,7 @@
      <param name="navigation/perching_configuration" value="roll_yaw"/>
      <rosparam file="$(arg config_dir)/beetle/RollYawPerching.yaml" command="load"/>
      <rosparam file="$(arg config_dir)/beetle/RollYawPerching_sim.yaml" command="load" if="$(arg simulation)"/>
-     <param name="aerial_robot_control_name" value="aerial_robot_control/gimbalrotor_controller"/>
+     <param name="aerial_robot_control_name" value="aerial_robot_control/gimbalrotor_multilink_perching_admittance_controller"/>
    </group>
    <group if="$(arg pitch_only_perching)">
      <param name="navigation/perching_configuration" value="pitch_only"/>

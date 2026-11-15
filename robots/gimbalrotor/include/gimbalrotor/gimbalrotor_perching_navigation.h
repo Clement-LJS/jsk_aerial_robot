@@ -4,7 +4,7 @@
 #include <gimbalrotor/gimbalrotor_navigation.h>
 #include <gimbalrotor/gimbalrotor_perching.h>
 #include <gimbalrotor/model/gimbalrotor_multilink_perching_model.h>
-#include <gimbalrotor/control/gimbalrotor_multilink_perching_observer.h>
+#include <gimbalrotor/control/gimbalrotor_multilink_perching_admittance_controller.h>
 #include <cmath>
 #include <mutex>
 #include <string>
@@ -35,7 +35,8 @@
 namespace aerial_robot_navigation
 {
 
-class GimbalrotorPerchingNavigator : public GimbalrotorNavigator, public perching_geometry::TargetProvider
+class GimbalrotorPerchingNavigator : public GimbalrotorNavigator, public perching_geometry::TargetProvider,
+                                     public aerial_robot_control::RollYawInteractionHost
 {
 public:
   GimbalrotorPerchingNavigator();
@@ -52,6 +53,11 @@ public:
   perching_geometry::Session perchingSession() const override;
   bool perchingAdmittanceTarget(const ros::Time& lock_stamp, double physical_offset,
       const tf::Vector3& nominal_position, perching_geometry::Pose& pose) const override;
+
+  bool attachRollYawInteraction(const std::shared_ptr<aerial_robot_control::RollYawInteraction>&,
+                               const std::function<void(const aerial_robot_control::RollYawInteractionInput&)>&) override;
+  void withRollYawInteraction(const std::function<void(const aerial_robot_control::RollYawInteractionInput&)>&,
+                             bool publish_diagnostics = false) override;
 
 private:
 
@@ -458,7 +464,6 @@ private:
   // Enable, disable, reset and relock use the common contact lifecycle.
   void rollYawRosParamInit(ros::NodeHandle nh, ros::NodeHandle nhp);
   void taskCommandCallback(const std_msgs::UInt64ConstPtr&, const std::string& action);
-  bool observeInteractionSample(const roll_yaw::Feedback&, double stamp, bool quiet);
   bool snapshotModel(roll_yaw::Kinematics&, std::string&);
   roll_yaw::Feedback feedback() const;
   std::string contactRejection(const roll_yaw::Feedback&, bool* hard_fault = nullptr) const;
@@ -576,65 +581,21 @@ private:
   std::uint64_t producer_generation_ = 0, pending_generation_ = 0;
   Eigen::Matrix3d neutral_ = Eigen::Matrix3d::Identity();
 
-  roll_yaw::PitchAdmittance admittance_;
-  // Source is selected at startup or a disarmed READY tare, never mid-motion.
-  enum class InteractionSource { LEGACY_WRENCH, ARTICULATED_MOMENTUM, INVALID };
-  InteractionSource interaction_source_ = InteractionSource::LEGACY_WRENCH;
-  std::string interaction_source_name_ = "legacy_wrench", effort_contract_ = "unavailable";
-  // Existing ServoBridge nominal effort or the audited Gazebo/ODE JointState source.
-  std::string effort_source_ = "unavailable", effort_topic_, effort_producer_;
-  bool effort_source_valid_ = false;
-  double observer_gain_ = 10;
-  perching_dynamics::MultilinkModel articulated_model_;
-  perching_dynamics::MomentumObserver momentum_observer_;
-  bool articulated_model_valid_ = false;
-  bool articulated_valid_ = false;
-  double articulated_receipt_ = 0, articulated_body_stamp_ = 0, articulated_published_stamp_ = 0;
-  Eigen::Matrix3d articulated_jacobian_ = Eigen::Matrix3d::Zero();  // Same sample as the residual.
-  std::string articulated_reason_ = "no locked dynamics snapshot";
   std::function<bool(const roll_yaw::Kinematics&, perching_dynamics::MultilinkModel&, std::string&)> dynamics_factory_;
   std::function<bool()> dynamics_snapshot_current_;
   // Rotor gimbals move physically; only the reduced model keeps their lock configuration.
   std::set<std::string> rotor_gimbal_joints_;
-  struct DynamicsJoint
-  {
-    double position = 0, rate = 0, effort = std::numeric_limits<double>::quiet_NaN();
-    double stamp = 0, receipt = 0;
-    bool rate_valid = false;
-  };
-  std::map<std::string, DynamicsJoint> dynamics_joints_;
-  geometry_msgs::WrenchStamped command_wrench_;
-  Eigen::Vector3d command_cog_offset_ = Eigen::Vector3d::Constant(std::numeric_limits<double>::quiet_NaN());
-  ros::Subscriber command_wrench_sub_;
-  double command_wrench_receipt_ = 0, articulated_joint_stamp_ = 0, articulated_command_stamp_ = 0;
-  bool loadInteractionSource();
-  bool interactionConfigurationValid() const;
-  void captureDynamicsJoints(const sensor_msgs::JointState&, const std::string& producer);
-  void commandWrenchCallback(const geometry_msgs::WrenchStampedConstPtr&);
-  bool observeArticulatedSample(const roll_yaw::Feedback&);
-  bool articulatedLoadValid(const roll_yaw::Feedback&) const;
-  void publishArticulatedLoad();
-  void resetArticulatedSession(const std::string&);
-  void invalidateArticulated(const std::string&);
-  void invalidateInteraction();
   bool last_command_accepted_ = false;
   double control_pitch_ = 0;
   std::uint64_t plan_id_ = 0;
-  std::string admittance_reason_ = "disarmed";
   double body_receipt_ = 0, joint_receipt_ = 0;
-  void admittanceCallback(const std_msgs::BoolConstPtr&);
-  void externalWrenchCallback(const geometry_msgs::WrenchStampedConstPtr&);
-  void tareCallback(const std_msgs::EmptyConstPtr&);
-  void updateInteraction(const roll_yaw::Feedback&);
-  bool interaction_configured_ = false, tare_requested_ = false, interaction_valid_ = false;
-  std::string interaction_frame_, interaction_point_, interaction_topic_;
-  double interaction_sign_ = 0, interaction_scale_ = 0, interaction_torque_ = 0, interaction_stamp_ = 0,
-         interaction_receipt_ = 0;
-  double compliance_time_ = 0;
-  geometry_msgs::WrenchStamped external_wrench_;
+  std::weak_ptr<aerial_robot_control::RollYawInteraction> interaction_;
+  aerial_robot_control::RollYawInteractionInput interactionInput(const roll_yaw::Feedback&) const;
   void resetCompliance();
+  void resetArticulatedSession(const std::string&);
+  void updateInteraction(const roll_yaw::Feedback&);
+  bool articulatedLoadValid(const roll_yaw::Feedback&) const;
   ros::Publisher status_pub_, task_pub_, compliance_pub_, ack_pub_;
-  ros::Publisher generalized_load_pub_, generalized_load_valid_pub_;
   std::string last_status_;
   double last_diagnostics_ = 0, navigation_wall_ = 0;
 

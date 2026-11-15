@@ -50,7 +50,8 @@ include_directories(
 add_library(gimbalrotor_controller
   src/control/gimbalrotor_controller.cpp
   src/control/gimbalrotor_admittance_controller.cpp
-  src/control/gimbalrotor_perching_admittance_controller.cpp)
+  src/control/gimbalrotor_perching_admittance_controller.cpp
+  src/control/gimbalrotor_multilink_perching_admittance_controller.cpp)
 target_link_libraries(gimbalrotor_controller gimbalrotor_perching ${catkin_LIBRARIES})
 
 add_library(gimbalrotor_robot_model
@@ -60,8 +61,7 @@ target_link_libraries(gimbalrotor_robot_model ${catkin_LIBRARIES})
 add_library(gimbalrotor_perching
   src/gimbalrotor_perching.cpp
   src/model/gimbalrotor_multilink_perching_model.cpp
-  src/model/gimbalrotor_roll_yaw_dynamics.cpp
-  src/control/gimbalrotor_multilink_perching_observer.cpp)
+  src/model/gimbalrotor_roll_yaw_dynamics.cpp)
 target_link_libraries(gimbalrotor_perching ${catkin_LIBRARIES})
 
 add_library(gimbalrotor_navigation

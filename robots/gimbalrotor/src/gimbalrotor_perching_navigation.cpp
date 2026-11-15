@@ -3195,15 +3195,7 @@ void GimbalrotorPerchingNavigator::initializeRollYaw(ros::NodeHandle nh, ros::No
   status_pub_ = nh.advertise<diagnostic_msgs::DiagnosticArray>(roll_yaw_prefix_ + "/diagnostics_status", 1);
   task_pub_ = nh.advertise<geometry_msgs::Vector3Stamped>(roll_yaw_prefix_ + "/task_pitch", 1);
   compliance_pub_ = nh.advertise<geometry_msgs::Vector3Stamped>(roll_yaw_prefix_ + "/compliance", 1);
-  generalized_load_pub_ = nh.advertise<sensor_msgs::JointState>(roll_yaw_prefix_ + "/generalized_external_load", 1);
-  generalized_load_valid_pub_ = nh.advertise<std_msgs::Bool>(roll_yaw_prefix_ + "/generalized_external_load_valid", 1);
   ack_pub_ = nh.advertise<std_msgs::String>(roll_yaw_prefix_ + "/command_ack", 1);
-  subscriptions_.push_back(
-      nh.subscribe("perching/admittance_enable", 1, &GimbalrotorPerchingNavigator::admittanceCallback, this));
-  subscriptions_.push_back(
-      nh.subscribe(interaction_topic_, 1, &GimbalrotorPerchingNavigator::externalWrenchCallback, this));
-  subscriptions_.push_back(
-      nh.subscribe(roll_yaw_prefix_ + "/admittance_tare", 1, &GimbalrotorPerchingNavigator::tareCallback, this));
   nominal_pub_ = nh.advertise<geometry_msgs::Vector3Stamped>(roll_yaw_prefix_ + "/nominal_angles", 1);
   position_lower_pub_ = nh.advertise<geometry_msgs::Vector3Stamped>(roll_yaw_prefix_ + "/position_lower", 1);
   position_upper_pub_ = nh.advertise<geometry_msgs::Vector3Stamped>(roll_yaw_prefix_ + "/position_upper", 1);
@@ -3287,29 +3279,6 @@ void GimbalrotorPerchingNavigator::rollYawRosParamInit(ros::NodeHandle nh, ros::
   pn.param("progress_filter_time", c.progress_filter_time, c.progress_filter_time);
   pn.param("goal_tolerance", c.goal_tolerance, c.goal_tolerance);
   pn.param("progress_timeout", c.progress_timeout, c.progress_timeout);
-  ros::NodeHandle an(pn, "admittance");
-  auto& a = admittance_.config;
-  an.param("inertia", a.inertia, a.inertia);
-  an.param("damping", a.damping, a.damping);
-  an.param("stiffness", a.stiffness, a.stiffness);
-  an.param("torque_limit", a.torque_limit, a.torque_limit);
-  an.param("angle_limit", a.angle_limit, a.angle_limit);
-  an.param("rate_limit", a.rate_limit, a.rate_limit);
-  an.param("acceleration_limit", a.acceleration_limit, a.acceleration_limit);
-  an.param("reference_torque", a.reference_torque, a.reference_torque);
-  an.param("filter_time", a.filter_time, a.filter_time);
-  an.param("on_threshold", a.on_threshold, a.on_threshold);
-  an.param("off_threshold", a.off_threshold, a.off_threshold);
-  an.param("on_dwell", a.on_dwell, a.on_dwell);
-  an.param("off_dwell", a.off_dwell, a.off_dwell);
-  an.param("baseline_samples", a.baseline_samples, a.baseline_samples);
-  an.param<std::string>("external_wrench_topic", interaction_topic_, "estimated_external_wrench");
-  an.param<std::string>("wrench_frame", interaction_frame_, "world");
-  an.param<std::string>("wrench_point", interaction_point_, "cog");
-  an.param("wrench_sign", interaction_sign_, interaction_topic_ == "estimated_external_wrench" ? 1.0 : 0.0);
-  an.param("wrench_scale", interaction_scale_, interaction_topic_ == "estimated_external_wrench" ? 1.0 : 0.0);
-  loadInteractionSource();
-  interaction_configured_ = interactionConfigurationValid();
   const bool vectors =
       readVector(pn, "position_lower", p.limits.lower) && readVector(pn, "position_upper", p.limits.upper);
   // Shared mechanism and trajectory bounds.
@@ -3375,7 +3344,7 @@ void GimbalrotorPerchingNavigator::rollYawRosParamInit(ros::NodeHandle nh, ros::
   nh.param("controller/underactuate", underactuated, false);
   std::string controller;
   nh.getParam("aerial_robot_control_name", controller);
-  if(underactuated || controller != "aerial_robot_control/gimbalrotor_controller")
+  if(underactuated || controller != "aerial_robot_control/gimbalrotor_multilink_perching_admittance_controller")
     configuration_valid_ = false;
 }
 
@@ -3606,8 +3575,8 @@ void GimbalrotorPerchingNavigator::rollYawJointCallback(const ros::MessageEvent<
 {
   const auto& m = event.getMessage();
   std::lock_guard<std::recursive_mutex> l(perchingStateMutex());
-  if(interaction_source_ == InteractionSource::ARTICULATED_MOMENTUM)
-    captureDynamicsJoints(*m, event.getPublisherName());
+  if(auto interaction = interaction_.lock(); interaction && interaction->articulated())
+    interaction->captureDynamicsJoints(interactionInput(feedback()), *m, event.getPublisherName());
   const double source = m->header.stamp.toSec(), receipt = ros::Time::now().toSec();
   // Other publishers may send gimbal-only messages on this shared topic.
   if(std::find(m->name.begin(), m->name.end(), roll_) == m->name.end() &&
@@ -3775,13 +3744,15 @@ void GimbalrotorPerchingNavigator::applyRollYawPitchDelta(double alpha)
 bool GimbalrotorPerchingNavigator::tryLockRollYaw(const std::string& cause)
 {
   std::lock_guard<std::recursive_mutex> l(perchingStateMutex());
+  const auto interaction = interaction_.lock();
   const auto f = feedback();
   std::string error = roll_yaw::feedbackRejection(f, feedback_config_, planning_config_);
   roll_yaw::Kinematics model;
   roll_yaw::Reference held;
   Eigen::Vector3d q = f.eta;
   q[0] = 0;
-  if(perchingSession().mode != perching_geometry::Mode::NORMAL || !error.empty() || !snapshotModel(model, error) ||
+  if(!interaction || perchingSession().mode != perching_geometry::Mode::NORMAL ||
+     !error.empty() || !snapshotModel(model, error) ||
      !model.lock(f.body, q) || !roll_yaw::mechanismAllowed(model, q, planning_config_, error) ||
      !roll_yaw::mechanismReference(model, q, Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero(), held))
   {
@@ -3804,9 +3775,7 @@ bool GimbalrotorPerchingNavigator::tryLockRollYaw(const std::string& cause)
   preparation_clock_ = 0;
   manual_path_ = roll_yaw::Path();
   model_ = std::move(model);
-  articulated_model_valid_ = false;
-  if(interaction_source_ == InteractionSource::ARTICULATED_MOMENTUM && dynamics_factory_)
-    articulated_model_valid_ = dynamics_factory_(model_, articulated_model_, articulated_reason_);
+  interaction->captureModel(interactionInput(feedback()));
   nominal_ = q;
   final_target_ = held;
   body_alignment_valid_ = false;
@@ -3844,7 +3813,8 @@ void GimbalrotorPerchingNavigator::resetRollYawLock()
   invalidatePlanner();
   resetRollYawPitchRezeroState();
   lock_valid_ = false;
-  articulated_model_valid_ = false;
+  if(auto interaction = interaction_.lock())
+    interaction->clearModel();
   faulted_ = false;
   feedback_waiting_ = false;
   roll_yaw_lock_stamp_ = ros::Time();
@@ -3940,8 +3910,8 @@ void GimbalrotorPerchingNavigator::completeStop(const std::string& why)
     nominal_ = final_target_.eta;
   body_alignment_valid_ = false;
   roll_yaw::scaleReference(final_target_, 0, 0);
-  resetCompliance();
-  admittance_reason_ = "disabled: stopped; prepare and tare again";
+  if(auto interaction = interaction_.lock())
+    interaction->stopped();
   stop_pending_ = false;
   reason_ = why + "; stop complete, holding contact";
   if(pitch_velocity_.pending)
@@ -3990,7 +3960,6 @@ void GimbalrotorPerchingNavigator::faultHold(const std::string& why)
     if(lock_valid_ &&
        roll_yaw::mechanismReference(model_, final_target_.eta, Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero(), held))
       final_target_ = held;
-    admittance_.enabled = false;
     previous_failure_ = reason_ = why;
   }
   preparation_window_.reset();
@@ -4855,11 +4824,8 @@ void GimbalrotorPerchingNavigator::requestRollYaw(const std::string& action, std
         reason_ = "motion waiting: " + ready_error;
         return;
       }
-      if(admittance_.enabled && (!interaction_valid_ || !admittance_.baseline_ready ||
-                                 current.now - interaction_stamp_ > feedback_config_.timeout ||
-                                 current.now - interaction_stamp_ < -feedback_config_.future_tolerance ||
-                                 std::abs(interaction_stamp_ - current.body_stamp) > synchronization_tolerance_ ||
-                                 roll_yaw::steadySeconds() - interaction_receipt_ > feedback_config_.timeout))
+      const auto interaction = interaction_.lock();
+      if(!interaction || !interaction->motionAllowed(interactionInput(current)))
       {
         reason_ = "motion denied: enabled admittance input/baseline unavailable; restore source or explicitly disable";
         return;
@@ -4944,676 +4910,81 @@ void GimbalrotorPerchingNavigator::advancePreparedConnection()
     resetCompliance();
   }
 }
-bool GimbalrotorPerchingNavigator::loadInteractionSource()
-{
-  const auto previous = std::make_tuple(interaction_source_name_, observer_gain_, effort_contract_,
-                                         effort_source_, effort_topic_, effort_producer_, effort_source_valid_);
-  const std::string previous_reason = articulated_reason_;
-  auto finish = [&]()
-  {
-    const bool changed = previous != std::make_tuple(interaction_source_name_, observer_gain_, effort_contract_,
-                                                    effort_source_, effort_topic_, effort_producer_, effort_source_valid_);
-    if(changed)
-      resetArticulatedSession("interaction source/configuration changed; awaiting coherent dynamics sample");
-    else
-      articulated_reason_ = previous_reason;
-    return changed;
-  };
-  ros::NodeHandle an(nh_, "navigation/roll_yaw_perching/admittance");
-  ros::NodeHandle dn(nh_, "navigation/roll_yaw_perching/dynamics");
-  an.param<std::string>("source", interaction_source_name_, "legacy_wrench");
-  interaction_source_ = interaction_source_name_ == "legacy_wrench" ? InteractionSource::LEGACY_WRENCH :
-                        interaction_source_name_ == "articulated_momentum" ? InteractionSource::ARTICULATED_MOMENTUM :
-                        InteractionSource::INVALID;
-  if(interaction_source_ == InteractionSource::ARTICULATED_MOMENTUM)
-  {
-    if(!command_wrench_sub_)
-      command_wrench_sub_ = nh_.subscribe("perching/roll_yaw/command_wrench_estimate", 1,
-          &GimbalrotorPerchingNavigator::commandWrenchCallback, this);
-  }
-  else
-    command_wrench_sub_.shutdown();
-  dn.param("observer_gain", observer_gain_, 10.0);
-  dn.param<std::string>("joint_effort_contract", effort_contract_, "unavailable");
-  ros::NodeHandle en(dn, "joint_effort");
-  en.param<std::string>("source", effort_source_, "unavailable");
-  en.param<std::string>("topic", effort_topic_, "joint_states");
-  en.param<std::string>("producer", effort_producer_, "");
-  std::string units, sign, joint_topic, controller, description;
-  en.param<std::string>("units", units, "Nm");
-  en.param<std::string>("sign", sign, "urdf");
-  ros::NodeHandle(nh_, "navigation/roll_yaw_perching").param<std::string>("joint_state_topic", joint_topic, "joint_states");
-  const bool matching_topic = !effort_topic_.empty() &&
-      nh_.resolveName(effort_topic_) == nh_.resolveName(joint_topic);
-  if(effort_source_ == "servo_bridge_joint_states")
-  {
-    // ServoBridge already applies torque_scale * angle_sgn to the raw load.
-    // Use those nominal current-derived joint efforts directly; independent
-    // torque calibration is neither assumed nor required by this adapter.
-    effort_producer_ = nh_.resolveName("servo_bridge");
-    effort_contract_ = "servo_bridge_nominal_joint_effort";
-    effort_source_valid_ = matching_topic;
-    articulated_reason_ = effort_source_valid_ ? "waiting for synchronized ServoBridge joint effort" :
-        "ServoBridge effort topic must match the configured joint-state topic";
-    return finish();
-  }
-  nh_.getParam("joint_state_controller/type", controller);
-  nh_.getParam("robot_description", description);
-  // Audited local simulation path: AerialRobotHWSim delegates read/writeSim
-  // to DefaultRobotHWSim; JointStateController publishes its JointStateHandle.
-  // For the shipped ODE world and EffortJointInterface, effort is GetForce(0):
-  // ODE saves the limited SetForce torque, NOT contact reaction/GetForceTorque
-  // or the position PID target. The installed ODE implementation was inspected.
-  // No motor constant, gearbox conversion or second URDF sign is applied here.
-  effort_source_valid_ = effort_source_ == "gazebo_ode_joint_states" && ros::Time::isSimTime() &&
-      effort_contract_ == "joint_side_actuation_nm" && units == "Nm" && sign == "urdf" &&
-      matching_topic &&
-      !effort_producer_.empty() && effort_producer_.front() == '/' &&
-      controller == "joint_state_controller/JointStateController" &&
-      description.find("gazebo_ros_control/AerialRobotHWSim") != std::string::npos;
-  articulated_reason_ = effort_source_valid_ ? "waiting for synchronized Gazebo ODE joint-side torque" :
-      "unsupported effort source or invalid Gazebo ODE producer/topic/units/sign configuration";
-  return finish();
-}
-
-bool GimbalrotorPerchingNavigator::interactionConfigurationValid() const
-{
-  if(!admittance_.config.valid())
-    return false;
-  if(interaction_source_ == InteractionSource::ARTICULATED_MOMENTUM)
-    return std::isfinite(observer_gain_) && observer_gain_ > 0;
-  return interaction_source_ == InteractionSource::LEGACY_WRENCH &&
-         (interaction_sign_ == 1 || interaction_sign_ == -1) && std::isfinite(interaction_scale_) &&
-         interaction_scale_ > 0 && (interaction_frame_ == "world" || interaction_frame_ == "body") &&
-         (interaction_point_ == "cog" || interaction_point_ == "body" || interaction_point_ == "world_origin");
-}
-
-void GimbalrotorPerchingNavigator::captureDynamicsJoints(const sensor_msgs::JointState& msg,
-                                                        const std::string& producer)
-{
-  // Irrelevant-only messages (hand/lock/gimbals) can share joint_states, including from another
-  // publisher. They are not reduced dynamics inputs and cannot refresh/reset it.
-  if(std::find(msg.name.begin(), msg.name.end(), roll_) == msg.name.end() &&
-     std::find(msg.name.begin(), msg.name.end(), yaw_) == msg.name.end())
-    return;
-  if(!effort_source_valid_ || producer != effort_producer_ ||
-     (effort_source_ == "gazebo_ode_joint_states" && !ros::Time::isSimTime()))
-  {
-    dynamics_joints_.clear();
-    invalidateArticulated("joint effort producer unavailable or differs from the selected source");
-    return;
-  }
-  // ServoBridge and the supported JointStateController publish the complete set.
-  // A partial roll/yaw sample cannot retain an older apparently valid torque.
-  if(std::count(msg.name.begin(), msg.name.end(), roll_) != 1 ||
-     std::count(msg.name.begin(), msg.name.end(), yaw_) != 1)
-  {
-    dynamics_joints_.clear();
-    invalidateArticulated("verified joint-state producer omitted or duplicated roll/yaw");
-    return;
-  }
-  const double stamp = msg.header.stamp.toSec(), now = ros::Time::now().toSec();
-  for(std::size_t i = 0; i < msg.name.size(); ++i)
-  {
-    const auto& name = msg.name[i];
-    if(name != roll_ && name != yaw_)
-      continue;
-    auto& previous = dynamics_joints_[name];
-    if(stamp <= 0 || now - stamp > feedback_config_.timeout || now - stamp < -feedback_config_.future_tolerance ||
-       std::count(msg.name.begin(), msg.name.end(), name) != 1 || msg.position.size() != msg.name.size() ||
-       !std::isfinite(msg.position[i]) || (!msg.velocity.empty() &&
-       (msg.velocity.size() != msg.name.size() || !std::isfinite(msg.velocity[i]))))
-    {
-      previous = DynamicsJoint();
-      invalidateArticulated("invalid dynamics joint timestamp/name/position/rate array");
-      continue;
-    }
-    if((name == roll_ || name == yaw_) &&
-       (msg.effort.size() != msg.name.size() || !std::isfinite(msg.effort[i])))
-    {
-      previous = DynamicsJoint();
-      invalidateArticulated("missing/nonfinite joint-side actuation torque");
-      continue;
-    }
-    if(previous.stamp > 0 && (stamp < previous.stamp || stamp - previous.stamp > feedback_config_.timeout))
-    {
-      previous = DynamicsJoint();
-      invalidateArticulated("discontinuous dynamics joint timestamp; awaiting coherent samples");
-    }
-    if(stamp == previous.stamp)
-      continue; // Duplicate samples never refresh receipt or observer time.
-    DynamicsJoint sample;
-    sample.position = msg.position[i];
-    sample.stamp = stamp;
-    sample.receipt = roll_yaw::steadySeconds();
-    if(!msg.velocity.empty())
-    {
-      sample.rate = msg.velocity[i];
-      sample.rate_valid = std::isfinite(sample.rate);
-    }
-    else if(previous.stamp > 0 && stamp - previous.stamp > 1e-4 && stamp - previous.stamp <= feedback_config_.timeout)
-    {
-      sample.rate = (sample.position - previous.position) / (stamp - previous.stamp);
-      sample.rate_valid = std::isfinite(sample.rate);
-    }
-    if(msg.effort.size() == msg.name.size())
-      sample.effort = msg.effort[i]; // Already converted; never apply torque_scale or angle_sgn again.
-    previous = sample;
-    if(!sample.rate_valid)
-      invalidateArticulated("joint rate unavailable; awaiting advancing valid samples");
-  }
-}
-
-void GimbalrotorPerchingNavigator::commandWrenchCallback(const geometry_msgs::WrenchStampedConstPtr& msg)
+bool GimbalrotorPerchingNavigator::attachRollYawInteraction(
+    const std::shared_ptr<aerial_robot_control::RollYawInteraction>& interaction,
+    const std::function<void(const aerial_robot_control::RollYawInteractionInput&)>& initialize)
 {
   std::lock_guard<std::recursive_mutex> l(perchingStateMutex());
-  if(interaction_source_ != InteractionSource::ARTICULATED_MOMENTUM)
-    return;
-  const double stamp = msg->header.stamp.toSec(), now = ros::Time::now().toSec();
-  const auto& w = msg->wrench;
-  if(stamp <= 0 || now - stamp > feedback_config_.timeout || now - stamp < -feedback_config_.future_tolerance ||
-     frameName(msg->header.frame_id) != frameName(world_) ||
-     !Eigen::Vector3d(w.force.x, w.force.y, w.force.z).allFinite() ||
-     !Eigen::Vector3d(w.torque.x, w.torque.y, w.torque.z).allFinite())
-  {
-    command_wrench_receipt_ = 0;
-    invalidateArticulated("invalid command wrench timestamp/frame/value");
-    return;
-  }
-  if(stamp < command_wrench_.header.stamp.toSec())
-  {
-    command_wrench_receipt_ = 0;
-    command_wrench_ = geometry_msgs::WrenchStamped();
-    invalidateArticulated("command wrench timestamp moved backwards; awaiting coherent samples");
-    return;
-  }
-  if(stamp == command_wrench_.header.stamp.toSec())
-    return;
-  // The command moment is about the instantaneous CoG, not the reduced model's
-  // captured-internal-configuration CoG. Pair its current body-local application
-  // point with the accepted wrench; duplicate stamps cannot refresh either.
-  if(!robot_model_ || !robot_model_->initialized())
-  {
-    command_wrench_receipt_ = 0;
-    invalidateArticulated("command wrench application point: live model unavailable");
-    return;
-  }
-  const auto frames = robot_model_->getSegmentsTf();
-  const auto b = frames.find(robot_model_->getBaselinkName());
-  Eigen::Isometry3d body_to_cog = Eigen::Isometry3d::Identity();
-  if(b != frames.end())
-    body_to_cog = roll_yaw::fromKdl(b->second.Inverse() * robot_model_->getCog<KDL::Frame>());
-  if(b == frames.end() || !roll_yaw::poseValid(body_to_cog))
-  {
-    command_wrench_receipt_ = 0;
-    invalidateArticulated("command wrench application point: invalid live body/CoG geometry");
-    return;
-  }
-  command_wrench_ = *msg;
-  command_cog_offset_ = body_to_cog.translation();
-  command_wrench_receipt_ = roll_yaw::steadySeconds();
+  if(perching_configuration_ != PerchingConfiguration::ROLL_YAW || !interaction_.expired())
+    return false;
+  initialize(interactionInput(feedback()));
+  interaction_ = interaction;
+  publishRollYawDiagnostics();
+  return true;
 }
 
-void GimbalrotorPerchingNavigator::invalidateArticulated(const std::string& reason)
+void GimbalrotorPerchingNavigator::withRollYawInteraction(
+    const std::function<void(const aerial_robot_control::RollYawInteractionInput&)>& call, bool publish_diagnostics)
 {
-  momentum_observer_.reset(reason);
-  articulated_reason_ = reason;
-  articulated_valid_ = false;
-  articulated_receipt_ = 0;
-  articulated_jacobian_.setZero();
-  invalidateInteraction();
-  publishArticulatedLoad(); // Promptly retire a bad sample, including callback-time faults/relocks.
-}
-
-void GimbalrotorPerchingNavigator::resetArticulatedSession(const std::string& reason)
-{
-  dynamics_joints_.clear();
-  articulated_body_stamp_ = articulated_joint_stamp_ = articulated_command_stamp_ = 0;
-  articulated_published_stamp_ = 0;
-  command_wrench_ = geometry_msgs::WrenchStamped();
-  command_cog_offset_.setConstant(std::numeric_limits<double>::quiet_NaN());
-  command_wrench_receipt_ = 0;
-  invalidateArticulated(reason);
-}
-
-void GimbalrotorPerchingNavigator::invalidateInteraction()
-{
-  interaction_valid_ = false;
-  interaction_stamp_ = interaction_receipt_ = 0;
-  tare_requested_ = false; // Recovery cannot silently restore a fault-invalidated baseline.
-  // Invalidate all tare/filter/contact history, retaining only the state needed
-  // by the existing bounded braking route. An armed fault NEVER falls back.
-  const auto previous = admittance_;
-  admittance_.reset();
-  admittance_.enabled = previous.enabled;
-  admittance_.offset = previous.offset;
-  admittance_.rate = previous.rate;
-  admittance_.acceleration = previous.acceleration;
-}
-
-bool GimbalrotorPerchingNavigator::articulatedLoadValid(const roll_yaw::Feedback& f) const
-{
-  const double stamp = momentum_observer_.stamp();
-  const double wall_age = roll_yaw::steadySeconds() - articulated_receipt_;
-  return interaction_source_ == InteractionSource::ARTICULATED_MOMENTUM && articulated_valid_ &&
-         lock_valid_ && f.hover && articulated_model_valid_ && momentum_observer_.ready() &&
-         momentum_observer_.load().size() == 3 && momentum_observer_.load().allFinite() &&
-         stamp > 0 && f.now - stamp >= -feedback_config_.future_tolerance &&
-         f.now - stamp <= feedback_config_.max_execution_step &&
-         articulated_receipt_ > 0 && wall_age >= 0 && wall_age <= feedback_config_.max_execution_step &&
-         last_body_message_stamp_ == f.body_stamp && last_joint_message_stamp_ == f.joint_stamp &&
-         contactRejection(f).empty();
-}
-
-void GimbalrotorPerchingNavigator::publishArticulatedLoad()
-{
-  if(!generalized_load_pub_ || !generalized_load_valid_pub_)
-    return; // Source configuration is loaded before publishers are initialized.
-  std_msgs::Bool valid;
-  valid.data = articulatedLoadValid(feedback());
-  generalized_load_valid_pub_.publish(valid);
-  if(!valid.data || momentum_observer_.stamp() == articulated_published_stamp_)
-    return;
-  sensor_msgs::JointState load;
-  load.header.stamp.fromSec(momentum_observer_.stamp());
-  load.name = {"alpha", roll_, yaw_};
-  for(int i = 0; i < 3; ++i)
-    load.effort.push_back(momentum_observer_.load()[i]);
-  // Generalized N.m in [alpha, roll, yaw] order; one publication per observation.
-  // Consumers must require both validity and a fresh observation timestamp.
-  generalized_load_pub_.publish(load);
-  articulated_published_stamp_ = momentum_observer_.stamp();
-}
-
-bool GimbalrotorPerchingNavigator::observeArticulatedSample(const roll_yaw::Feedback& f)
-{
-  auto fail = [this](const std::string& reason) { invalidateArticulated(reason); return false; };
-  if(!lock_valid_ || !f.hover)
-    return fail("requires valid synchronized attached HOVER state");
-  const auto contact_error = contactRejection(f);
-  if(!contact_error.empty())
-    return fail("invalid contact/feedback: " + contact_error);
-  if(last_body_message_stamp_ != f.body_stamp || last_joint_message_stamp_ != f.joint_stamp)
-    return fail("latest body/joint measurement was rejected; awaiting valid inputs");
-  if(!articulated_model_valid_)
-    return fail("invalid locked dynamics snapshot; recapture with valid inertias and geometry");
-  if(!dynamics_snapshot_current_ || !dynamics_snapshot_current_())
-    return fail("robot topology/inertia/extra modules changed since lock; recapture required");
-  if(!effort_source_valid_ || (effort_source_ == "gazebo_ode_joint_states" && !ros::Time::isSimTime()))
-    return fail("selected joint effort source is unavailable or incorrectly configured");
-  const double wall = roll_yaw::steadySeconds();
-  if(f.now - f.body_stamp > feedback_config_.max_execution_step)
-    return fail("dynamics observation timestamp exceeds maximum age");
-  if(momentum_observer_.stamp() > 0 && wall - articulated_receipt_ > feedback_config_.max_execution_step)
-    return fail("coherent dynamics observation gap exceeds maximum dt; rebase required");
-  auto coherent = [&](double stamp, double receipt)
+  std::lock_guard<std::recursive_mutex> l(perchingStateMutex());
+  if(auto interaction = interaction_.lock())
   {
-    return stamp > 0 && receipt > 0 && wall - receipt <= feedback_config_.timeout &&
-           f.now - stamp >= -feedback_config_.future_tolerance && f.now - stamp <= feedback_config_.timeout &&
-           std::abs(stamp - f.body_stamp) <= synchronization_tolerance_ &&
-           std::abs(stamp - f.joint_stamp) <= synchronization_tolerance_;
-  };
-  double oldest = std::min(f.body_stamp, f.joint_stamp), newest = std::max(f.body_stamp, f.joint_stamp);
-  Eigen::Vector3d joint_load = Eigen::Vector3d::Zero();
-  for(int i = 1; i < 3; ++i)
-  {
-    const auto it = dynamics_joints_.find(i == 1 ? roll_ : yaw_);
-    if(it == dynamics_joints_.end() || !coherent(it->second.stamp, it->second.receipt) ||
-       it->second.stamp != f.joint_stamp || !std::isfinite(it->second.effort) || !it->second.rate_valid)
-      return fail("missing/nonfinite/stale synchronized roll/yaw effort or rate");
-    joint_load[i] = it->second.effort;
+    call(interactionInput(feedback()));
+    if(publish_diagnostics)
+      publishRollYawDiagnostics();
   }
-  const double input_stamp = command_wrench_.header.stamp.toSec();
-  if(!coherent(input_stamp, command_wrench_receipt_))
-    return fail("missing/stale/unsynchronized world command wrench about CoG");
-  if(!command_cog_offset_.allFinite())
-    return fail("invalid command wrench CoG application point");
-  oldest = std::min(oldest, input_stamp);
-  newest = std::max(newest, input_stamp);
-  if(newest - oldest > synchronization_tolerance_)
-    return fail("full dynamics sample exceeds feedback synchronization tolerance");
-  roll_yaw::Estimate estimate;
-  Eigen::Vector3d q = f.eta, rate = f.joint_rate;
-  Eigen::Matrix3d j;
-  Eigen::Isometry3d body, cog;
-  if(!model_.estimate(f.body, q, estimate))
-    return fail("passive hinge position unavailable");
-  q[0] = estimate.alpha;
-  if(!model_.jacobian(q, j) || !model_.evaluate(q, body, cog))
-    return fail("body Jacobian/FK unavailable");
-  Eigen::JacobiSVD<Eigen::Matrix3d> svd(j, Eigen::ComputeFullU | Eigen::ComputeFullV);
-  if(svd.singularValues().minCoeff() < planning_config_.min_singular_value || j.col(0).squaredNorm() < 1e-10)
-    return fail("singular body Jacobian for generalized state reconstruction");
-  // StateEstimator publishes angular twist in BASELINK (child_frame) axes.
-  // Kinematics::jacobian has the same body axes and [alpha,roll,yaw] order.
-  const Eigen::Vector3d passive = f.body_omega - j.rightCols<2>() * rate.tail<2>();
-  rate[0] = j.col(0).dot(passive) / j.col(0).squaredNorm();
-  // External motion is not limited by commanded planner speeds. This residual
-  // tests the constrained velocity relation, not command tracking.
-  if(!rate.allFinite() || (j * rate - f.body_omega).norm() > planning_config_.rate_tolerance)
-    return fail("passive angular rate inconsistent with constrained body motion");
-  // Recheck physical state even when only part of the synchronized sample advances.
-  // Each body/joint/known-input sample is consumed at most once; repeated samples
-  // retain both the residual's timestamp and its matching projection Jacobian.
-  if(f.body_stamp <= articulated_body_stamp_ || f.joint_stamp <= articulated_joint_stamp_ ||
-     input_stamp <= articulated_command_stamp_)
-  {
-    if(f.body_stamp < articulated_body_stamp_ || f.joint_stamp < articulated_joint_stamp_ ||
-       input_stamp < articulated_command_stamp_)
-      return fail("dynamics measurement time moved backwards");
-    if(f.now - momentum_observer_.stamp() > feedback_config_.max_execution_step)
-      return fail("no advancing coherent dynamics sample within maximum dt");
-    return articulatedLoadValid(f);
-  }
-  const auto& w = command_wrench_.wrench;
-  const Eigen::Vector3d force(w.force.x, w.force.y, w.force.z), moment(w.torque.x, w.torque.y, w.torque.z);
-  // Both wrench and link Jacobians use world axes. Shift the moment from the
-  // command's instantaneous CoG to body B exactly once inside evaluate(). Only
-  // this input application point is live; all reduced inertial geometry stays
-  // at its captured internal configuration and current alpha/roll/yaw.
-  perching_dynamics::MultilinkModel::Evaluation result;
-  std::string reason;
-  if(!articulated_model_.evaluate(q, rate, joint_load, force, moment,
-                                 command_cog_offset_, result, reason))
-    return fail(reason);
-  const bool ready = momentum_observer_.observe(result.momentum, result.predicted_rate, f.body_stamp,
-                                                observer_gain_, feedback_config_.max_execution_step);
-  articulated_reason_ = momentum_observer_.reason();
-  if(!ready && momentum_observer_.stamp() == 0)
-    return fail(articulated_reason_);
-  articulated_body_stamp_ = f.body_stamp;
-  articulated_joint_stamp_ = f.joint_stamp;
-  articulated_command_stamp_ = input_stamp;
-  articulated_jacobian_ = j;
-  articulated_receipt_ = wall;
-  articulated_valid_ = ready;
-  return ready; // Bootstrap is not a valid zero-load observation.
+}
+
+aerial_robot_control::RollYawInteractionInput GimbalrotorPerchingNavigator::interactionInput(
+    const roll_yaw::Feedback& f) const
+{
+  return {model_, feedback_config_, planning_config_, f, planner_ ? &planner_->plan : nullptr,
+          planner_ ? planner_->stage : roll_yaw::Stage::FREE_FLIGHT, planner_ && planner_->stopping(), lock_valid_,
+          planner_ ? planner_->nominal_progress : 0, planner_ ? planner_->relief_available : 0,
+          synchronization_tolerance_, last_body_message_stamp_, last_joint_message_stamp_,
+          roll_yaw_lock_stamp_.toNSec(), producer_generation_, roll_, yaw_, world_, body_frame_, roll_yaw_prefix_,
+          dynamics_factory_, dynamics_snapshot_current_,
+          [this](const roll_yaw::Feedback& sample) { return contactRejection(sample); },
+          [this](const roll_yaw::Feedback& sample) { return preparationRejection(sample, final_target_); }};
 }
 
 void GimbalrotorPerchingNavigator::resetCompliance()
 {
-  // Path ownership/tare changes do not own physical observer history or inputs.
-  admittance_.reset();
-  external_wrench_ = geometry_msgs::WrenchStamped();
-  tare_requested_ = false;
-  interaction_valid_ = false;
-  interaction_stamp_ = 0;
-  interaction_receipt_ = 0;
-  compliance_time_ = 0;
-  admittance_reason_ = "disabled: prepare to measured READY, then no-cut tare with a fresh external wrench";
+  if(auto interaction = interaction_.lock())
+    interaction->resetCompliance();
 }
-void GimbalrotorPerchingNavigator::admittanceCallback(const std_msgs::BoolConstPtr& msg)
+
+void GimbalrotorPerchingNavigator::resetArticulatedSession(const std::string& reason)
 {
-  std::lock_guard<std::recursive_mutex> l(perchingStateMutex());
-  if(!msg->data)
-  {
-    admittance_.enabled = false;
-    admittance_reason_ = "disabled; bounded correction release along prepared path";
-  }
-  else if(!interaction_configured_ || !admittance_.config.valid())
-  {
-    admittance_reason_ =
-        "unavailable: invalid source, observer gain, admittance dynamics or legacy wrench mapping";
-  }
-  else if(interaction_source_ == InteractionSource::ARTICULATED_MOMENTUM && !articulatedLoadValid(feedback()))
-  {
-    admittance_reason_ = "unavailable: " + articulated_reason_;
-  }
-  else if(!planner_ || !planner_->plan.ok || planner_->plan.goal.align_only || planner_->stage != roll_yaw::Stage::READY ||
-          !preparationRejection(feedback(), final_target_).empty())
-  {
-    admittance_reason_ =
-        "unavailable: require a prepared cut at measured READY with current quiet/tracking/contact feedback";
-  }
-  else if(!admittance_.baseline_ready)
-  {
-    admittance_reason_ =
-        "unavailable: no completed baseline; tare at quiet no-cut READY with a fresh synchronized wrench";
-  }
-  else if(!interaction_valid_ || interaction_stamp_ <= 0 ||
-          ros::Time::now().toSec() - interaction_stamp_ > feedback_config_.timeout ||
-          roll_yaw::steadySeconds() - interaction_receipt_ > feedback_config_.timeout ||
-          std::abs(interaction_stamp_ - feedback().body_stamp) > synchronization_tolerance_)
-  {
-    admittance_reason_ = "unavailable: external wrench invalid, stale or unsynchronized with body feedback";
-  }
-  else
-  {
-    admittance_.enabled = true;
-    admittance_reason_ = "enabled/ready: approximate path interaction; assumed no-cut tare";
-  }
-  ROS_INFO_STREAM("[RollYaw] " << admittance_reason_);
-  publishRollYawDiagnostics();
+  if(auto interaction = interaction_.lock())
+    interaction->resetArticulatedSession(interactionInput(feedback()), reason);
 }
-void GimbalrotorPerchingNavigator::tareCallback(const std_msgs::EmptyConstPtr&)
+
+bool GimbalrotorPerchingNavigator::articulatedLoadValid(const roll_yaw::Feedback& f) const
 {
-  std::uint64_t session, generation;
-  {
-    std::lock_guard<std::recursive_mutex> l(perchingStateMutex());
-    session = roll_yaw_lock_stamp_.toNSec();
-    generation = producer_generation_;
-  }
-  ros::NodeHandle an(nh_, "navigation/roll_yaw_perching/admittance");
-  double sign = 0, scale = 0;
-  std::string frame, point;
-  an.param("wrench_sign", sign, interaction_topic_ == "estimated_external_wrench" ? 1.0 : 0.0);
-  an.param("wrench_scale", scale, interaction_topic_ == "estimated_external_wrench" ? 1.0 : 0.0);
-  an.param<std::string>("wrench_frame", frame, "world");
-  an.param<std::string>("wrench_point", point, "cog");
-  std::lock_guard<std::recursive_mutex> l(perchingStateMutex());
-  if(session != roll_yaw_lock_stamp_.toNSec() || generation != producer_generation_ || admittance_.enabled || !planner_ ||
-     planner_->stage != roll_yaw::Stage::READY || std::abs(admittance_.offset) > 1e-8 ||
-     !preparationRejection(feedback(), final_target_).empty())
-  {
-    admittance_reason_ =
-        "tare rejected: disable, wait for zero correction and measured READY cut; retry after state change";
-    return;
-  }
-  const bool source_changed = loadInteractionSource();
-  if(source_changed && interaction_source_ == InteractionSource::ARTICULATED_MOMENTUM && dynamics_factory_ && lock_valid_)
-    articulated_model_valid_ = dynamics_factory_(model_, articulated_model_, articulated_reason_);
-  admittance_.reset();
-  tare_requested_ = false;
-  interaction_valid_ = false;
-  interaction_sign_ = sign;
-  interaction_scale_ = scale;
-  interaction_frame_ = frame;
-  interaction_point_ = point;
-  interaction_configured_ = interactionConfigurationValid();
-  if(!interaction_configured_)
-  {
-    admittance_reason_ =
-        "tare rejected: invalid source, observer gain, admittance dynamics or legacy wrench mapping";
-    return;
-  }
-  if(!planner_ || !planner_->plan.ok || planner_->plan.goal.align_only || planner_->stage != roll_yaw::Stage::READY ||
-     admittance_.enabled || std::abs(admittance_.offset) > 1e-8)
-  {
-    admittance_reason_ = "tare rejected: require READY cut, disabled and zero correction; remove cutting contact";
-    return;
-  }
-  admittance_.reset();
-  tare_requested_ = true;
-  interaction_stamp_ = interaction_source_ == InteractionSource::LEGACY_WRENCH ? external_wrench_.header.stamp.toSec()
-                                                                            : momentum_observer_.stamp();
-  interaction_receipt_ = 0;
-  admittance_reason_ = "taring: operator asserts no cutting contact; collecting fresh quiet samples";
-}
-void GimbalrotorPerchingNavigator::externalWrenchCallback(const geometry_msgs::WrenchStampedConstPtr& msg)
-{
-  std::lock_guard<std::recursive_mutex> l(perchingStateMutex());
-  if(interaction_source_ != InteractionSource::LEGACY_WRENCH)
-    return;
-  const double t = msg->header.stamp.toSec(), now = ros::Time::now().toSec();
-  const auto& force = msg->wrench.force;
-  const auto& moment = msg->wrench.torque;
-  const std::string expected = interaction_frame_ == "world" ? world_ : body_frame_;
-  if(!std::isfinite(t) || t <= 0 || now - t > feedback_config_.timeout ||
-     now - t < -feedback_config_.future_tolerance || frameName(msg->header.frame_id) != frameName(expected) ||
-     !Eigen::Vector3d(force.x, force.y, force.z).allFinite() ||
-     !Eigen::Vector3d(moment.x, moment.y, moment.z).allFinite())
-  {
-    interaction_receipt_ = 0;
-    interaction_valid_ = false;
-    admittance_reason_ = "unavailable: external wrench frame/stamp/values invalid";
-    return;
-  }
-  if(t <= external_wrench_.header.stamp.toSec())
-    return;
-  external_wrench_ = *msg;
-  interaction_receipt_ = roll_yaw::steadySeconds();
-}
-bool GimbalrotorPerchingNavigator::observeInteractionSample(const roll_yaw::Feedback& f, double stamp, bool quiet)
-{
-  const auto& goal = planner_->plan.goal;
-  const double direction = goal.pitch_end >= goal.pitch_start ? 1 : -1;
-  bool fresh = false;
-  if(interaction_source_ == InteractionSource::ARTICULATED_MOMENTUM)
-  {
-    // Project the already observed residual with the Jacobian from THAT sample.
-    // A path/projection failure cannot invalidate the physical generalized load.
-    fresh = articulatedLoadValid(f) && std::isfinite(goal.pitch_start) && std::isfinite(goal.pitch_end) &&
-            goal.pitch_end != goal.pitch_start;
-    stamp = momentum_observer_.stamp();
-    if(fresh)
-    {
-      const auto& j = articulated_jacobian_;
-      Eigen::JacobiSVD<Eigen::Matrix3d> svd(j, Eigen::ComputeFullU | Eigen::ComputeFullV);
-      const Eigen::Vector3d tangent = svd.solve(direction * Eigen::Vector3d::UnitY());
-      interaction_torque_ = tangent.dot(momentum_observer_.load());
-      fresh = tangent.allFinite() && (j * tangent - direction * Eigen::Vector3d::UnitY()).norm() <= 1e-8 &&
-              std::isfinite(interaction_torque_);
-      if(fresh)
-        interaction_receipt_ = articulated_receipt_;
-    }
-  }
-  else if(interaction_source_ == InteractionSource::LEGACY_WRENCH)
-  {
-    roll_yaw::Estimate e;
-    Eigen::Vector3d q = f.eta;
-    Eigen::Isometry3d body, cog;
-    fresh = model_.estimate(f.body, q, e);
-    q[0] = e.alpha;
-    if(fresh)
-      fresh = model_.evaluate(q, body, cog);
-    if(fresh)
-    {
-      const auto& w = external_wrench_.wrench;
-      Eigen::Vector3d force(w.force.x, w.force.y, w.force.z), moment(w.torque.x, w.torque.y, w.torque.z);
-      if(interaction_frame_ == "body")
-      {
-        force = f.body.linear() * force;
-        moment = f.body.linear() * moment;
-      }
-      Eigen::Vector3d source = Eigen::Vector3d::Zero();
-      if(interaction_point_ == "body")
-        source = f.body.translation();
-      if(interaction_point_ == "cog")
-        source = f.body * (body.inverse() * cog).translation();
-      fresh = roll_yaw::pathInteractionTorque(model_, q, direction, planning_config_.min_singular_value, force, moment, source,
-                                    interaction_torque_);
-      interaction_torque_ *= interaction_sign_ * interaction_scale_;
-      fresh = fresh && std::isfinite(interaction_torque_);
-    }
-  }
-  if(fresh)
-  {
-    if(stamp > interaction_stamp_)
-      admittance_.observe(interaction_torque_, stamp, tare_requested_ && quiet && planner_->stage == roll_yaw::Stage::READY);
-    interaction_stamp_ = stamp;
-    if(tare_requested_ && admittance_.baseline_ready)
-    {
-      tare_requested_ = false;
-      admittance_reason_ = "disabled/ready: no-cut baseline complete; enable explicitly";
-    }
-  }
-  return fresh;
+  if(auto interaction = interaction_.lock())
+    return interaction->articulatedLoadValid(interactionInput(f), f);
+  return false;
 }
 
 void GimbalrotorPerchingNavigator::updateInteraction(const roll_yaw::Feedback& f)
 {
-  const double dt = compliance_time_ > 0 ? f.now - compliance_time_ : 0;
-  compliance_time_ = f.now;
-  if(!planner_ || !planner_->plan.ok || planner_->plan.goal.align_only)
+  if(auto interaction = interaction_.lock())
   {
-    interaction_valid_ = false;
-    return;
-  }
-  const bool articulated = interaction_source_ == InteractionSource::ARTICULATED_MOMENTUM;
-  const double stamp = articulated ? momentum_observer_.stamp() : external_wrench_.header.stamp.toSec();
-  bool scalar_failed = false;
-  bool fresh = interaction_configured_ && contactRejection(f).empty() &&
-               stamp > 0 && f.now - stamp >= -feedback_config_.future_tolerance &&
-               f.now - stamp <= feedback_config_.timeout &&
-               std::abs(stamp - f.body_stamp) <= synchronization_tolerance_;
-  if(articulated)
-    fresh = fresh && articulatedLoadValid(f);
-  else
-    fresh = fresh && interaction_receipt_ > 0 &&
-            roll_yaw::steadySeconds() - interaction_receipt_ <= feedback_config_.timeout;
-  const bool quiet = f.body_omega.norm() < feedback_config_.settle_body_rate &&
-                     f.joint_rate.tail<2>().norm() < feedback_config_.settle_joint_rate &&
-                     (!tare_requested_ || preparationRejection(f, final_target_).empty());
-  if(tare_requested_ && !quiet)
-  {
-    admittance_.reset();
-    admittance_reason_ = "tare waiting for quiet no-cut posture";
-  }
-  if(fresh && !articulated && stamp == interaction_stamp_)
-    fresh = interaction_valid_;
-  if(fresh && (articulated || stamp > interaction_stamp_))
-  {
-    fresh = observeInteractionSample(f, stamp, quiet);
-  }
-  if(articulated && !fresh && articulatedLoadValid(f))
-    invalidateInteraction(); // Source is valid; only the path/compliance contract failed.
-  if(articulated && admittance_.enabled && !admittance_.baseline_ready)
-    fresh = false; // A fault requires explicit disarm and a new no-contact tare.
-  if(tare_requested_ && !fresh)
-  {
-    admittance_.reset();
-    admittance_reason_ = "tare waiting for a continuous fresh synchronized no-cut source";
-  }
-  if(admittance_.enabled && !fresh)
-    admittance_reason_ =
-        "stale/unavailable interaction: bounded path stop, correction braking/held; original goal retained";
-  else if(admittance_.enabled)
-    admittance_reason_ = "enabled/ready: approximate external work, resistance reduces penetration";
-  if(articulated && !fresh)
-    admittance_reason_ = (articulatedLoadValid(f) ? "signed path projection/compliance unavailable"
-                                                : "articulated unavailable: " + articulated_reason_) +
-                         (admittance_.enabled ? "; feed held; compliance baseline requires explicit disarm/tare" : "");
-  // Observation/filtering continues at a hold; integration never advances an
-  // invisible correction while explicitly PAUSED, aligning or READY.
-  if(planner_->stage == roll_yaw::Stage::EXECUTING && !planner_->stopping() &&
-     (admittance_.enabled || std::abs(admittance_.offset) > 1e-10 || std::abs(admittance_.rate) > 1e-10))
-  {
-    const auto& plan = planner_->plan;
-    double angle = 0, cross = 0;
-    const Eigen::Matrix3d pre = roll_yaw::cuttingOrientation(plan.neutral, plan.goal, 0, 0, 0).rotation;
-    const bool mapped =
-        roll_yaw::taskPitch(pre, plan.cut.desired(planner_->nominal_progress).rotation, plan.goal.pitch_start, angle, cross);
-    const double available =
-        std::max(0.0, (plan.goal.pitch_end >= plan.goal.pitch_start ? 1 : -1) * (angle - plan.goal.pitch_start));
-    if(!mapped || dt <= 0 || dt > feedback_config_.max_execution_step ||
-       !admittance_.step(dt, fresh, true, std::min(available, planner_->relief_available)))
+    const auto out = interaction->updateInteraction(interactionInput(f), f);
+    if(planner_ && out.updated)
     {
-      fresh = false;
-      scalar_failed = true;
-      admittance_reason_ = "scalar state unavailable; bounded feed hold";
+      planner_->relief = out.relief;
+      planner_->interaction_hold = out.interaction_hold;
+      planner_->resisting_load = out.resisting_load;
+      planner_->relief_enabled = out.relief_enabled;
+      planner_->relief_angle_limit = out.relief_angle_limit;
+      planner_->relief_rate_limit = out.relief_rate_limit;
+      planner_->relief_acceleration_limit = out.relief_acceleration_limit;
     }
   }
-  if(articulated && scalar_failed)
-    invalidateInteraction();
-  interaction_valid_ = fresh;
-  planner_->relief = std::min(0.0, admittance_.offset);
-  planner_->interaction_hold = (admittance_.enabled && !fresh) || scalar_failed;
-  planner_->resisting_load = admittance_.enabled && fresh && admittance_.contact;
-  planner_->relief_enabled = admittance_.enabled;
-  planner_->relief_angle_limit = admittance_.config.angle_limit;
-  planner_->relief_rate_limit = admittance_.config.rate_limit;
-  planner_->relief_acceleration_limit = admittance_.config.acceleration_limit;
 }
+
 void GimbalrotorPerchingNavigator::resetRollYawPitchRezeroState()
 {
   roll_yaw_pitch_rezero_state_ = RollYawPitchRezeroState::IDLE;
@@ -5671,9 +5042,8 @@ void GimbalrotorPerchingNavigator::rollYawPitchRezeroCallback(const std_msgs::Em
   resetCompliance();
   resetArticulatedSession("pitch rezero recaptured model coordinates; awaiting coherent dynamics sample");
   model_ = std::move(model);
-  articulated_model_valid_ = false;
-  if(interaction_source_ == InteractionSource::ARTICULATED_MOMENTUM && dynamics_factory_)
-    articulated_model_valid_ = dynamics_factory_(model_, articulated_model_, articulated_reason_);
+  if(auto interaction = interaction_.lock())
+    interaction->captureModel(interactionInput(feedback()));
   final_target_ = held;
   nominal_ = rezero_frozen_ = frozen;
   rezero_started_ = rezero_previous_time_ = f.body_stamp;
@@ -5833,6 +5203,14 @@ void GimbalrotorPerchingNavigator::applyRollYawTarget()
   target_applied_this_update_ = true;
   if(!lock_valid_ || !feedback().hover)
     return;
+  const auto interaction = interaction_.lock();
+  if(!interaction)
+  {
+    faultHold("roll-yaw interaction controller unavailable");
+    commandRollYawBaselinkPose(final_target_);
+    publishRollYawJointTarget();
+    return;
+  }
   const auto f = feedback();
   const bool clock_valid = preparation_clock_ == 0 || f.now >= preparation_clock_;
   preparation_clock_ = f.now;
@@ -5842,8 +5220,8 @@ void GimbalrotorPerchingNavigator::applyRollYawTarget()
     faultHold("robot topology/inertia/extra modules changed since lock; recapture required");
   // Raw observation belongs to contact, independently of planner/control faults,
   // preparation, tracking, stop and compliance. It checks its own physical inputs.
-  if(interaction_source_ == InteractionSource::ARTICULATED_MOMENTUM)
-    observeArticulatedSample(f);
+  if(interaction->articulated())
+    interaction->observeArticulatedSample(interactionInput(f), f);
   bool hard_fault = false;
   const auto why = contactRejection(f, &hard_fault);
   if(hard_fault)
@@ -5889,7 +5267,7 @@ void GimbalrotorPerchingNavigator::applyRollYawTarget()
         pitch_velocity_.expires = f.now;
     }
     manual_time_ = f.now;
-    compliance_time_ = f.now;
+    interaction->waitForFeedback(f.now);
     preparation_window_.reset();
     preparation_stats_ = roll_yaw::SettlingStatistics();
     preparation_ready_ = false;
@@ -5907,11 +5285,7 @@ void GimbalrotorPerchingNavigator::applyRollYawTarget()
       planner_->applied = final_target_;
       planner_->applied_valid = true;
       planner_->waitForFeedback(f.now, reason_);
-      admittance_.offset = admittance_.enabled || std::abs(admittance_.offset) > 1e-10
-                               ? std::clamp(planner_->applied_relief, -admittance_.config.angle_limit, 0.0)
-                               : 0;
-      admittance_.rate = admittance_.acceleration = 0;
-      planner_->relief = admittance_.offset;
+      planner_->relief = interaction->holdReference(planner_->applied_relief);
     }
     if(stop_pending_ && !retarget_pending_)
       completeStop("observation hold completed cancellation");
@@ -5974,30 +5348,14 @@ void GimbalrotorPerchingNavigator::applyRollYawTarget()
         advancePreparedConnection();
       if(planner_ && !faulted_)
       {
-        const auto before_compliance = admittance_;
         updateInteraction(f);
         planner_->applied = final_target_;
         planner_->applied_valid = true;
         planner_->tick(f);
-        if(!planner_->reference_updated)
-        {
-          // Keep fresh observation/filter history, but commit correction dynamics
-          // only with an accepted reference step (clock/bootstrap returns included).
-          admittance_.offset = before_compliance.offset;
-          admittance_.rate = before_compliance.rate;
-          admittance_.acceleration = before_compliance.acceleration;
-          planner_->relief = admittance_.offset;
-        }
-        if(planner_->stage == roll_yaw::Stage::PAUSED)
-        {
-          // Reconcile against the actual held on-path reference. No hidden spring
-          // displacement or velocity is accumulated across a long pause.
-          admittance_.offset = admittance_.enabled || std::abs(admittance_.offset) > 1e-10
-                                   ? std::clamp(planner_->applied_relief, -admittance_.config.angle_limit, 0.0)
-                                   : 0;
-          admittance_.rate = admittance_.acceleration = 0;
-          planner_->relief = admittance_.offset;
-        }
+        const double relief = interaction->reconcileReference(planner_->reference_updated,
+            planner_->stage == roll_yaw::Stage::PAUSED, planner_->applied_relief);
+        if(!planner_->reference_updated || planner_->stage == roll_yaw::Stage::PAUSED)
+          planner_->relief = relief;
         if(planner_->stage == roll_yaw::Stage::FAULT_HOLD)
           faultHold("trajectory fault: " + planner_->first_fault);
         else
@@ -6036,9 +5394,9 @@ void GimbalrotorPerchingNavigator::updateRollYaw()
 {
   const double update_started = roll_yaw::steadySeconds();
   std::lock_guard<std::recursive_mutex> l(perchingStateMutex());
-  if(interaction_source_ == InteractionSource::ARTICULATED_MOMENTUM &&
-     (!lock_valid_ || !feedback().hover))
-    invalidateArticulated("requires a valid attached HOVER session");
+  const auto interaction = interaction_.lock();
+  if(interaction && interaction->articulated() && (!lock_valid_ || !feedback().hover))
+    interaction->invalidateArticulated(interactionInput(feedback()), "requires a valid attached HOVER session");
   if(force_landing_flag_ && ownsRollYawTargets())
     selectPerchingMode(perching_geometry::Mode::NORMAL, false);
   if(lock_valid_ && perchingSession().lock_stamp != roll_yaw_lock_stamp_)
@@ -6091,12 +5449,18 @@ void GimbalrotorPerchingNavigator::updateRollYaw()
     if(!planner_)
       updateInteraction(feedback());
   }
-  publishArticulatedLoad(); // Navigation cadence, independent of diagnostic throttling/subscribers.
+  if(interaction)
+    interaction->publishArticulatedLoad(interactionInput(feedback())); // Independent of diagnostic throttling/subscribers.
   publishRollYawDiagnostics();
   navigation_wall_ = roll_yaw::steadySeconds() - update_started;
 }
 void GimbalrotorPerchingNavigator::publishRollYawDiagnostics()
 {
+  const auto interaction = interaction_.lock();
+  if(!interaction)
+    return; // The controller registers after both plugin initializers have run.
+  const auto& interaction_diagnostic = interaction->diagnostics();
+  using InteractionSource = aerial_robot_control::RollYawInteraction::InteractionSource;
   const auto f = feedback();
   const double now = roll_yaw::steadySeconds();
   const std::string transition = !ownsRollYawTargets()                          ? "FREE_FLIGHT"
@@ -6118,7 +5482,7 @@ void GimbalrotorPerchingNavigator::publishRollYawDiagnostics()
     return;
   last_diagnostics_ = now;
   if(lock_valid_)
-    ROS_INFO_STREAM_THROTTLE(2.0, "[RollYaw] " << transition << ": " << reason_ << "; " << admittance_reason_);
+    ROS_INFO_STREAM_THROTTLE(2.0, "[RollYaw] " << transition << ": " << reason_ << "; " << interaction_diagnostic.admittance_reason_);
   std_msgs::UInt64 session;
   session.data = lock_valid_ ? roll_yaw_lock_stamp_.toNSec() : 0;
   session_pub_.publish(session);
@@ -6204,7 +5568,7 @@ void GimbalrotorPerchingNavigator::publishRollYawDiagnostics()
       << " rezero_sign=" << rezero_sign_ << " manual_receipt=" << manual_receipt_stamp_.toSec()
       << " ignored_body_stamps=" << body_ignored_stamps_ << " ignored_joint_stamps=" << joint_ignored_stamps_;
   out << " pivot_limit=" << feedback_config_.pivot_tolerance << " hinge_limit=" << feedback_config_.hinge_tolerance
-      << " first_fault=[" << previous_failure_ << "] admittance=[" << admittance_reason_ << "]";
+      << " first_fault=[" << previous_failure_ << "] admittance=[" << interaction_diagnostic.admittance_reason_ << "]";
   if(planner_ && !planner_->plan.goal.align_only)
     out << " phase_s=" << planner_->progress << " planned_pitch=" << planner_->planned_pitch
         << " measured_pitch=" << planner_->task.raw << " measured_progress_rad=" << planner_->task.current
@@ -6333,10 +5697,10 @@ void GimbalrotorPerchingNavigator::publishRollYawDiagnostics()
                                    f.now - planner_->task.stamp <= feedback_config_.timeout &&
                                    contactRejection(f).empty();
   const bool raw_load_valid = articulatedLoadValid(f);
-  const bool fresh_torque = interaction_valid_ && interaction_stamp_ > 0 && !faulted_ &&
-                            f.now - interaction_stamp_ <= feedback_config_.timeout &&
-                            now - interaction_receipt_ <= feedback_config_.timeout &&
-                            (interaction_source_ != InteractionSource::ARTICULATED_MOMENTUM || raw_load_valid);
+  const bool fresh_torque = interaction_diagnostic.interaction_valid_ && interaction_diagnostic.interaction_stamp_ > 0 && !faulted_ &&
+                            f.now - interaction_diagnostic.interaction_stamp_ <= feedback_config_.timeout &&
+                            now - interaction_diagnostic.interaction_receipt_ <= feedback_config_.timeout &&
+                            (interaction_diagnostic.interaction_source_ != InteractionSource::ARTICULATED_MOMENTUM || raw_load_valid);
   field("goal_valid", goal_valid);
   field("original_goal_rad", goal_valid ? planner_->plan.goal.pitch_end : nan);
   field("planned_pitch_rad", goal_valid ? planner_->planned_pitch : nan);
@@ -6373,55 +5737,55 @@ void GimbalrotorPerchingNavigator::publishRollYawDiagnostics()
   field("settling_joint_limit_rad_s", feedback_config_.settle_joint_rate);
   field("settling_mean_limit_rad_s", feedback_config_.settle_mean_rate);
   field("settling_timeout_s", feedback_config_.settle_timeout);
-  field("admittance_enabled", admittance_.enabled);
-  field("admittance_status", admittance_reason_);
-  field("contact", admittance_.contact);
-  field("baseline_ready", admittance_.baseline_ready);
-  field("baseline_samples", admittance_.samples);
-  field("bias_Nm", admittance_.baseline_ready ? admittance_.bias : nan);
+  field("admittance_enabled", interaction_diagnostic.admittance_.enabled);
+  field("admittance_status", interaction_diagnostic.admittance_reason_);
+  field("contact", interaction_diagnostic.admittance_.contact);
+  field("baseline_ready", interaction_diagnostic.admittance_.baseline_ready);
+  field("baseline_samples", interaction_diagnostic.admittance_.samples);
+  field("bias_Nm", interaction_diagnostic.admittance_.baseline_ready ? interaction_diagnostic.admittance_.bias : nan);
   field("task_torque_valid", fresh_torque);
-  field("task_torque_Nm", fresh_torque ? interaction_torque_ : nan);
-  field("torque_stamp_s", interaction_stamp_);
-  field("interaction_source", interaction_source_name_);
-  field("legacy_wrench_topic", interaction_topic_);
+  field("task_torque_Nm", fresh_torque ? interaction_diagnostic.interaction_torque_ : nan);
+  field("torque_stamp_s", interaction_diagnostic.interaction_stamp_);
+  field("interaction_source", interaction_diagnostic.interaction_source_name_);
+  field("legacy_wrench_topic", interaction_diagnostic.interaction_topic_);
   field("articulated_ready", raw_load_valid);
-  field("articulated_status", interaction_source_ != InteractionSource::ARTICULATED_MOMENTUM
-                                  ? "not selected: " + interaction_source_name_
-                                  : momentum_observer_.ready() && !raw_load_valid
-                                        ? "cached sample no longer current/physically valid: " + articulated_reason_
-                                        : articulated_reason_);
+  field("articulated_status", interaction_diagnostic.interaction_source_ != InteractionSource::ARTICULATED_MOMENTUM
+                                  ? "not selected: " + interaction_diagnostic.interaction_source_name_
+                                  : interaction->observerReady() && !raw_load_valid
+                                        ? "cached sample no longer current/physically valid: " + interaction_diagnostic.articulated_reason_
+                                        : interaction_diagnostic.articulated_reason_);
   field("generalized_external_load_valid", raw_load_valid);
   field("articulated_model_assumption", "captured internal gimbal geometry; gimbal motion/coupling dynamics omitted");
   std::string gimbal_names;
   for(const auto& name : rotor_gimbal_joints_)
     gimbal_names += (gimbal_names.empty() ? "" : ",") + name;
   field("reduced_model_rotor_gimbal_joints", gimbal_names);
-  field("joint_effort_contract", effort_contract_);
-  field("joint_effort_source", effort_source_);
-  field("joint_effort_producer", effort_producer_);
-  field("joint_effort_topic", effort_topic_);
-  field("joint_effort_source_valid", effort_source_valid_);
+  field("joint_effort_contract", interaction_diagnostic.effort_contract_);
+  field("joint_effort_source", interaction_diagnostic.effort_source_);
+  field("joint_effort_producer", interaction_diagnostic.effort_producer_);
+  field("joint_effort_topic", interaction_diagnostic.effort_topic_);
+  field("joint_effort_source_valid", interaction_diagnostic.effort_source_valid_);
   field("generalized_coordinate_order", "alpha," + roll_ + "," + yaw_);
-  field("generalized_load_stamp_s", momentum_observer_.stamp());
-  field("generalized_load_age_s", momentum_observer_.stamp() > 0 ? f.now - momentum_observer_.stamp() : nan);
+  field("generalized_load_stamp_s", interaction->observerStamp());
+  field("generalized_load_age_s", interaction->observerStamp() > 0 ? f.now - interaction->observerStamp() : nan);
   for(int i = 0; i < 3; ++i)
-    field("generalized_external_load_Nm_" + std::to_string(i), raw_load_valid ? momentum_observer_.load()[i] : nan);
-  field("interaction_frame", interaction_frame_);
-  field("interaction_point", interaction_point_);
-  field("interaction_sign", interaction_sign_);
-  field("interaction_scale", interaction_scale_);
-  field("torque_age_s", interaction_stamp_ > 0 ? f.now - interaction_stamp_ : nan);
-  field("reference_torque_Nm", admittance_.config.reference_torque);
-  field("filtered_contact_torque_Nm", admittance_.baseline_ready ? admittance_.filtered : nan);
+    field("generalized_external_load_Nm_" + std::to_string(i), raw_load_valid ? interaction->observerLoad()[i] : nan);
+  field("interaction_frame", interaction_diagnostic.interaction_frame_);
+  field("interaction_point", interaction_diagnostic.interaction_point_);
+  field("interaction_sign", interaction_diagnostic.interaction_sign_);
+  field("interaction_scale", interaction_diagnostic.interaction_scale_);
+  field("torque_age_s", interaction_diagnostic.interaction_stamp_ > 0 ? f.now - interaction_diagnostic.interaction_stamp_ : nan);
+  field("reference_torque_Nm", interaction_diagnostic.admittance_.config.reference_torque);
+  field("filtered_contact_torque_Nm", interaction_diagnostic.admittance_.baseline_ready ? interaction_diagnostic.admittance_.filtered : nan);
   double effective_offset = nan;
   if(goal_valid && !planner_->plan.goal.align_only && planner_->plan.ok)
   {
     effective_offset = planner_->applied_relief;
   }
   field("effective_offset_rad", effective_offset);
-  field("offset_rad", admittance_.offset);
-  field("offset_rate_rad_s", admittance_.rate);
-  field("offset_acceleration_rad_s2", admittance_.acceleration);
+  field("offset_rad", interaction_diagnostic.admittance_.offset);
+  field("offset_rate_rad_s", interaction_diagnostic.admittance_.rate);
+  field("offset_acceleration_rad_s2", interaction_diagnostic.admittance_.acceleration);
   field("navigation_wall_s", navigation_wall_);
   array.status.push_back(std::move(diagnostic));
   status_pub_.publish(array);
@@ -6434,9 +5798,9 @@ void GimbalrotorPerchingNavigator::publishRollYawDiagnostics()
   if(goal_valid && measured_task_valid &&
      std::isfinite(plot.vector.x) && std::isfinite(plot.vector.y) && std::isfinite(plot.vector.z))
     task_pub_.publish(plot);
-  plot.vector.x = admittance_.offset;
-  plot.vector.y = admittance_.rate;
-  plot.vector.z = fresh_torque ? interaction_torque_ : nan;
+  plot.vector.x = interaction_diagnostic.admittance_.offset;
+  plot.vector.y = interaction_diagnostic.admittance_.rate;
+  plot.vector.z = fresh_torque ? interaction_diagnostic.interaction_torque_ : nan;
   if(fresh_torque && std::isfinite(plot.vector.x) && std::isfinite(plot.vector.y) && std::isfinite(plot.vector.z))
     compliance_pub_.publish(plot);
 }
