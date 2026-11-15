@@ -162,6 +162,14 @@ void accumulateLinkInertia(KDL::RigidBodyInertia& total, const KDL::Frame& frame
 
 namespace roll_yaw
 {
+// Thread-local accounting: workers and main-loop samples never contend.
+struct WorkCounters
+{
+  std::uint64_t fast_model = 0, body_fk = 0, full_tree = 0;
+  double nonlinear_validation_wall = 0;
+};
+WorkCounters& workCounters();
+
 using Vec = Eigen::Vector3d;
 using Mat = Eigen::Matrix3d;
 using Pose = Eigen::Isometry3d;
@@ -487,6 +495,7 @@ struct PlanningConfig
   std::function<bool()> cancelled;
   std::function<void(int, int, bool)> report;
   bool mechanismValid() const;
+  bool onlineValid() const;
   bool valid() const;
 };
 struct Desired
@@ -564,6 +573,11 @@ bool mechanismAllowed(const Kinematics&, const Eigen::Vector3d&, const PlanningC
 bool mechanismReference(const Kinematics&, const Eigen::Vector3d&, const Eigen::Vector3d&, const Eigen::Vector3d&,
                         Reference&);
 bool referenceAllowed(const Reference&, const PlanningConfig&, std::string&);
+// One bounded double-integrator step; braking retains the accepted destination.
+// The caller substeps actual elapsed ROS time and commits only a validated interval.
+bool followMechanism(const Kinematics&, const Reference&, const Eigen::Vector3d& goal,
+                     double dt, double integration_step, bool brake, const PlanningConfig&, Reference&, std::string&);
+bool mechanismBrakingAllowed(const Kinematics&, const Reference&, double integration_step, const PlanningConfig&, std::string&);
 // Short online local-Y continuation. Cubic scalar velocity preserves both
 // endpoint rates and accelerations; its analytic integral right-multiplies R_wb.
 // A zero end_rate/end_acceleration is a bounded braking continuation, not a goal.
@@ -584,7 +598,7 @@ bool validatedMechanismPath(const Kinematics&, const Reference&, const Eigen::Ve
 bool mechanismPath(const Kinematics&, const Reference&, const Eigen::Vector3d&, const PlanningConfig&, Path&,
                    std::string&);
 bool inverseOrientation(const Kinematics&, const Eigen::Matrix3d&, const Eigen::Vector3d& seed, const PlanningConfig&,
-                        Eigen::Vector3d&, std::string&);
+                        Eigen::Vector3d&, std::string&, int iterations = 40);
 Plan prepare(const Kinematics&, const Eigen::Vector3d& initial, const Eigen::Matrix3d& neutral, const Request&,
              const PlanningConfig&);
 
@@ -619,13 +633,18 @@ struct ExecutionConfig
   bool settle_use_window = false;
   double settle_body_rate = .05, settle_joint_rate = .03, settle_mean_rate = .02;
   bool require_settled_on_enable = false;
-  double max_execution_step = .05;  // 40 Hz nominal, bounded jitter allowance
+  double max_execution_step = .05;  // numerical integration budget, seconds
+  double max_execution_gap = .15;   // forward outage threshold, seconds; never catch up beyond it
+  double observer_max_interval = .15; // independent momentum-observer sample interval, seconds
+  // -1: outage/invalid clock; 0: paused time; 1..8: bounded integration work.
+  int integrationSteps(double elapsed) const;
   double soft_tracking_fraction = .6, resume_fraction = .5;
   double preparation_tolerance = .03, preparation_quiet_time = .3;
   double reference_lead = .018, progress_filter_time = .15, goal_tolerance = .0087;
   double progress_timeout = 30;
   bool governorValid(const PlanningConfig&) const;
   bool feedbackConfigValid() const;
+  bool motionConfigValid() const;
   bool settlingValid() const;
   bool valid() const;
 };
@@ -687,16 +706,19 @@ public:
   bool submissionMatches(const Plan&, const Feedback&, const Reference&) const;
   bool command(const std::string&, std::uint64_t);
   void tick(const Feedback&);
+  std::function<void()> referenceRollback(); // Fixed-size numerical state; excludes model/plan.
   void waitForFeedback(double now, const std::string&);
   void fault(const std::string&);
   void reset();
   void hold(const std::string&);
 
 private:
+  void advanceMotion(const Feedback&, double dt);
   void resetSettling();
   SettlingWindow settling_window_;
   double last_time_ = 0, stable_since_ = 0, ready_since_ = 0, speed_ = 1;
   double lag_since_ = 0, settling_stamp_ = 0, best_forward_ = 0;
+  double recovery_body_stamp_ = 0, recovery_joint_stamp_ = 0;
   bool governor_hold_ = false, feedback_waiting_ = false, resume_after_feedback_ = false;
   bool stopping_ = false, cancel_ = false, paused_align_ = false, motion_clock_pending_ = false;
 };

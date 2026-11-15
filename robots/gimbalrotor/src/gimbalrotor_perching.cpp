@@ -34,6 +34,20 @@ void accumulateLinkInertia(KDL::RigidBodyInertia& total, const KDL::Frame& frame
 
 namespace roll_yaw
 {
+WorkCounters& workCounters()
+{
+  thread_local WorkCounters counters;
+  return counters;
+}
+namespace
+{
+struct ValidationTimer
+{
+  double started = steadySeconds();
+  ~ValidationTimer() { workCounters().nonlinear_validation_wall += steadySeconds() - started; }
+};
+}
+
 Eigen::Vector3d logSO3(const Eigen::Matrix3d& r)
 {
   Eigen::AngleAxisd a(r);
@@ -66,58 +80,114 @@ Eigen::Isometry3d fromKdl(const KDL::Frame& f)
 }
 namespace
 {
-// Each copy owns both its FK solver and joint buffer. Planning workers never
-// evaluate against a mutable live RobotModel or share mutable FK storage.
+// Collapse only edges whose joint positions are captured constants. Each active
+// joint starts a new rigid mass group; membership follows topology, never names.
+// Evaluation has three groups, two joint poses, and stack-local scratch. The
+// body may belong to any group (including a reversed body/contact chain).
 class ArticulatedCogSnapshot
 {
-public:
-  ArticulatedCogSnapshot(const KDL::Tree& tree, KDL::JntArray joints,
-                         std::map<std::string, KDL::RigidBodyInertia> inertia,
-                         std::map<std::string, KDL::Segment> extra, std::string base, KDL::Rotation relative,
-                         unsigned roll_index, unsigned yaw_index)
-      : fk_(tree),
-        joints_(std::move(joints)),
-        inertia_(std::move(inertia)),
-        extra_(std::move(extra)),
-        base_(std::move(base)),
-        relative_(relative),
-        roll_index_(roll_index),
-        yaw_index_(yaw_index)
+  struct Group
   {
+    std::size_t parent = 0;
+    int coordinate = 0;
+    KDL::Frame parent_to_joint = KDL::Frame::Identity();
+    KDL::Segment segment;
+    double mass = 0;
+    KDL::Vector moment = KDL::Vector::Zero();
+  };
+  std::vector<Group> groups_;
+  std::size_t body_group_ = 0;
+  KDL::Frame group_to_body_ = KDL::Frame::Identity();
+  KDL::Rotation relative_;
+  double mass_ = 0;
+  bool valid_ = false;
+
+public:
+  ArticulatedCogSnapshot(const KDL::Tree& tree, const KDL::JntArray& joints,
+                         const std::map<std::string, KDL::RigidBodyInertia>& inertia,
+                         const std::map<std::string, KDL::Segment>& extra, const std::string& base,
+                         KDL::Rotation relative, unsigned roll_index, unsigned yaw_index)
+      : relative_(relative)
+  {
+    if(roll_index == yaw_index || roll_index >= joints.rows() || yaw_index >= joints.rows() ||
+       !joints.data.allFinite())
+      return;
+    groups_.push_back(Group());
+    std::size_t masses = 0;
+    unsigned active = 0;
+    bool body_found = false, valid = true;
+    for(const auto& module : extra)
+      if(!inertia.count(module.second.getName()))
+        return; // Do not silently lose an unattached module.
+    std::function<void(KDL::SegmentMap::const_iterator, std::size_t, KDL::Frame, bool)> append;
+    append = [&](KDL::SegmentMap::const_iterator it, std::size_t group, KDL::Frame pose, bool root)
+    {
+      if(!root)
+      {
+        const auto& segment = GetTreeElementSegment(it->second);
+        const bool moving = segment.getJoint().getType() != KDL::Joint::None;
+        const unsigned index = GetTreeElementQNr(it->second);
+        if(moving && index >= joints.rows()) { valid = false; return; }
+        const int coordinate = moving && index == roll_index ? 1 : moving && index == yaw_index ? 2 : 0;
+        if(coordinate)
+        {
+          Group next;
+          next.parent = group;
+          next.coordinate = coordinate;
+          next.parent_to_joint = pose;
+          next.segment = segment;
+          group = groups_.size();
+          groups_.push_back(next);
+          pose = KDL::Frame::Identity();
+          active |= 1u << (coordinate - 1);
+        }
+        else
+          pose = pose * segment.pose(moving ? joints(index) : 0);
+      }
+      if(it->first == base)
+      {
+        body_found = true;
+        body_group_ = group;
+        group_to_body_ = pose;
+      }
+      const auto item = inertia.find(it->first);
+      if(item != inertia.end())
+      {
+        KDL::RigidBodyInertia total = KDL::RigidBodyInertia::Zero();
+        perching_geometry::accumulateLinkInertia(total, pose, item->first, item->second, extra);
+        const double m = total.getMass();
+        if(!std::isfinite(m) || m < 0) valid = false;
+        groups_[group].mass += m;
+        groups_[group].moment = groups_[group].moment + m * total.getCOG();
+        mass_ += m;
+        ++masses;
+      }
+      for(const auto& child : GetTreeElementChildren(it->second))
+        append(child, group, pose, false);
+    };
+    append(tree.getRootSegment(), 0, KDL::Frame::Identity(), true);
+    valid_ = valid && body_found && active == 3 && groups_.size() == 3 &&
+             masses == inertia.size() && std::isfinite(mass_) && mass_ > 0;
   }
 
-  bool evaluate(const Eigen::Vector3d& q, Eigen::Isometry3d& bg)
+  bool evaluate(const Eigen::Vector3d& q, Eigen::Isometry3d& bg) const
   {
-    if(!q.allFinite() || roll_index_ >= joints_.rows() || yaw_index_ >= joints_.rows())
-      return false;
-    joints_(roll_index_) = q[1];
-    joints_(yaw_index_) = q[2];
-    KDL::Frame body;
-    if(fk_.JntToCart(joints_, body, base_) < 0)
-      return false;
-    KDL::RigidBodyInertia total = KDL::RigidBodyInertia::Zero();
-    for(const auto& item : inertia_)
+    ++workCounters().fast_model;
+    if(!valid_ || !q.allFinite()) return false;
+    std::array<KDL::Frame, 3> poses;
+    poses[0] = KDL::Frame::Identity();
+    KDL::Vector moment = groups_[0].moment;
+    for(std::size_t i = 1; i < groups_.size(); ++i)
     {
-      KDL::Frame frame;
-      if(fk_.JntToCart(joints_, frame, item.first) < 0)
-        return false;
-      perching_geometry::accumulateLinkInertia(total, frame, item.first, item.second, extra_);
+      const auto& group = groups_[i];
+      poses[i] = poses[group.parent] * group.parent_to_joint * group.segment.pose(q[group.coordinate]);
+      moment = moment + poses[i].M * group.moment + group.mass * poses[i].p;
     }
-    if(!std::isfinite(total.getMass()) || total.getMass() <= 0)
-      return false;
-    // relative_ is R_GB, the existing model's desired CoG orientation.
-    bg = fromKdl(KDL::Frame(relative_.Inverse(), body.Inverse() * total.getCOG()));
+    const auto body = poses[body_group_] * group_to_body_;
+    // Preserve R_GB from the captured model, not principal inertia axes.
+    bg = fromKdl(KDL::Frame(relative_.Inverse(), body.Inverse() * (moment / mass_)));
     return poseValid(bg);
   }
-
-private:
-  KDL::TreeFkSolverPos_recursive fk_;
-  KDL::JntArray joints_;
-  std::map<std::string, KDL::RigidBodyInertia> inertia_;
-  std::map<std::string, KDL::Segment> extra_;
-  std::string base_;
-  KDL::Rotation relative_;
-  unsigned roll_index_, yaw_index_;
 };
 }  // namespace
 
@@ -127,7 +197,7 @@ std::function<bool(const Eigen::Vector3d&, Eigen::Isometry3d&)> articulatedCogMo
     unsigned yaw_index)
 {
   ArticulatedCogSnapshot snapshot(tree, joints, inertia, extra, base, relative, roll_index, yaw_index);
-  return [snapshot](const Eigen::Vector3d& q, Eigen::Isometry3d& bg) mutable { return snapshot.evaluate(q, bg); };
+  return [snapshot](const Eigen::Vector3d& q, Eigen::Isometry3d& bg) { return snapshot.evaluate(q, bg); };
 }
 bool Kinematics::configure(const KDL::Chain& chain, const std::string& roll, const std::string& yaw,
                            const Eigen::Isometry3d& cp, const Eigen::Vector3d& axis,
@@ -163,15 +233,17 @@ bool Kinematics::configure(const KDL::Chain& chain, const std::string& roll, con
 }
 bool Kinematics::bodyPivot(const Eigen::Vector3d& eta, Eigen::Isometry3d& bp) const
 {
+  ++workCounters().body_fk;
   if(!configured_ || !eta.allFinite())
     return false;
-  KDL::JntArray q(2);
-  q(0) = eta[2];
-  q(1) = eta[1];
-  KDL::Frame bc;
-  KDL::ChainFkSolverPos_recursive fk(chain_);
-  if(fk.JntToCart(q, bc) < 0)
-    return false;
+  KDL::Frame bc = KDL::Frame::Identity();
+  unsigned joint = 0;
+  for(unsigned i = 0; i < chain_.getNrOfSegments(); ++i)
+  {
+    const auto& segment = chain_.getSegment(i);
+    const double q = segment.getJoint().getType() == KDL::Joint::None ? 0 : eta[joint++ == 0 ? 2 : 1];
+    bc = bc * segment.pose(q);
+  }
   bp = fromKdl(bc) * cp_;
   return poseValid(bp);
 }
@@ -204,20 +276,27 @@ bool Kinematics::evaluate(const Eigen::Vector3d& eta, Eigen::Isometry3d& body, E
 }
 bool Kinematics::jacobian(const Eigen::Vector3d& eta, Eigen::Matrix3d& j) const
 {
-  Eigen::Isometry3d bp;
-  if(!bodyPivot(eta, bp))
-    return false;
-  KDL::JntArray q(2);
-  q(0) = eta[2];
-  q(1) = eta[1];
-  KDL::Jacobian k(2);
-  KDL::ChainJntToJacSolver solver(chain_);
-  if(solver.JntToJac(q, k) < 0)
-    return false;
-  // Inverting T_BP changes the sign of both active-joint angular axes.
-  j.col(0) = bp.linear() * axis_;
-  j.col(1) = -k.data.block<3, 1>(3, 1);
-  j.col(2) = -k.data.block<3, 1>(3, 0);
+  ++workCounters().body_fk;
+  if(!configured_ || !eta.allFinite()) return false;
+  KDL::Frame bc = KDL::Frame::Identity();
+  unsigned joint_index = 0;
+  for(unsigned i = 0; i < chain_.getNrOfSegments(); ++i)
+  {
+    const auto& segment = chain_.getSegment(i);
+    const auto& joint = segment.getJoint();
+    double q = 0;
+    if(joint.getType() != KDL::Joint::None)
+    {
+      const int coordinate = joint_index++ == 0 ? 2 : 1;
+      q = eta[coordinate];
+      // Revolute angular axis in the body's chain frame, including the KDL
+      // sign/scale of reversed chains. Inverting T_BP negates active columns.
+      const KDL::Vector axis = bc.M * joint.twist(1).rot;
+      j.col(coordinate) = -Eigen::Vector3d(axis.x(), axis.y(), axis.z());
+    }
+    bc = bc * segment.pose(q);
+  }
+  j.col(0) = (fromKdl(bc) * cp_).linear() * axis_;
   return j.allFinite();
 }
 bool Kinematics::numericalJacobian(const Eigen::Vector3d& eta, Eigen::Matrix3d& j, double h) const
@@ -862,6 +941,12 @@ bool PlanningConfig::mechanismValid() const
          limits.lower[0] > -M_PI && limits.upper[0] < M_PI && limits.lower[0] <= 0 && limits.upper[0] >= 0 &&
          std::isfinite(max_tilt) && max_tilt > 0 && max_tilt < M_PI / 2;
 }
+bool PlanningConfig::onlineValid() const
+{
+  return mechanismValid() && limits.valid() && std::isfinite(min_singular_value) && min_singular_value > 0 &&
+         std::isfinite(cog_speed_limit) && cog_speed_limit > 0 &&
+         std::isfinite(cog_acceleration_limit) && cog_acceleration_limit > 0;
+}
 bool PlanningConfig::valid() const
 {
   for(double x : {dt, max_tilt, orientation_tolerance, rate_tolerance, alignment_rate, alignment_acceleration,
@@ -1156,7 +1241,7 @@ bool buildPath(const Kinematics& m, const Eigen::Vector3d& initial, double durat
 }
 }  // namespace
 bool inverseOrientation(const Kinematics& model, const Eigen::Matrix3d& desired, const Eigen::Vector3d& seed,
-                        const PlanningConfig& config, Eigen::Vector3d& q, std::string& error)
+                        const PlanningConfig& config, Eigen::Vector3d& q, std::string& error, int iterations)
 {
   error.clear();
   q = seed;
@@ -1165,7 +1250,7 @@ bool inverseOrientation(const Kinematics& model, const Eigen::Matrix3d& desired,
     error = "invalid IK input";
     return false;
   }
-  for(int iteration = 0; iteration < 40; ++iteration)
+  for(int iteration = 0; iteration < iterations; ++iteration)
   {
     Eigen::Isometry3d body;
     Eigen::Matrix3d j;
@@ -1193,7 +1278,7 @@ bool inverseOrientation(const Kinematics& model, const Eigen::Matrix3d& desired,
     for(int axis = 0; axis < 3; ++axis)
       q[axis] = seed[axis] + std::remainder(q[axis] - seed[axis], 2 * M_PI);
   }
-  error = "orientation IK did not converge in 40 iterations";
+  error = "orientation IK did not converge within iteration budget";
   return false;
 }
 bool mechanismAllowed(const Kinematics& m, const Eigen::Vector3d& q, const PlanningConfig& c, std::string& error)
@@ -1301,6 +1386,11 @@ bool samplePath(const Kinematics& m, const Path& p, double t, Reference& r)
 }
 bool referenceAllowed(const Reference& r, const PlanningConfig& c, std::string& error)
 {
+  if(!c.onlineValid())
+  {
+    error = "invalid online reference configuration";
+    return false;
+  }
   if(!poseValid(r.body) || !poseValid(r.cog) || !r.eta.allFinite() || !r.velocity.allFinite() ||
      !r.acceleration.allFinite() || !r.body_omega.allFinite() || !r.body_acceleration.allFinite() ||
      !r.cog_velocity.allFinite() || !r.cog_acceleration.allFinite() || !r.cog_omega.allFinite() ||
@@ -1332,10 +1422,13 @@ bool localPitchReference(const Kinematics& model, const Eigen::Matrix3d& rotatio
                          double rate, double acceleration, const PlanningConfig& config, Reference& out,
                          std::string& error)
 {
+  // Online local segments stay near their applied seed. Eight bounded Newton
+  // iterations suffice for a small continuation; nonconvergence rejects feed
+  // and uses the saved brake, rather than spending the offline IK budget.
   Eigen::Vector3d q;
   Eigen::Matrix3d j, jp, jm;
   if(!std::isfinite(rate) || !std::isfinite(acceleration) ||
-     !inverseOrientation(model, rotation, seed, config, q, error) || !model.jacobian(q, j))
+     !inverseOrientation(model, rotation, seed, config, q, error, 8) || !model.jacobian(q, j))
     return false;
   Eigen::JacobiSVD<Eigen::Matrix3d> svd(j, Eigen::ComputeFullU | Eigen::ComputeFullV);
   if(svd.singularValues().minCoeff() < config.min_singular_value)
@@ -1387,6 +1480,7 @@ bool sampleLocalPitch(const Kinematics& model, const LocalPitchSegment& segment,
 bool localPitchAllowed(const Kinematics& model, const LocalPitchSegment& segment, double until,
                        const PlanningConfig& config, std::string& error)
 {
+  ValidationTimer validation_timer;
   // Fixed work, independent of command lifetime. Check the entire short braking
   // corridor, not just the next position. Like existing nonlinear path validation
   // this is a sampled check, not a continuous collision/interval proof.
@@ -1408,6 +1502,110 @@ bool localPitchAllowed(const Kinematics& model, const LocalPitchSegment& segment
       return false;
     }
     previous = next;
+  }
+  return true;
+}
+
+namespace
+{
+// Trapezoidal position integration with an analytic continuous stopping reserve.
+// Direction never changes inside a step. A goal behind the stopping point is
+// retained while braking; the following step can reverse without another command.
+void followAxis(double q, double v, double goal, double lower, double upper,
+                double vmax, double amax, double dt, double integration_step, bool brake, double& qn, double& vn)
+{
+  const double direction = v != 0 ? std::copysign(1.0, v) : (goal >= q ? 1.0 : -1.0);
+  const double speed = std::abs(v), dv = amax * dt;
+  const double distance = std::max(0.0, std::min(direction * (goal - q),
+                                               direction > 0 ? upper - q : q - lower));
+  // .5*(v+vn)*dt + vn^2/(2*a) + .5*vn*integration_step <= distance.
+  // The last term covers the final partial-speed discrete braking step, even
+  // when the next update has a different subdivision size.
+  const double b = amax * (dt + integration_step);
+  const double safe = std::max(0.0, (-b + std::sqrt(std::max(0.0,
+      b * b - 4 * dv * speed + 8 * amax * distance))) * .5);
+  const double minimum = std::max(0.0, speed - dv);
+  const double next = brake ? minimum : std::max(minimum, std::min({vmax, speed + dv, safe}));
+  vn = direction * next;
+  qn = q + .5 * (v + vn) * dt;
+}
+}
+
+bool followMechanism(const Kinematics& model, const Reference& from, const Eigen::Vector3d& goal,
+                     double dt, double integration_step, bool brake, const PlanningConfig& config, Reference& next, std::string& error)
+{
+  if(!config.onlineValid() || !goal.allFinite() || !std::isfinite(dt) || dt <= 0 || !std::isfinite(integration_step) || integration_step < dt ||
+     !from.eta.allFinite() || !from.velocity.allFinite())
+  {
+    error = "invalid online reference input";
+    return false;
+  }
+  Eigen::Vector3d q, v;
+  for(int axis = 0; axis < 3; ++axis)
+    followAxis(from.eta[axis], from.velocity[axis], goal[axis], config.limits.lower[axis],
+               config.limits.upper[axis], .5 * config.limits.velocity[axis],
+               .5 * config.limits.acceleration[axis], dt, integration_step, brake, q[axis], v[axis]);
+  const Eigen::Vector3d a = (v - from.velocity) / dt;
+  // Check the interval midpoint as well as its endpoint, using the same constant
+  // acceleration convention. FK includes the changing articulated CoG.
+  Reference midpoint;
+  if(!mechanismReference(model, from.eta + .5 * dt * from.velocity + .125 * dt * dt * a,
+                         from.velocity + .5 * dt * a, a, midpoint) ||
+     !referenceAllowed(midpoint, config, error) ||
+     !mechanismReference(model, q, v, a, next) || !referenceAllowed(next, config, error))
+    return false;
+  if((next.cog_velocity - from.cog_velocity).norm() > config.cog_acceleration_limit * dt + 1e-6)
+  {
+    error = "online CoG applied-step acceleration limit";
+    return false;
+  }
+  return true;
+}
+
+bool mechanismBrakingAllowed(const Kinematics& model, const Reference& from, double integration_step,
+                             const PlanningConfig& config, std::string& error)
+{
+  ValidationTimer validation_timer;
+  if(!config.onlineValid() || !std::isfinite(integration_step) || integration_step <= 0 ||
+     !from.eta.allFinite() || !from.velocity.allFinite())
+  {
+    error = "invalid braking reference/configuration";
+    return false;
+  }
+  // Certify a finite braking corridor before committing feed. Joint stop positions
+  // are analytic; nonlinear attitude/CoG checks are sampled, like localPitchAllowed.
+  const Eigen::Vector3d amax = .5 * config.limits.acceleration;
+  const Eigen::Vector3d times = from.velocity.cwiseAbs().cwiseQuotient(amax);
+  const Eigen::Vector3d stop = from.eta + .5 * from.velocity.cwiseProduct(
+      (times.array() + integration_step).matrix());
+  if((stop.array() < config.limits.lower.array() - 1e-9).any() ||
+     (stop.array() > config.limits.upper.array() + 1e-9).any())
+  {
+    error = "discrete braking position reserve";
+    return false;
+  }
+  const double duration = times.maxCoeff();
+  if(duration < 1e-12)
+    return referenceAllowed(from, config, error);
+  for(int sample = 0; sample <= 16; ++sample)
+  {
+    const double t = duration * sample / 16;
+    Eigen::Vector3d q, v, a;
+    for(int axis = 0; axis < 3; ++axis)
+    {
+      const double elapsed = std::min(t, times[axis]);
+      const double decel = -std::copysign(amax[axis], from.velocity[axis]);
+      q[axis] = from.eta[axis] + from.velocity[axis] * elapsed + .5 * decel * elapsed * elapsed;
+      v[axis] = t < times[axis] ? from.velocity[axis] + decel * elapsed : 0;
+      a[axis] = t < times[axis] ? decel : 0;
+    }
+    Reference r;
+    if(!mechanismReference(model, q, v, a, r) || !referenceAllowed(r, config, error))
+      return false;
+    // Also check the conservative outer corridor for a final discrete stop.
+    q += .5 * from.velocity * integration_step * (t / duration);
+    if(!mechanismReference(model, q, v, a, r) || !referenceAllowed(r, config, error))
+      return false;
   }
   return true;
 }
@@ -1688,12 +1886,30 @@ const char* stageName(Stage s)
                                 "EXECUTING",   "PAUSED",         "COMPLETED_HOLD", "FAULT_HOLD"};
   return names[static_cast<int>(s)];
 }
+int ExecutionConfig::integrationSteps(double elapsed) const
+{
+  if(!std::isfinite(elapsed) || elapsed < 0 || !std::isfinite(max_execution_step) || max_execution_step <= 0 ||
+     !std::isfinite(max_execution_gap) || max_execution_gap < max_execution_step || elapsed > max_execution_gap)
+    return -1;
+  if(elapsed == 0)
+    return 0;
+  const double steps = std::ceil(elapsed / max_execution_step);
+  return steps <= 8 ? static_cast<int>(steps) : -1;
+}
 bool ExecutionConfig::feedbackConfigValid() const
 {
   for(double x : {synchronization_tolerance, timeout, pivot_tolerance, hinge_tolerance})
     if(!std::isfinite(x) || x <= 0)
       return false;
-  return std::isfinite(future_tolerance) && future_tolerance >= 0 && future_tolerance < timeout;
+  return std::isfinite(future_tolerance) && future_tolerance >= 0 && future_tolerance < timeout &&
+         integrationSteps(max_execution_gap) > 0;
+}
+bool ExecutionConfig::motionConfigValid() const
+{
+  return feedbackConfigValid() && std::isfinite(tracking_tolerance) && tracking_tolerance > 0 &&
+         std::isfinite(orientation_tolerance) && orientation_tolerance > 0 &&
+         std::isfinite(soft_tracking_fraction) && soft_tracking_fraction > 0 && soft_tracking_fraction < .8 &&
+         std::isfinite(resume_fraction) && resume_fraction > 0 && resume_fraction < 1;
 }
 bool ExecutionConfig::valid() const
 {
@@ -1701,8 +1917,7 @@ bool ExecutionConfig::valid() const
                   progress_timeout, require_settled_on_enable ? settle_rate : 1.0})
     if(!std::isfinite(x) || x <= 0)
       return false;
-  return feedbackConfigValid() && std::isfinite(soft_tracking_fraction) && soft_tracking_fraction > 0 &&
-         soft_tracking_fraction < .8 && std::isfinite(resume_fraction) && resume_fraction > 0 && resume_fraction < 1 &&
+  return motionConfigValid() &&
          reference_lead < soft_tracking_fraction * orientation_tolerance && std::isfinite(preparation_tolerance) &&
          preparation_tolerance > 0 && preparation_tolerance <= hinge_tolerance &&
          preparation_tolerance < tracking_tolerance && preparation_tolerance < orientation_tolerance &&
@@ -1711,7 +1926,7 @@ bool ExecutionConfig::valid() const
 bool ExecutionConfig::governorValid(const PlanningConfig& p) const
 {
   if(!valid() || !p.valid() || !std::isfinite(max_execution_step) || max_execution_step <= 0 ||
-     max_execution_step > timeout)
+     max_execution_gap > timeout)
     return false;
   // One maximum cycle of the path's reserved rates must fit between soft and
   // hard bounds. Braking distance itself is reserved by the cached path horizon.
@@ -1978,6 +2193,15 @@ bool Executor::command(const std::string& cmd, std::uint64_t id)
     reason = "executing geometrically validated pitch stroke";
     return true;
   }
+  if(cmd == "pause" && stage == Stage::CONTACT_LOCKED && plan.ok)
+  {
+    paused_align_ = true;
+    stage = Stage::PAUSED;
+    speed_ = 0;
+    resume_after_feedback_ = false;
+    reason = "explicit pause before prepared connection; resume required";
+    return true;
+  }
   if(cmd == "pause" && stage == Stage::PAUSED)
   {
     resume_after_feedback_ = false;
@@ -2056,6 +2280,12 @@ void Executor::waitForFeedback(double now, const std::string& why)
 {
   if(!owns() || stage == Stage::FAULT_HOLD)
     return;
+  if(now < last_time_)
+  {
+    task.stamp = 0;
+    task.valid = false; // spatial progress stays; filter time belongs to the new ROS epoch
+    recovery_body_stamp_ = recovery_joint_stamp_ = 0;
+  }
   if(stage == Stage::PRE_ALIGN || stage == Stage::EXECUTING)
   {
     resume_after_feedback_ = !stopping_;
@@ -2112,6 +2342,7 @@ void Executor::tick(const Feedback& s)
   }
   if(s.now < last_time_)
   {
+    recovery_body_stamp_ = recovery_joint_stamp_ = 0;
     waitForFeedback(s.now, "execution clock moved backwards");
     return;
   }
@@ -2152,6 +2383,8 @@ void Executor::tick(const Feedback& s)
   const double body_error = logSO3(s.body.linear().transpose() * tracking.body.linear()).norm();
   if(feedback_waiting_)
   {
+    if(s.body_stamp <= recovery_body_stamp_ || s.joint_stamp <= recovery_joint_stamp_)
+      return;
     feedback_waiting_ = false;
     last_time_ = s.now;
     motion_clock_pending_ = true;
@@ -2160,6 +2393,8 @@ void Executor::tick(const Feedback& s)
     resume_after_feedback_ = false;
     reason = "coherent feedback restored; retained trajectory reference";
   }
+  recovery_body_stamp_ = s.body_stamp;
+  recovery_joint_stamp_ = s.joint_stamp;
   const double dt = s.now - last_time_;
   last_time_ = s.now;
   const bool moving = stage == Stage::PRE_ALIGN || stage == Stage::EXECUTING;
@@ -2173,7 +2408,7 @@ void Executor::tick(const Feedback& s)
     motion_clock_pending_ = false;
     return;
   }
-  if(moving && (!std::isfinite(dt) || dt < 0 || dt > config.max_execution_step))
+  if(moving && (!std::isfinite(dt) || dt < 0 || config.integrationSteps(dt) < 0))
   {
     waitForFeedback(s.now, "execution clock gap");
     return;
@@ -2214,6 +2449,72 @@ void Executor::tick(const Feedback& s)
   }
   if(stage != Stage::PRE_ALIGN && stage != Stage::EXECUTING)
     return;
+  const int steps = config.integrationSteps(dt);
+  if(steps <= 0)
+    return;
+  // Do not copy the potentially large prepared plan. Only numerical progress is
+  // provisional; all substeps share this one real measured sample and timestamp.
+  const Reference saved_target = target;
+  const double saved_progress = progress, saved_nominal = nominal_progress, saved_speed = speed_;
+  const double saved_relief = applied_relief, saved_pitch = planned_pitch, saved_available = relief_available;
+  const bool saved_end = path_end_commanded;
+  for(int i = 0; i < steps; ++i)
+  {
+    advanceMotion(s, dt / steps);
+    if(stage == Stage::FAULT_HOLD)
+    {
+      progress = saved_progress;
+      nominal_progress = saved_nominal;
+      speed_ = saved_speed;
+      applied_relief = saved_relief;
+      planned_pitch = saved_pitch;
+      relief_available = saved_available;
+      path_end_commanded = saved_end;
+      target = saved_target;
+      scaleReference(target, 0, 0);
+      reference_updated = false;
+      return;
+    }
+    if(stage != Stage::PRE_ALIGN && stage != Stage::EXECUTING)
+      break;
+  }
+}
+
+std::function<void()> Executor::referenceRollback()
+{
+  return [this, target = target, progress = progress, nominal_progress = nominal_progress,
+          applied_relief = applied_relief, relief_available = relief_available, planned_pitch = planned_pitch,
+          path_end_commanded = path_end_commanded, goal_reached = goal_reached, reference_updated = reference_updated,
+          stage = stage, speed_ = speed_, stopping_ = stopping_, cancel_ = cancel_, paused_align_ = paused_align_,
+          motion_clock_pending_ = motion_clock_pending_, governor_hold_ = governor_hold_]
+  {
+    if(this->stage == Stage::FAULT_HOLD) return;
+    this->target = target;
+    this->progress = progress;
+    this->nominal_progress = nominal_progress;
+    this->applied_relief = applied_relief;
+    this->relief_available = relief_available;
+    this->planned_pitch = planned_pitch;
+    this->path_end_commanded = path_end_commanded;
+    this->goal_reached = goal_reached;
+    this->reference_updated = reference_updated;
+    this->stage = stage;
+    this->speed_ = speed_;
+    this->stopping_ = stopping_;
+    this->cancel_ = cancel_;
+    this->paused_align_ = paused_align_;
+    this->motion_clock_pending_ = motion_clock_pending_;
+    this->governor_hold_ = governor_hold_;
+  };
+}
+
+void Executor::advanceMotion(const Feedback& s, double dt)
+{
+  Eigen::Vector3d measured_q = s.eta;
+  measured_q[0] = measured.alpha;
+  const Reference& tracking = target;
+  const double joint_error = (measured_q - tracking.eta).cwiseAbs().maxCoeff();
+  const double body_error = logSO3(s.body.linear().transpose() * tracking.body.linear()).norm();
   const auto& path = stage == Stage::EXECUTING ? plan.cut : plan.align;
   if(!plan.ok || plan.session != session)
   {

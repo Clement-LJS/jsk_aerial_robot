@@ -72,7 +72,7 @@ public:
   using Input = RollYawInteractionInput;
   using Output = RollYawInteractionOutput;
   using InteractionSource = RollYawInteractionDiagnostics::InteractionSource;
-  using Dispatch = std::function<void(const std::function<void(const Input&)>&, bool)>;
+  using Dispatch = std::function<void(const std::function<void(const Input&)>&, bool, const std::string&)>;
   void initialize(const Input&, ros::NodeHandle, boost::shared_ptr<aerial_robot_model::RobotModel>, Dispatch);
   const RollYawInteractionDiagnostics& diagnostics() const override { return *this; }
   bool articulated() const override { return interaction_source_ == InteractionSource::ARTICULATED_MOMENTUM; }
@@ -81,7 +81,7 @@ public:
   const Eigen::VectorXd& observerLoad() const override { return momentum_observer_.load(); }
   void captureModel(const Input&) override;
   void clearModel() override { articulated_model_valid_ = false; }
-  void captureDynamicsJoints(const Input&, const sensor_msgs::JointState&, const std::string& producer) override;
+  void captureDynamicsJoints(const Input&, const sensor_msgs::JointState&, const std::string& producer, double receipt) override;
   bool observeArticulatedSample(const Input&, const roll_yaw::Feedback&) override;
   bool articulatedLoadValid(const Input&, const roll_yaw::Feedback&) const override;
   void publishArticulatedLoad(const Input&) override;
@@ -96,18 +96,26 @@ public:
   void waitForFeedback(double now) override { compliance_time_ = now; }
 
 private:
-  bool loadInteractionSource(const Input&, ros::Subscriber& retired);
+  struct SourceSettings
+  {
+    std::string source, contract, effort_source, topic, producer, units, sign, joint_topic, controller, description;
+    double gain = 10;
+  };
+  SourceSettings readInteractionSource() const;
+  bool loadInteractionSource(const Input&, ros::Subscriber& retired, const SourceSettings&);
   bool interactionConfigurationValid() const;
-  void commandWrenchCallback(const Input&, const geometry_msgs::WrenchStampedConstPtr&);
+  void commandWrenchCallback(const Input&, const geometry_msgs::WrenchStampedConstPtr&,
+                            const Eigen::Vector3d& offset, double receipt);
   void invalidateInteraction();
   bool observeInteractionSample(const Input&, const roll_yaw::Feedback&, double stamp, bool quiet);
   void admittanceCallback(const Input&, const std_msgs::BoolConstPtr&);
-  void externalWrenchCallback(const Input&, const geometry_msgs::WrenchStampedConstPtr&);
+  void externalWrenchCallback(const Input&, const geometry_msgs::WrenchStampedConstPtr&, double receipt);
   struct TareRequest
   {
     std::uint64_t session = 0, generation = 0;
     double sign = 0, scale = 0;
     std::string frame, point;
+    SourceSettings source;
   };
   void tareCallback(const Input&, const TareRequest&, ros::Subscriber& retired);
   void requestTare();
@@ -115,6 +123,12 @@ private:
   ros::NodeHandle nh_;
   boost::shared_ptr<aerial_robot_model::RobotModel> robot_model_;
   Dispatch dispatch_;
+  std::atomic<std::uint64_t> identity_session_{0}, identity_generation_{0};
+  void updateIdentity(const Input& c)
+  {
+    identity_generation_.store(c.generation);
+    identity_session_.store(c.session);
+  }
   std::vector<ros::Subscriber> subscriptions_;
   ros::Subscriber command_wrench_sub_;
   ros::Publisher generalized_load_pub_, generalized_load_valid_pub_;
@@ -160,11 +174,11 @@ void GimbalrotorMultilinkPerchingAdmittanceController::initialize(
   if(!host)
     throw std::runtime_error("roll-yaw admittance requires a roll-yaw interaction navigator");
   boost::weak_ptr<aerial_robot_navigation::BaseNavigator> weak_navigator(navigator);
-  auto dispatch = [weak_navigator](const std::function<void(const RollYawInteractionInput&)>& call, bool diagnostics)
+  auto dispatch = [weak_navigator](const std::function<void(const RollYawInteractionInput&)>& call, bool diagnostics, const std::string& key)
   {
     if(auto navigator = weak_navigator.lock())
       if(auto* host = dynamic_cast<RollYawInteractionHost*>(navigator.get()))
-        host->withRollYawInteraction(call, diagnostics);
+        host->withRollYawInteraction(call, diagnostics, key);
   };
   auto interaction = std::make_shared<RollYawInteractionRuntime>();
   interaction_ = interaction;
@@ -202,7 +216,7 @@ void RollYawInteractionRuntime::initialize(const Input& c, ros::NodeHandle nh,
   an.param("wrench_sign", interaction_sign_, interaction_topic_ == "estimated_external_wrench" ? 1.0 : 0.0);
   an.param("wrench_scale", interaction_scale_, interaction_topic_ == "estimated_external_wrench" ? 1.0 : 0.0);
   ros::Subscriber retired; // No previous subscription during initialization.
-  loadInteractionSource(c, retired);
+  loadInteractionSource(c, retired, readInteractionSource());
   interaction_configured_ = interactionConfigurationValid();
   generalized_load_pub_ = nh.advertise<sensor_msgs::JointState>(c.prefix + "/generalized_external_load", 1);
   generalized_load_valid_pub_ = nh.advertise<std_msgs::Bool>(c.prefix + "/generalized_external_load_valid", 1);
@@ -211,13 +225,17 @@ void RollYawInteractionRuntime::initialize(const Input& c, ros::NodeHandle nh,
       [weak](const std_msgs::BoolConstPtr& msg)
       {
         if(auto self = weak.lock())
-          self->dispatch_([&](const Input& c) { self->admittanceCallback(c, msg); }, true);
+          self->dispatch_([self, msg](const Input& c) { self->admittanceCallback(c, msg); }, true, "enable");
       }));
   subscriptions_.push_back(nh.subscribe<geometry_msgs::WrenchStamped>(interaction_topic_, 1,
       [weak](const geometry_msgs::WrenchStampedConstPtr& msg)
       {
         if(auto self = weak.lock())
-          self->dispatch_([&](const Input& c) { self->externalWrenchCallback(c, msg); }, false);
+        {
+          const double receipt = roll_yaw::steadySeconds();
+          self->dispatch_([self, msg, receipt](const Input& c)
+              { self->externalWrenchCallback(c, msg, receipt); }, false, "external_wrench");
+        }
       }));
   subscriptions_.push_back(nh.subscribe<std_msgs::Empty>(c.prefix + "/admittance_tare", 1,
       [weak](const std_msgs::EmptyConstPtr&)
@@ -234,27 +252,47 @@ void RollYawInteractionRuntime::subscribeCommandWrench()
       [weak](const geometry_msgs::WrenchStampedConstPtr& msg)
       {
         if(auto self = weak.lock())
-          self->dispatch_([&](const Input& c) { self->commandWrenchCallback(c, msg); }, false);
+        {
+          const double receipt = roll_yaw::steadySeconds();
+          Eigen::Vector3d offset = Eigen::Vector3d::Constant(std::numeric_limits<double>::quiet_NaN());
+          if(self->robot_model_ && self->robot_model_->initialized())
+          {
+            const auto frames = self->robot_model_->getSegmentsTf();
+            const auto body = frames.find(self->robot_model_->getBaselinkName());
+            if(body != frames.end())
+              offset = roll_yaw::fromKdl(body->second.Inverse() * self->robot_model_->getCog<KDL::Frame>()).translation();
+          }
+          self->dispatch_([self, msg, offset, receipt](const Input& c)
+              { self->commandWrenchCallback(c, msg, offset, receipt); }, false, "command_wrench");
+        }
       });
 }
 
 void RollYawInteractionRuntime::requestTare()
 {
   TareRequest request;
-  dispatch_([&](const Input& c) { request.session = c.session; request.generation = c.generation; }, false);
+  request.session = identity_session_.load();
+  request.generation = identity_generation_.load();
+  request.source = readInteractionSource();
   ros::NodeHandle an(nh_, "navigation/roll_yaw_perching/admittance");
   an.param("wrench_sign", request.sign, interaction_topic_ == "estimated_external_wrench" ? 1.0 : 0.0);
   an.param("wrench_scale", request.scale, interaction_topic_ == "estimated_external_wrench" ? 1.0 : 0.0);
   an.param<std::string>("wrench_frame", request.frame, "world");
   an.param<std::string>("wrench_point", request.point, "cog");
-  // ROS shutdown may wait for a callback that is itself waiting for the
-  // contact-session mutex. Retire a source subscription only after unlocking.
-  ros::Subscriber retired;
-  dispatch_([&](const Input& c) { tareCallback(c, request, retired); }, false);
+  // Parameters are read on the callback thread. The owned request is accepted
+  // by the same ordered update owner as contact and motion commands.
+  const auto self = shared_from_this();
+  dispatch_([self, request](const Input& c)
+  {
+    ros::Subscriber retired;
+    self->tareCallback(c, request, retired);
+    // Ingestion never waits on the session lock, including subscription shutdown.
+  }, false, "tare");
 }
 
 void RollYawInteractionRuntime::captureModel(const Input& c)
 {
+  updateIdentity(c);
   articulated_model_valid_ = false;
   if(articulated() && c.dynamics_factory)
     articulated_model_valid_ = c.dynamics_factory(c.model, articulated_model_, articulated_reason_);
@@ -303,7 +341,31 @@ double RollYawInteractionRuntime::reconcileReference(bool accepted, bool paused,
   return admittance_.offset;
 }
 
-bool RollYawInteractionRuntime::loadInteractionSource(const Input& c, ros::Subscriber& retired)
+RollYawInteractionRuntime::SourceSettings RollYawInteractionRuntime::readInteractionSource() const
+{
+  SourceSettings source;
+  ros::NodeHandle an(nh_, "navigation/roll_yaw_perching/admittance");
+  ros::NodeHandle dn(nh_, "navigation/roll_yaw_perching/dynamics");
+  ros::NodeHandle en(dn, "joint_effort");
+  an.param<std::string>("source", source.source, "legacy_wrench");
+  dn.param("observer_gain", source.gain, 10.0);
+  dn.param<std::string>("joint_effort_contract", source.contract, "unavailable");
+  en.param<std::string>("source", source.effort_source, "unavailable");
+  en.param<std::string>("topic", source.topic, "joint_states");
+  en.param<std::string>("producer", source.producer, "");
+  en.param<std::string>("units", source.units, "Nm");
+  en.param<std::string>("sign", source.sign, "urdf");
+  ros::NodeHandle(nh_, "navigation/roll_yaw_perching").param<std::string>("joint_state_topic", source.joint_topic, "joint_states");
+  if(source.effort_source != "servo_bridge_joint_states")
+  {
+    nh_.getParam("joint_state_controller/type", source.controller);
+    nh_.getParam("robot_description", source.description);
+  }
+  return source;
+}
+
+bool RollYawInteractionRuntime::loadInteractionSource(const Input& c, ros::Subscriber& retired,
+                                                       const SourceSettings& settings)
 {
   const auto previous = std::make_tuple(interaction_source_name_, observer_gain_, effort_contract_,
                                          effort_source_, effort_topic_, effort_producer_, effort_source_valid_);
@@ -318,9 +380,7 @@ bool RollYawInteractionRuntime::loadInteractionSource(const Input& c, ros::Subsc
       articulated_reason_ = previous_reason;
     return changed;
   };
-  ros::NodeHandle an(nh_, "navigation/roll_yaw_perching/admittance");
-  ros::NodeHandle dn(nh_, "navigation/roll_yaw_perching/dynamics");
-  an.param<std::string>("source", interaction_source_name_, "legacy_wrench");
+  interaction_source_name_ = settings.source;
   interaction_source_ = interaction_source_name_ == "legacy_wrench" ? InteractionSource::LEGACY_WRENCH :
                         interaction_source_name_ == "articulated_momentum" ? InteractionSource::ARTICULATED_MOMENTUM :
                         InteractionSource::INVALID;
@@ -334,18 +394,13 @@ bool RollYawInteractionRuntime::loadInteractionSource(const Input& c, ros::Subsc
     retired = command_wrench_sub_;
     command_wrench_sub_ = ros::Subscriber();
   }
-  dn.param("observer_gain", observer_gain_, 10.0);
-  dn.param<std::string>("joint_effort_contract", effort_contract_, "unavailable");
-  ros::NodeHandle en(dn, "joint_effort");
-  en.param<std::string>("source", effort_source_, "unavailable");
-  en.param<std::string>("topic", effort_topic_, "joint_states");
-  en.param<std::string>("producer", effort_producer_, "");
-  std::string units, sign, joint_topic, controller, description;
-  en.param<std::string>("units", units, "Nm");
-  en.param<std::string>("sign", sign, "urdf");
-  ros::NodeHandle(nh_, "navigation/roll_yaw_perching").param<std::string>("joint_state_topic", joint_topic, "joint_states");
+  observer_gain_ = settings.gain;
+  effort_contract_ = settings.contract;
+  effort_source_ = settings.effort_source;
+  effort_topic_ = settings.topic;
+  effort_producer_ = settings.producer;
   const bool matching_topic = !effort_topic_.empty() &&
-      nh_.resolveName(effort_topic_) == nh_.resolveName(joint_topic);
+      nh_.resolveName(effort_topic_) == nh_.resolveName(settings.joint_topic);
   if(effort_source_ == "servo_bridge_joint_states")
   {
     // ServoBridge already applies torque_scale * angle_sgn to the raw load.
@@ -358,8 +413,6 @@ bool RollYawInteractionRuntime::loadInteractionSource(const Input& c, ros::Subsc
         "ServoBridge effort topic must match the configured joint-state topic";
     return finish();
   }
-  nh_.getParam("joint_state_controller/type", controller);
-  nh_.getParam("robot_description", description);
   // Audited local simulation path: AerialRobotHWSim delegates read/writeSim
   // to DefaultRobotHWSim; JointStateController publishes its JointStateHandle.
   // For the shipped ODE world and EffortJointInterface, effort is GetForce(0):
@@ -367,11 +420,11 @@ bool RollYawInteractionRuntime::loadInteractionSource(const Input& c, ros::Subsc
   // or the position PID target. The installed ODE implementation was inspected.
   // No motor constant, gearbox conversion or second URDF sign is applied here.
   effort_source_valid_ = effort_source_ == "gazebo_ode_joint_states" && ros::Time::isSimTime() &&
-      effort_contract_ == "joint_side_actuation_nm" && units == "Nm" && sign == "urdf" &&
+      effort_contract_ == "joint_side_actuation_nm" && settings.units == "Nm" && settings.sign == "urdf" &&
       matching_topic &&
       !effort_producer_.empty() && effort_producer_.front() == '/' &&
-      controller == "joint_state_controller/JointStateController" &&
-      description.find("gazebo_ros_control/AerialRobotHWSim") != std::string::npos;
+      settings.controller == "joint_state_controller/JointStateController" &&
+      settings.description.find("gazebo_ros_control/AerialRobotHWSim") != std::string::npos;
   articulated_reason_ = effort_source_valid_ ? "waiting for synchronized Gazebo ODE joint-side torque" :
       "unsupported effort source or invalid Gazebo ODE producer/topic/units/sign configuration";
   return finish();
@@ -390,7 +443,7 @@ bool RollYawInteractionRuntime::interactionConfigurationValid() const
 }
 
 void RollYawInteractionRuntime::captureDynamicsJoints(const Input& c, const sensor_msgs::JointState& msg,
-                                                        const std::string& producer)
+                                                        const std::string& producer, double receipt)
 {
   // Irrelevant-only messages (hand/lock/gimbals) can share joint_states, including from another
   // publisher. They are not reduced dynamics inputs and cannot refresh/reset it.
@@ -446,7 +499,7 @@ void RollYawInteractionRuntime::captureDynamicsJoints(const Input& c, const sens
     DynamicsJoint sample;
     sample.position = msg.position[i];
     sample.stamp = stamp;
-    sample.receipt = roll_yaw::steadySeconds();
+    sample.receipt = receipt;
     if(!msg.velocity.empty())
     {
       sample.rate = msg.velocity[i];
@@ -465,7 +518,8 @@ void RollYawInteractionRuntime::captureDynamicsJoints(const Input& c, const sens
   }
 }
 
-void RollYawInteractionRuntime::commandWrenchCallback(const Input& c, const geometry_msgs::WrenchStampedConstPtr& msg)
+void RollYawInteractionRuntime::commandWrenchCallback(const Input& c, const geometry_msgs::WrenchStampedConstPtr& msg,
+                                                      const Eigen::Vector3d& offset, double receipt)
 {
   if(interaction_source_ != InteractionSource::ARTICULATED_MOMENTUM)
     return;
@@ -489,29 +543,17 @@ void RollYawInteractionRuntime::commandWrenchCallback(const Input& c, const geom
   }
   if(stamp == command_wrench_.header.stamp.toSec())
     return;
-  // The command moment is about the instantaneous CoG, not the reduced model's
-  // captured-internal-configuration CoG. Pair its current body-local application
-  // point with the accepted wrench; duplicate stamps cannot refresh either.
-  if(!robot_model_ || !robot_model_->initialized())
+  // The input point and receipt were copied with this source message, not
+  // reconstructed after deferred dispatch from a newer live robot posture.
+  if(!offset.allFinite())
   {
     command_wrench_receipt_ = 0;
-    invalidateArticulated(c, "command wrench application point: live model unavailable");
-    return;
-  }
-  const auto frames = robot_model_->getSegmentsTf();
-  const auto b = frames.find(robot_model_->getBaselinkName());
-  Eigen::Isometry3d body_to_cog = Eigen::Isometry3d::Identity();
-  if(b != frames.end())
-    body_to_cog = roll_yaw::fromKdl(b->second.Inverse() * robot_model_->getCog<KDL::Frame>());
-  if(b == frames.end() || !roll_yaw::poseValid(body_to_cog))
-  {
-    command_wrench_receipt_ = 0;
-    invalidateArticulated(c, "command wrench application point: invalid live body/CoG geometry");
+    invalidateArticulated(c, "command wrench application point unavailable");
     return;
   }
   command_wrench_ = *msg;
-  command_cog_offset_ = body_to_cog.translation();
-  command_wrench_receipt_ = roll_yaw::steadySeconds();
+  command_cog_offset_ = offset;
+  command_wrench_receipt_ = receipt;
 }
 
 void RollYawInteractionRuntime::invalidateArticulated(const Input& c, const std::string& reason)
@@ -527,6 +569,7 @@ void RollYawInteractionRuntime::invalidateArticulated(const Input& c, const std:
 
 void RollYawInteractionRuntime::resetArticulatedSession(const Input& c, const std::string& reason)
 {
+  updateIdentity(c);
   dynamics_joints_.clear();
   articulated_body_stamp_ = articulated_joint_stamp_ = articulated_command_stamp_ = 0;
   articulated_published_stamp_ = 0;
@@ -559,8 +602,8 @@ bool RollYawInteractionRuntime::articulatedLoadValid(const Input& c, const roll_
          c.lock_valid && f.hover && articulated_model_valid_ && momentum_observer_.ready() &&
          momentum_observer_.load().size() == 3 && momentum_observer_.load().allFinite() &&
          stamp > 0 && f.now - stamp >= -c.feedback_config.future_tolerance &&
-         f.now - stamp <= c.feedback_config.max_execution_step &&
-         articulated_receipt_ > 0 && wall_age >= 0 && wall_age <= c.feedback_config.max_execution_step &&
+         f.now - stamp <= c.feedback_config.timeout &&
+         articulated_receipt_ > 0 && wall_age >= 0 && wall_age <= c.feedback_config.timeout &&
          c.last_body_message_stamp == f.body_stamp && c.last_joint_message_stamp == f.joint_stamp &&
          c.contact_rejection(f).empty();
 }
@@ -602,9 +645,9 @@ bool RollYawInteractionRuntime::observeArticulatedSample(const Input& c, const r
   if(!effort_source_valid_ || (effort_source_ == "gazebo_ode_joint_states" && !ros::Time::isSimTime()))
     return fail("selected joint effort source is unavailable or incorrectly configured");
   const double wall = roll_yaw::steadySeconds();
-  if(f.now - f.body_stamp > c.feedback_config.max_execution_step)
+  if(f.now - f.body_stamp > c.feedback_config.timeout)
     return fail("dynamics observation timestamp exceeds maximum age");
-  if(momentum_observer_.stamp() > 0 && wall - articulated_receipt_ > c.feedback_config.max_execution_step)
+  if(momentum_observer_.stamp() > 0 && f.body_stamp - momentum_observer_.stamp() > c.feedback_config.observer_max_interval)
     return fail("coherent dynamics observation gap exceeds maximum dt; rebase required");
   auto coherent = [&](double stamp, double receipt)
   {
@@ -632,6 +675,19 @@ bool RollYawInteractionRuntime::observeArticulatedSample(const Input& c, const r
   newest = std::max(newest, input_stamp);
   if(newest - oldest > c.synchronization_tolerance)
     return fail("full dynamics sample exceeds feedback synchronization tolerance");
+  // Recheck physical state even when only part of the synchronized sample advances.
+  // Each body/joint/known-input sample is consumed at most once; repeated samples
+  // retain both the residual's timestamp and its matching projection Jacobian.
+  if(f.body_stamp <= articulated_body_stamp_ || f.joint_stamp <= articulated_joint_stamp_ ||
+     input_stamp <= articulated_command_stamp_)
+  {
+    if(f.body_stamp < articulated_body_stamp_ || f.joint_stamp < articulated_joint_stamp_ ||
+       input_stamp < articulated_command_stamp_)
+      return fail("dynamics measurement time moved backwards");
+    if(f.now - momentum_observer_.stamp() > c.feedback_config.timeout)
+      return fail("no advancing coherent dynamics sample within feedback timeout");
+    return articulatedLoadValid(c, f);
+  }
   roll_yaw::Estimate estimate;
   Eigen::Vector3d q = f.eta, rate = f.joint_rate;
   Eigen::Matrix3d j;
@@ -652,19 +708,6 @@ bool RollYawInteractionRuntime::observeArticulatedSample(const Input& c, const r
   // tests the constrained velocity relation, not command tracking.
   if(!rate.allFinite() || (j * rate - f.body_omega).norm() > c.planning_config.rate_tolerance)
     return fail("passive angular rate inconsistent with constrained body motion");
-  // Recheck physical state even when only part of the synchronized sample advances.
-  // Each body/joint/known-input sample is consumed at most once; repeated samples
-  // retain both the residual's timestamp and its matching projection Jacobian.
-  if(f.body_stamp <= articulated_body_stamp_ || f.joint_stamp <= articulated_joint_stamp_ ||
-     input_stamp <= articulated_command_stamp_)
-  {
-    if(f.body_stamp < articulated_body_stamp_ || f.joint_stamp < articulated_joint_stamp_ ||
-       input_stamp < articulated_command_stamp_)
-      return fail("dynamics measurement time moved backwards");
-    if(f.now - momentum_observer_.stamp() > c.feedback_config.max_execution_step)
-      return fail("no advancing coherent dynamics sample within maximum dt");
-    return articulatedLoadValid(c, f);
-  }
   const auto& w = command_wrench_.wrench;
   const Eigen::Vector3d force(w.force.x, w.force.y, w.force.z), moment(w.torque.x, w.torque.y, w.torque.z);
   // Both wrench and link Jacobians use world axes. Shift the moment from the
@@ -677,7 +720,7 @@ bool RollYawInteractionRuntime::observeArticulatedSample(const Input& c, const r
                                  command_cog_offset_, result, reason))
     return fail(reason);
   const bool ready = momentum_observer_.observe(result.momentum, result.predicted_rate, f.body_stamp,
-                                                observer_gain_, c.feedback_config.max_execution_step);
+                                                observer_gain_, c.feedback_config.observer_max_interval);
   articulated_reason_ = momentum_observer_.reason();
   if(!ready && momentum_observer_.stamp() == 0)
     return fail(articulated_reason_);
@@ -757,7 +800,7 @@ void RollYawInteractionRuntime::tareCallback(const Input& c, const TareRequest& 
         "tare rejected: disable, wait for zero correction and measured READY cut; retry after state change";
     return;
   }
-  const bool source_changed = loadInteractionSource(c, retired);
+  const bool source_changed = loadInteractionSource(c, retired, request.source);
   if(source_changed && interaction_source_ == InteractionSource::ARTICULATED_MOMENTUM && c.dynamics_factory && c.lock_valid)
     articulated_model_valid_ = c.dynamics_factory(c.model, articulated_model_, articulated_reason_);
   admittance_.reset();
@@ -787,7 +830,8 @@ void RollYawInteractionRuntime::tareCallback(const Input& c, const TareRequest& 
   interaction_receipt_ = 0;
   admittance_reason_ = "taring: operator asserts no cutting contact; collecting fresh quiet samples";
 }
-void RollYawInteractionRuntime::externalWrenchCallback(const Input& c, const geometry_msgs::WrenchStampedConstPtr& msg)
+void RollYawInteractionRuntime::externalWrenchCallback(const Input& c, const geometry_msgs::WrenchStampedConstPtr& msg,
+                                                       double receipt)
 {
   if(interaction_source_ != InteractionSource::LEGACY_WRENCH)
     return;
@@ -808,7 +852,7 @@ void RollYawInteractionRuntime::externalWrenchCallback(const Input& c, const geo
   if(t <= external_wrench_.header.stamp.toSec())
     return;
   external_wrench_ = *msg;
-  interaction_receipt_ = roll_yaw::steadySeconds();
+  interaction_receipt_ = receipt;
 }
 bool RollYawInteractionRuntime::observeInteractionSample(const Input& c, const roll_yaw::Feedback& f, double stamp, bool quiet)
 {
@@ -879,6 +923,7 @@ bool RollYawInteractionRuntime::observeInteractionSample(const Input& c, const r
 
 RollYawInteractionRuntime::Output RollYawInteractionRuntime::updateInteraction(const Input& c, const roll_yaw::Feedback& f)
 {
+  updateIdentity(c);
   previous_offset_ = admittance_.offset;
   previous_rate_ = admittance_.rate;
   previous_acceleration_ = admittance_.acceleration;
@@ -946,8 +991,14 @@ RollYawInteractionRuntime::Output RollYawInteractionRuntime::updateInteraction(c
         roll_yaw::taskPitch(pre, plan.cut.desired(c.nominal_progress).rotation, plan.goal.pitch_start, angle, cross);
     const double available =
         std::max(0.0, (plan.goal.pitch_end >= plan.goal.pitch_start ? 1 : -1) * (angle - plan.goal.pitch_start));
-    if(!mapped || dt <= 0 || dt > c.feedback_config.max_execution_step ||
-       !admittance_.step(dt, fresh, true, std::min(available, c.relief_available)))
+    const int steps = c.feedback_config.integrationSteps(dt);
+    auto candidate = admittance_;
+    bool integrated = mapped && steps >= 0;
+    for(int i = 0; integrated && i < steps; ++i)
+      integrated = candidate.step(dt / steps, fresh, true, std::min(available, c.relief_available));
+    if(integrated)
+      admittance_ = candidate;
+    else
     {
       fresh = false;
       scalar_failed = true;

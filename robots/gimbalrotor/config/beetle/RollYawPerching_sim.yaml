@@ -1,6 +1,8 @@
 # Gazebo-only overrides, loaded after RollYawPerching.yaml and Servo.yaml.
 navigation:
   roll_yaw_perching:
+    # Inherit max_execution_step=0.05 s, max_execution_gap=0.15 s and
+    # observer_max_interval=0.15 s. All motion uses ROS time; paused /clock does not advance.
     admittance:
       source: articulated_momentum
     dynamics:

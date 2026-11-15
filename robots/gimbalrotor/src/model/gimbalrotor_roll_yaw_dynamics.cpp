@@ -112,6 +112,7 @@ bool rollYawModel(const roll_yaw::Kinematics& geometry, const KDL::Tree& tree,
     Eigen::Matrix3d body_angular;
     if(q.size() != 3 || !geometry.evaluateBody(q, out.body) || !geometry.jacobian(q, body_angular))
       return false;
+    ++roll_yaw::workCounters().full_tree;
     // One root-to-tip pass supplies every link and joint pose at the same q.
     std::vector<KDL::Frame> poses(nodes.size(), KDL::Frame::Identity());
     for(std::size_t i = 1; i < nodes.size(); ++i)

@@ -13,7 +13,7 @@
 
 namespace aerial_robot_control
 {
-// Borrowed, immutable inputs, valid only within the navigator's session lock.
+// Borrowed, immutable inputs, valid only during main-owner dispatch.
 // No executor or mutable navigation target crosses this interface.
 struct RollYawInteractionInput
 {
@@ -67,8 +67,10 @@ public:
   virtual ~RollYawInteractionHost() = default;
   virtual bool attachRollYawInteraction(const std::shared_ptr<RollYawInteraction>&,
                                        const std::function<void(const RollYawInteractionInput&)>& initialize) = 0;
+  // Deferred to the update owner, coalesced by key. Callbacks MUST own all
+  // captures; the borrowed Input exists only for the duration of invocation.
   virtual void withRollYawInteraction(const std::function<void(const RollYawInteractionInput&)>&,
-                                     bool publish_diagnostics = false) = 0;
+                                     bool publish_diagnostics = false, const std::string& key = "interaction") = 0;
 };
 
 // Navigation holds only a weak interface; the controller owns its implementation.
@@ -87,7 +89,7 @@ public:
   virtual const Eigen::VectorXd& observerLoad() const = 0;
   virtual void captureModel(const Input&) = 0;
   virtual void clearModel() = 0;
-  virtual void captureDynamicsJoints(const Input&, const sensor_msgs::JointState&, const std::string& producer) = 0;
+  virtual void captureDynamicsJoints(const Input&, const sensor_msgs::JointState&, const std::string& producer, double receipt) = 0;
   virtual bool observeArticulatedSample(const Input&, const roll_yaw::Feedback&) = 0;
   virtual bool articulatedLoadValid(const Input&, const roll_yaw::Feedback&) const = 0;
   virtual void publishArticulatedLoad(const Input&) = 0;
