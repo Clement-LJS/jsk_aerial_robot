@@ -12,6 +12,7 @@ GimbalrotorRobotModel::GimbalrotorRobotModel(bool init_with_rosparam, bool verbo
 
 void GimbalrotorRobotModel::updateRobotModelImpl(const KDL::JntArray& joint_positions)
 {
+  std::lock_guard<std::mutex> lock(model_update_mutex_);
   KDL::TreeFkSolverPos_recursive fk_solver(getTree());
   // /* special process */
   KDL::Frame f_baselink;
@@ -29,6 +30,12 @@ void GimbalrotorRobotModel::updateRobotModelImpl(const KDL::JntArray& joint_posi
       thrust_coords_rot_[i] = cog_frame.Inverse() * f.M;
 
     }
+}
+
+KDL::JntArray GimbalrotorRobotModel::getJointPositionsSnapshot() const
+{
+  std::lock_guard<std::mutex> lock(model_update_mutex_);
+  return getJointPositions();
 }
 
 /* plugin registration */

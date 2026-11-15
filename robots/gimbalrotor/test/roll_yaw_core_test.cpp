@@ -4,6 +4,8 @@
 #include <kdl/treefksolverpos_recursive.hpp>
 #include <Eigen/SVD>
 #include <cstdlib>
+#include <fstream>
+#include <sstream>
 
 using namespace roll_yaw;
 int main(int argc,char** argv)
@@ -166,10 +168,11 @@ TEST(Execution,CoordinatedComplianceReleaseAndMeasuredCompletion)
     ASSERT_TRUE(a.step(.01,true,true));
     e.relief=std::min(0.0,a.offset);
     e.applied=applied; e.applied_valid=true;
-    const double progress=e.progress;
     e.tick(feedback(applied,time));
     ASSERT_NE(e.stage,Stage::FAULT_HOLD)<<e.reason;
-    EXPECT_GE(e.progress,progress); // Relief slows/holds the same path, never retracts.
+    // Relief may retreat on the validated path; the original goal is retained.
+    EXPECT_GE(e.progress,0);
+    EXPECT_LE(e.progress,e.plan.cut.duration());
     const auto& next=e.target;
     Pose bp; ASSERT_TRUE(e.model.bodyPivot(next.eta,bp));
     EXPECT_LT(((next.body*bp).translation()-e.model.pivotLock().translation()).norm(),1e-9);
@@ -436,9 +439,117 @@ TEST(Planning,MechanismAlignmentAndLimitReversalWithoutSawOrIK)
 TEST(Execution,GeometricReadinessAndPreparedMovement)
 {
   Fixture f; double time; auto e=executor(f,f.plan(),time,false);
-  Reference moved; ASSERT_TRUE(mechanismReference(f.model,Vec(.015,0,0),Vec::Zero(),Vec::Zero(),moved));
-  e.tick(feedback(moved,time+.01)); EXPECT_FALSE(e.plan.ok); EXPECT_EQ(e.stage,Stage::CONTACT_LOCKED);
-  EXPECT_NE(e.reason.find("prepared start moved"),std::string::npos);
+  Reference moved; ASSERT_TRUE(mechanismReference(f.model,Vec(.035,0,0),Vec::Zero(),Vec::Zero(),moved));
+  e.tick(feedback(moved,time+.01)); EXPECT_TRUE(e.plan.ok); EXPECT_EQ(e.stage,Stage::READY);
+  EXPECT_EQ(e.reason,"prepared, waiting for live start tracking");
+  e.tick(feedback(e.target,time+.02)); EXPECT_TRUE(e.plan.ok); EXPECT_EQ(e.stage,Stage::READY);
+  EXPECT_NE(e.reason.find("tracking restored"),std::string::npos);
+  e.target=moved;
+  e.tick(feedback(moved,time+.03)); EXPECT_FALSE(e.plan.ok); EXPECT_EQ(e.stage,Stage::CONTACT_LOCKED);
+  EXPECT_NE(e.reason.find("applied prepared start changed"),std::string::npos);
+}
+
+TEST(Regression,FixedGeometryIsIndependentOfConcurrentGimbalKinematics)
+{
+  urdf::Joint joint;
+  joint.name="gimbal1"; joint.type=urdf::Joint::REVOLUTE;
+  joint.parent_link_name="rotor_arm1"; joint.child_link_name="gimbal_link1";
+  joint.axis=urdf::Vector3(1,0,0);
+  const auto captured=perching_geometry::jointGeometry(joint);
+  KDL::Joint live(joint.name,KDL::Vector::Zero(),KDL::Vector(1,0,0),KDL::Joint::RotAxis);
+  std::atomic<bool> ready{false};
+  std::thread fk([&] {
+    while(!ready.load()) std::this_thread::yield();
+    for(int i=0;i<100000;++i) live.pose(i%2?.5:.12);
+  });
+  ready=true;
+  for(int i=0;i<100000;++i)
+    EXPECT_EQ(perching_geometry::jointGeometry(joint).values,captured.values);
+  fk.join();
+  // A real mount/axis change must still differ from the captured configuration.
+  joint.parent_to_joint_origin_transform.position.x=.001;
+  EXPECT_NE(perching_geometry::jointGeometry(joint).values,captured.values);
+  joint.parent_to_joint_origin_transform.position.x=0;
+  joint.axis=urdf::Vector3(0,1,0);
+  EXPECT_NE(perching_geometry::jointGeometry(joint).values,captured.values);
+}
+
+TEST(Regression,NovemberTrackingResidualCanResumeAndFinishManualMotion)
+{
+  Fixture f; Reference applied;
+  ASSERT_TRUE(mechanismReference(f.model,Vec(0,0,-.21058),Vec::Zero(),Vec::Zero(),applied));
+  const Vec goal(0,0,-.632126); // 261115/3: applied yaw versus retained keyboard destination.
+  std::string reason;
+  bool stopped=false, recovered=false;
+  for(int i=0;i<12000&&(applied.eta-goal).norm()>1e-8;++i)
+  {
+    // A hard tracking excursion brakes. The recorded residual on recovery is
+    // still above the old 0.012-rad release threshold, so a latch cannot finish.
+    const double residual=i>=50&&i<100?.045:.02059;
+    const double feed=trackingFeedScale(residual,.04,.6);
+    Reference next;
+    ASSERT_TRUE(followMechanism(f.model,applied,goal,.025,.05,false,f.config,next,reason,Vec::Constant(feed)))<<reason;
+    if(i==99) stopped=next.velocity.norm()<1e-8;
+    if(i>100&&next.velocity.norm()>1e-5) recovered=true;
+    applied=next;
+  }
+  EXPECT_TRUE(stopped); EXPECT_TRUE(recovered);
+  EXPECT_LT((applied.eta-goal).norm(),1e-8);
+}
+
+TEST(Regression,RecordedFeedbackOutagesAndHingeExcursionsRetainSessionAndGoal)
+{
+  Fixture f;
+  for(int scenario=0;scenario<4;++scenario)
+  {
+    double time; auto e=executor(f,f.plan(),time);
+    const auto session=e.session; const auto goal=e.plan.goal.pitch_end;
+    const auto applied=e.target;
+    auto bad=feedback(applied,time+.025);
+    if(scenario==0) bad.joint_stamp-=1.333; // run 1: actual processed joint gap
+    if(scenario==1) { bad.body_stamp-=.451; bad.joint_stamp-=.456; } // run 2
+    if(scenario==2) bad.joint_stamp-=.06; // timestamp skew above 50 ms
+    if(scenario==3) bad.body.linear()*=expSO3(Vec(.0309128,0,0)); // older manual cut
+    e.tick(bad);
+    EXPECT_EQ(e.stage,Stage::PAUSED)<<scenario<<": "<<e.reason;
+    EXPECT_EQ(e.session,session); EXPECT_TRUE(e.plan.ok);
+    EXPECT_NEAR((e.target.body.matrix()-applied.body.matrix()).norm(),0,1e-12);
+    time+=1.6; e.tick(feedback(e.target,time));
+    EXPECT_EQ(e.stage,Stage::EXECUTING)<<scenario<<": "<<e.reason;
+    EXPECT_EQ(e.session,session); EXPECT_EQ(e.plan.goal.pitch_end,goal);
+    for(int i=0;i<30000&&e.stage==Stage::EXECUTING;++i)
+    { time+=.025; e.tick(feedback(e.target,time)); }
+    EXPECT_EQ(e.stage,Stage::COMPLETED_HOLD)<<e.reason;
+    EXPECT_TRUE(e.goal_reached);
+  }
+}
+
+TEST(Regression,LatestFourBagFeedbackAndTrackingSamples)
+{
+  const char* path=std::getenv("ROLL_YAW_BAG_SAMPLES");
+  if(!path) GTEST_SKIP()<<"Run test/replay_perching_bags.py for recorded samples";
+  std::ifstream input(path); ASSERT_TRUE(input.good());
+  Fixture fixture; ExecutionConfig config;
+  std::array<int,4> samples{},waits{},released{};
+  int bag; double body_age,joint_age,skew,body_error,joint_error,held;
+  while(input>>bag>>body_age>>joint_age>>skew>>body_error>>joint_error>>held)
+  {
+    ASSERT_GE(bag,0); ASSERT_LT(bag,4); ++samples[bag];
+    Feedback f; f.now=10; f.body_stamp=10-body_age; f.joint_stamp=10-joint_age;
+    f.hover=f.valid=true;
+    const auto status=feedbackStatus(f,config,fixture.config);
+    if(body_age>.15||joint_age>.15||skew>.05)
+    { EXPECT_EQ(status,FeedbackStatus::WAITING); ++waits[bag]; }
+    if(held&&body_error<.024&&joint_error<.024)
+    {
+      EXPECT_GT(trackingFeedScale(body_error,.04,.6),0);
+      EXPECT_GT(trackingFeedScale(joint_error,.04,.6),0);
+      ++released[bag];
+    }
+  }
+  for(int i=0;i<4;++i) EXPECT_GT(samples[i],100);
+  EXPECT_GT(waits[0],0); EXPECT_GT(waits[1],0); EXPECT_GT(waits[2],0);
+  EXPECT_GT(released[2],100);
 }
 TEST(Admittance,UnconstrainedStepSatisfiesDiscreteForceBalance)
 {

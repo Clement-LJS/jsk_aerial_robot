@@ -67,7 +67,7 @@ target_link_libraries(gimbalrotor_perching ${catkin_LIBRARIES})
 add_library(gimbalrotor_navigation
   src/gimbalrotor_navigation.cpp
   src/gimbalrotor_perching_navigation.cpp)
-target_link_libraries(gimbalrotor_navigation gimbalrotor_perching ${catkin_LIBRARIES})
+target_link_libraries(gimbalrotor_navigation gimbalrotor_perching gimbalrotor_robot_model ${catkin_LIBRARIES})
 add_dependencies(gimbalrotor_navigation ${catkin_EXPORTED_TARGETS})
 
 if(gazebo_FOUND)

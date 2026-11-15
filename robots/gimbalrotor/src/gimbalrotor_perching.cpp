@@ -13,6 +13,14 @@
 
 namespace perching_geometry
 {
+JointGeometry jointGeometry(const urdf::Joint& joint)
+{
+  const auto& p = joint.parent_to_joint_origin_transform.position;
+  const auto& q = joint.parent_to_joint_origin_transform.rotation;
+  return {joint.parent_link_name, joint.child_link_name, joint.type,
+          {p.x, p.y, p.z, q.x, q.y, q.z, q.w, joint.axis.x, joint.axis.y, joint.axis.z}};
+}
+
 bool Lock::targetOrientation(const tf::Quaternion& desired, double limit, double sign, Pose& pose) const
 {
   const tf::Matrix3x3 relative(orientation.inverse() * desired);
@@ -34,6 +42,14 @@ void accumulateLinkInertia(KDL::RigidBodyInertia& total, const KDL::Frame& frame
 
 namespace roll_yaw
 {
+double trackingFeedScale(double used, double hard, double soft_fraction)
+{
+  if(!std::isfinite(used) || !std::isfinite(hard) || !std::isfinite(soft_fraction) ||
+     used < 0 || hard <= 0 || soft_fraction <= 0 || soft_fraction >= 1)
+    return 0;
+  return std::clamp((hard - used) / (hard * (1 - soft_fraction)), 0.0, 1.0);
+}
+
 WorkCounters& workCounters()
 {
   thread_local WorkCounters counters;

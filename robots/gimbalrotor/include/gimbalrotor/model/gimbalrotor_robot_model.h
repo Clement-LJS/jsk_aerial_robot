@@ -21,6 +21,7 @@ public:
 
   template <class T> std::vector<T> getLinksRotationFromCog();
   template <class T> std::vector<T> getThrustCoordRot();
+  KDL::JntArray getJointPositionsSnapshot() const;
 
 protected:
   void updateRobotModelImpl(const KDL::JntArray& joint_positions) override;
@@ -31,6 +32,7 @@ protected:
   std::vector<KDL::Rotation> thrust_coords_rot_;
   std::mutex links_rotation_mutex_;
   std::mutex thrust_rotation_mutex_;
+  mutable std::mutex model_update_mutex_;
 };
 
 template<> inline std::vector<KDL::Rotation> GimbalrotorRobotModel::getLinksRotationFromCog()

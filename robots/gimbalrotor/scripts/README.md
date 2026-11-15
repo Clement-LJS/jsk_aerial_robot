@@ -260,8 +260,15 @@ captured/current values and numeric difference. It distinguishes temporary model
 unavailability (recoverable hold) from a fixed topology/geometry/inertia/module
 change (fault). It never compares live joint/gimbal angles, evolving FK, world
 pose or articulated CoG. Floating inertia comparisons use relative/absolute
-1e-12 numerical tolerance. The late bag fault cannot be reconstructed from its
-boolean diagnostic; no specific changed field is asserted here.
+1e-12 numerical tolerance. Fixed joint origins, rotations and axes are captured
+from URDF scalar fields. The calculation tree is rebuilt from that URDF, and
+contact capture copies joint positions under the robot-model update mutex.
+The checker must not call `pose()` or `getFrameToTip()` on the live articulated
+KDL tree: those const methods use mutable joint caches while FK is running.
+Run 4 recorded false changes in `gimbal_link1.joint_zero` and `thrust1.tip`,
+including exactly `cos(0.5)` from the checker's own half-radian probe. Removing
+these live probes prevents normal FK from invalidating the contact session.
+Real URDF, topology, inertia and fixed payload changes still require recapture.
 
 **Configuration synchronization limitation:** the base RobotModel outside this
 folder has nonvirtual add/remove/set-extra-module methods and const-reference map
@@ -292,42 +299,48 @@ The configured main loop is 40 Hz and still invokes navigation then control on t
 same thread. Onboard acceptance remains: ordinary reference work of a few
 milliseconds, typical navigation near/below 10 ms, regular publications near
 25 ms, and sustained motion/reversal in one session. These are validation targets,
-not measured performance results. The starting local source matched reviewed revision `7d810631bef4a9263d3f61c6854c10dce6e31765`.
-The implementations at `b3ecbc5c3208fbdd34175847ac5bf2c516321bf3` were inspected:
-roll–yaw sampled an existing transition, while pitch/secondary evaluated bounded
-joint targets and consistent contact/CoG output. Neither bag proves the binary's
-exact SHA. Current manual contact rejection was already recoverable; this repair
-retains it and adds hold-duration diagnostics instead of claiming a new slip diagnosis.
+not measured performance results. The November 16 local repair starts at
+`a93f9555` and keeps its consolidated navigator, controller dispatch, PID gains,
+bounded follower and continuous tracking slowdown. The historical active-pitch
+implementations (`2a59619b`, September/October successful cuts) and roll–yaw
+implementation (`aa867f4c`, with later `b3ecbc5c` tuning) were compared with the
+restructured lineage. `261106/15_cut_success_manual.bag` completed manual motion
+but also recorded eight hinge-residual faults and repeated manual resets; it is
+not evidence that the old roll–yaw implementation could finish unattended.
 
-Checks performed for this repair: Python AST parsing, C++ lexical delimiter and
-interface review (not compilation), `git diff --check`, and in-memory mathematical
-checks. Synthetic nonzero postures used the URDF mounting offsets, yaw-before-roll,
-both axis signs, three mass groups and fixed body-to-CoG rotation. Maximum errors
-against centered differences were 1.3e-12 for first derivatives, 4.4e-8 for second
-derivatives and 4.6e-11 for the angular Jacobian; pivot closure error was 1.2e-16 m.
-These check the formulas, not the compiled KDL implementation or physical calibration.
+The four `261115` recordings were matched to source using rosout file/line numbers
+and local Git history/reflog. This is source attribution, not an embedded binary SHA:
 
-The full scalar follower/interval-hull/stopping recurrence with residual 0.020 rad,
-joint error 0.002 rad and illustrative radius bound 2 m reached yaw -36.22° from
--11.99° in 4054 bounded 25 ms steps, with no brake fallback and maximum step
-0.00609°. This is a mathematical recurrence, not measured robot performance.
-The old 0.012 rad release condition fails on the same residual. Stale samples
-hold the last reference and discard time; valid advancing samples restart it.
-Reversal changes the retained destination and brakes before changing velocity
-sign. Pitch waits for that destination, then starts from the applied pose.
+| Recording | Matching source | Recorded failure and regression coverage |
+| --- | --- | --- |
+| `1_afterperch_navfailed.bag` | `535e16d6` | 1.51 s processed-joint gap; hold without integrating missing time, preserve goal/session, resume after fresh feedback |
+| `2_aftercodex_keyboardnavfailed.bag` | `84dcd6d5` (before amend) | Up to 343 ms callback and 365 ms navigation time; preserve the latest bounded work and freshness checks |
+| `3_navfailed.bag` | `7d810631` | About 0.02059 rad residual trapped the old 0.012 rad release latch; retain continuous slowdown, test stop/recovery to the original yaw goal; accepted commands cannot count as completed motion |
+| `4stillfailed.bag` | `a93f9555` | Keyboard and velocity motion progressed, then false fixed-geometry faults forced resets; use immutable URDF geometry instead of live KDL cache probes |
 
-In-memory script checks with a fake clock (no ROS import/node) produced 32
-keepalives plus final zero over 64 s; adding 9 ms sleep jitter kept all refresh
-gaps below the 8 s lease and final stop at 64.009 s. Equal refresh/lease was
-rejected before publication. Source traces checked session-bound queue entries,
-explicit preemption, worker epochs, unchanged lease on rejected requests, and
-only active roll/yaw publication. Disable/enable clears worker ownership and
-initializes a new applied/nominal pose and first-fault state; ordinary recovery
-retains the old contact identity. Baseline/pitch-secondary/free-flight dispatch
-and controller/PID configuration were not changed.
-The physical 0.03 rad hinge and 0.01 m pivot checks remain unchanged, so real contact
-residuals can still hold motion. No build, ROS launch, simulator or hardware run
-was performed for this repair.
+The read-only bag replay checks 1,808 active-contact samples against the compiled
+feedback/governor helpers, and checks that the automatic task cannot report those
+failed timelines as successful. Separate execution tests cover recovery and measured
+completion with an ideal follower, including the older 0.0309128 rad hinge excursion.
+The script tests cover a 1.51 s outage, completion after recovery, both pitch signs,
+duplicate measurements, faults, session changes and absent measured progress.
+Build and offline checks use temporary artifacts and start no ROS master or flight
+nodes:
+
+```bash
+bash test/run_roll_yaw_checks.sh
+# Substitute the build directory printed by that command:
+PYTHONDONTWRITEBYTECODE=1 python3 test/replay_perching_bags.py \
+  --bag-root /home/clement/rosbag/year2026/11Nov/261115 \
+  --core-test /tmp/gimbalrotor-checks.XXXXXX/devel/lib/gimbalrotor/roll_yaw_core_test
+```
+
+Input replay is not a closed-loop simulation of the modified aircraft. Raw servo
+messages also contain malformed packets (30 in run 1, two in run 4); their upstream
+transport source is unchanged. Temporary observation loss remains recoverable, but
+persistent corruption, contact residuals, limits or true model changes cannot be
+treated as successful navigation. The physical 0.03 rad hinge and 0.01 m pivot
+checks remain unchanged. Hardware validation is still required.
 
 Optional preplanned cuts still use prepare and start. Manual commands need no
 tare/admittance; taking ownership releases planned compliance without resetting a
@@ -753,17 +766,31 @@ requests bounded braking and hold. The ROS payload is `std_msgs/Float64` in
 **rad/s** on `/gimbalrotor/perching/roll_yaw/body_pitch_velocity`. A legacy
 `~step_deg` parameter is an error. `~interval_sec` defaults to 8.0 positive finite
 seconds; `~num_steps` defaults to 8 and must be a positive integer, not boolean.
-It counts experimental intervals, so the default experiment remains 64 seconds.
+These define a signed angle goal: rate × interval × count. For the example above,
+the goal is +6.4°; 64 seconds is its nominal duration at full speed. Holds, bounded
+acceleration and tracking slowdown extend elapsed time rather than shorten the goal.
+One stroke must be smaller than 180° in magnitude.
 `~robot_namespace` and `~debug_prefix` retain keyboard defaults and absolute-prefix
 handling. The script reads the positive onboard command lease once; it does not
 change parameters. `~refresh_period_sec` defaults to lease/4 (2 s for the 8 s YAML
-lease), and must be strictly shorter than the lease. Both time and sleeps use ROS
-time. After the one-second startup delay, keepalives repeat until the experiment
-deadline, independently of `num_steps`. A final zero requests bounded braking.
-There are no catch-up message bursts. Backward ROS time requests zero and aborts.
-Ctrl+C stops publications; the last accepted lease expires onboard. Lost final
-zero still leaves that finite lease. Rejection never renews it; logs are requests,
-not proof of motion or acceptance. No prepare/tare/enable is sent.
+lease), and must be at most half the lease. A monotonic wall clock drives refreshes
+and timeouts; source ROS timestamps are checked for freshness. The script waits for
+fresh contact diagnostics, reference and measured orientation, and any preceding
+manual destination to finish, before capturing the stroke start. It slows near the
+reference endpoint, sends zero, and requires the measured endpoint, stopped motion,
+advancing measurement stamps over 0.3 s and an accepted stop acknowledgement before
+reporting completion. A stationary measurement cannot complete a small stroke merely
+because it lies inside the navigator's normal tolerance.
+
+`~goal_tolerance_deg` defaults to the navigator's goal tolerance and is capped at
+10% of the requested stroke. `~feedback_timeout_sec` defaults to 1 s;
+`~progress_timeout_sec` defaults to 30 s without measured forward progress.
+`~timeout_sec` defaults to the larger of three nominal durations or the nominal
+duration plus twice the progress timeout. Temporary holds send zero and retain the
+remaining goal and contact session; fresh feedback allows a new velocity request
+without disabling/enabling perching. A fault, session change, timeout, backward ROS
+time or interruption requests zero and ends the task. Lost final zero still leaves
+the finite onboard lease. Rejection never renews it. No prepare/tare/enable is sent.
 
 The initial state is the coherent applied `final_target_`, including derivatives,
 with an existing producer braking before takeover when necessary. The contact is
@@ -784,17 +811,17 @@ never accumulates future angle. Singularity, joint derivative limits, CoG limits
 tracking and continuous stopping/interval bounds can reduce or stop feed. A
 rejected extension uses the common mechanism brake; local-Y feed resumes from
 its resulting coherent applied posture. Requested/applied rates, remaining lease,
-blocker and endpoint errors are diagnostic quantities. Actual displacement includes
-ramps, holds and conservative reductions; 0.1 deg/s for 64 s gives 6.4° only in
-the ideal constant-rate case, not a guarantee of measured displacement.
+blocker and endpoint errors are diagnostic quantities. Measured task completion is
+separate from command acceptance and from the requested rate's nominal duration.
 
 Temporary invalid feedback uses the existing emergency hold (derivatives cleared,
 not an acceleration-continuous stop). Recovery resumes from the held posture only
 within the original lifetime; missing time is never integrated. Invalid messages
 do not renew it. Stop/cancel, manual ownership, disable, relock and genuine faults
-prevent stale rate continuation. Normal completion sends zero; Ctrl+C leaves
-only the remaining lease. No enable/relock/prepare, feedback polling, retry or
-direct actuator publication is added.
+prevent stale rate continuation onboard. The task retains its goal across temporary
+feedback holds and refreshes only in the original valid contact session. It never
+recaptures a changed session or clears a genuine fault to continue the experiment.
+There is no direct actuator publication.
 
 ### `auto_perching_pitch_experiment.py`
 

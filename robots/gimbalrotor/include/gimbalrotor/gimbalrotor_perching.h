@@ -27,11 +27,22 @@
 #include <mutex>
 #include <thread>
 #include <exception>
+#include <urdf_model/joint.h>
 
 // Geometry and target-provider contracts
 
 namespace perching_geometry
 {
+// URDF configuration only. KDL pose()/getFrameToTip() mutate joint caches even
+// through const references and must not be used to inspect a live FK tree.
+struct JointGeometry
+{
+  std::string parent, child;
+  int type;
+  std::array<double, 10> values;
+};
+JointGeometry jointGeometry(const urdf::Joint& joint);
+
 enum class Mode
 {
   DISABLED,
@@ -666,6 +677,7 @@ struct ExecutionConfig
   bool settlingValid() const;
   bool valid() const;
 };
+double trackingFeedScale(double used, double hard, double soft_fraction);
 enum class FeedbackStatus
 {
   READY,

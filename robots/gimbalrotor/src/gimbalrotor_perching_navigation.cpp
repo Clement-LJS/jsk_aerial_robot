@@ -6,6 +6,7 @@
 #include <gimbalrotor/model/gimbalrotor_robot_model.h>
 #include <type_traits>
 #include <kdl/chain.hpp>
+#include <kdl_parser/kdl_parser.hpp>
 #include <urdf/model.h>
 #include <algorithm>
 #include <cmath>
@@ -3407,7 +3408,7 @@ bool GimbalrotorPerchingNavigator::snapshotModel(roll_yaw::Kinematics& out, std:
     return false;
   }
   const unsigned ri = articulation.at(roll_), yi = articulation.at(yaw_);
-  auto joints = robot_model_->getJointPositions();
+  auto joints = model->getJointPositionsSnapshot();
   if(ri >= joints.rows() || yi >= joints.rows() || !joints.data.allFinite())
   {
     error = "invalid model joint positions/indices";
@@ -3439,9 +3440,27 @@ bool GimbalrotorPerchingNavigator::snapshotModel(roll_yaw::Kinematics& out, std:
     error = "empty URDF/configured limit intersection";
     return false;
   }
-  const auto tree = robot_model_->getTree();
+  // Reconstruct from immutable configuration instead of copying live KDL joint
+  // caches while RobotModel::fullForwardKinematicsImpl is updating them.
+  KDL::Tree tree;
+  if(!kdl_parser::treeFromUrdfModel(robot_model_->getUrdfModel(), tree))
+  {
+    error = "unable to snapshot configured kinematic tree";
+    return false;
+  }
+  std::map<std::string, perching_geometry::JointGeometry> joint_geometry;
+  for(const auto& item : robot_model_->getUrdfModel().joints_)
+    joint_geometry.emplace(item.first, perching_geometry::jointGeometry(*item.second));
   const auto inertia = robot_model_->getInertiaMap();
   const auto extra = robot_model_->getExtraModuleMap();
+  for(const auto& item : extra)
+  {
+    if(item.second.getJoint().getType() != KDL::Joint::None)
+    {
+      error = "extra module must be fixed: " + item.first;
+      return false;
+    }
+  }
   const auto base = robot_model_->getBaselinkName();
   const auto relative = robot_model_->getCogDesireOrientation<KDL::Rotation>();
   KDL::Chain chain;
@@ -3497,7 +3516,7 @@ bool GimbalrotorPerchingNavigator::snapshotModel(roll_yaw::Kinematics& out, std:
   // generation. Contract: fixed configuration writers must be quiescent while
   // attached. This local check detects sequential changes; it cannot make an
   // unsynchronized external setExtraModuleMap safe. Never compare evolving FK.
-  dynamics_snapshot_check_ = [robot = robot_model_, tree, indices, inertia, extra, base]()
+  dynamics_snapshot_check_ = [robot = robot_model_, tree, indices, inertia, extra, base, joint_geometry]()
   {
     ModelCheck result;
     auto mismatch = [&](const std::string& category, const std::string& name,
@@ -3541,6 +3560,21 @@ bool GimbalrotorPerchingNavigator::snapshotModel(roll_yaw::Kinematics& out, std:
       if(it == current_indices.end()) mismatch("topology", item.first, "present", "missing");
       else number("topology", item.first + ".index", item.second, it->second);
     }
+    const auto& current_urdf = robot->getUrdfModel();
+    number("topology", "urdf_joint_count", joint_geometry.size(), current_urdf.joints_.size());
+    for(const auto& item : joint_geometry)
+    {
+      const auto joint = current_urdf.getJoint(item.first);
+      if(!joint) { mismatch("joint", item.first, "present", "missing"); return result; }
+      const auto& a = item.second;
+      const auto b = perching_geometry::jointGeometry(*joint);
+      if(a.parent != b.parent) mismatch("topology", item.first + ".parent", a.parent, b.parent);
+      if(a.child != b.child) mismatch("topology", item.first + ".child", a.child, b.child);
+      number("joint", item.first + ".type", a.type, b.type);
+      for(std::size_t i = 0; i < a.values.size(); ++i)
+        number("geometry", item.first + ".urdf[" + std::to_string(i) + "]", a.values[i], b.values[i]);
+      if(!result.valid) return result;
+    }
     const auto& current_tree = robot->getTree();
     const auto& segments = current_tree.getSegments();
     number("topology", "segment_count", tree.getSegments().size(), segments.size());
@@ -3556,9 +3590,15 @@ bool GimbalrotorPerchingNavigator::snapshotModel(roll_yaw::Kinematics& out, std:
         mismatch("joint", item.first, a.getJoint().getName(), b.getJoint().getName());
       number("joint", item.first + ".type", a.getJoint().getType(), b.getJoint().getType());
       number("joint", item.first + ".index", GetTreeElementQNr(item.second), GetTreeElementQNr(it->second));
-      frame("geometry", item.first + ".tip", a.getFrameToTip(), b.getFrameToTip());
-      frame("geometry", item.first + ".joint_zero", a.getJoint().pose(0), b.getJoint().pose(0));
-      frame("geometry", item.first + ".joint_half", a.getJoint().pose(.5), b.getJoint().pose(.5));
+      // Axis/origin are immutable KDL fields. Never call pose() on this live
+      // joint: the November 15 runs observed its concurrent FK cache as geometry.
+      for(int i = 0; i < 3; ++i)
+      {
+        number("joint", item.first + ".axis[" + std::to_string(i) + "]",
+               a.getJoint().JointAxis()[i], b.getJoint().JointAxis()[i]);
+        number("joint", item.first + ".origin[" + std::to_string(i) + "]",
+               a.getJoint().JointOrigin()[i], b.getJoint().JointOrigin()[i]);
+      }
       const auto& ca=GetTreeElementChildren(item.second);
       const auto& cb=GetTreeElementChildren(it->second);
       number("topology", item.first + ".children", ca.size(), cb.size());
@@ -3582,10 +3622,10 @@ bool GimbalrotorPerchingNavigator::snapshotModel(roll_yaw::Kinematics& out, std:
       auto it=current_extra.find(item.first);
       if(it==current_extra.end()) { mismatch("module", item.first, "present", "missing"); return result; }
       const auto& a=item.second; const auto& b=it->second;
+      if(b.getJoint().getType() != KDL::Joint::None)
+      { mismatch("module", item.first + ".joint", "fixed", "movable"); return result; }
       if(a.getName()!=b.getName()) mismatch("module", item.first + ".parent", a.getName(), b.getName());
       frame("module", item.first + ".tip", a.getFrameToTip(), b.getFrameToTip());
-      frame("module", item.first + ".joint_zero", a.getJoint().pose(0), b.getJoint().pose(0));
-      frame("module", item.first + ".joint_half", a.getJoint().pose(.5), b.getJoint().pose(.5));
       mass(item.first, a.getInertia(), b.getInertia());
       if(!result.valid) return result;
     }
@@ -5716,8 +5756,7 @@ void GimbalrotorPerchingNavigator::applyRollYawTarget()
             .5 * speed * feedback_config_.max_execution_step).matrix();
         auto scale = [&](double used, double hard)
         {
-          const double soft = feedback_config_.soft_tracking_fraction * hard;
-          return std::clamp((hard - used) / (hard - soft), 0.0, 1.0);
+          return roll_yaw::trackingFeedScale(used, hard, feedback_config_.soft_tracking_fraction);
         };
         const double body_scale = scale(body_tracking_error_ + model_.travelWeights().dot(braking_reserve_),
                                         feedback_config_.orientation_tolerance);
