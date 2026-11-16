@@ -1,4 +1,4 @@
-**Last updated:** 2026-11-06
+**Last updated:** 2026-11-16
 
 **Documented branch:** `develop/pochitab_passiveperching/main`  
 
@@ -189,7 +189,7 @@ extra elapsed time is discarded. An interval exceeding `max_execution_gap` holds
 until advancing coherent samples return. There is no catch-up jump. Prepared
 paths retain their existing bounded subdivision policy. The observer retains its
 independent sample-interval limit; observer bootstrap or invalidity cannot gate
-manual position navigation. A real observer rebase still invalidates tare.
+manual position navigation. A short observer rebase preserves contact tare while its output settles; sustained invalidity or contact/model changes invalidate it.
 
 Zero elapsed ROS time does not advance motion. Backward time holds the reference,
 resets affected histories and expires the old velocity lease; a new valid source
@@ -576,26 +576,32 @@ three generalized torques cannot uniquely determine six independent wrench
 components: with a matching body-origin Jacobian, `Q_ext = J_O^T w_O` is a
 3-by-6 mapping. No external force contact point is assumed for the raw estimate.
 
-Path/compliance resets preserve raw history and known-input caches. Disabling
-perching, relock, source/configuration changes, actual model/coordinate recapture and
-physical observation faults invalidate/rebase the observer. Rezero currently
-recaptures the coordinate model at admission, so it rebases once there and then
-observes throughout ACTIVE/HOLD while physically valid. Tare with unchanged
-source/model/lock preserves raw history. Physical faults clear the compliance
-baseline and cancel pending tare; raw recovery cannot re-arm compliance or
-restore that baseline. Explicit disarm/tare/enable is required after such a fault.
+Body pose/gyro, roll/yaw position/effort and known input are aligned to one
+observation time. Body angular rate is differentiated from the synchronized
+orientation stream, and joint rates from synchronized joint positions; their
+observer filters use the same 0.4-second time constant. This suppresses encoder-quantization derivatives; it introduces observation delay and does not certify force accuracy. Fast attitude feedback keeps its original
+gyro. `observer_gyro_disagreement_{x,y,z}_rad_s` reports the difference between
+filtered gyro and pose-derived rate. The unchanged constrained-rate threshold is
+checked against the independent pose-derived rate; the observer does not force
+measurements into the joint constraint to pass this check.
 
-For a prepared cut, the same timestamped residual is projected with its sampled
-Jacobian: `J * tangent = direction * UnitY`, then
-`task_torque = tangent.dot(generalized_external_load)`. `task_torque_valid`,
-`task_torque_Nm` and `compliance.vector.z` remain signed trajectory-projection
-outputs and may be unavailable before a cut exists. Missing/invalid paths or
-projection failures do not erase a valid raw estimate.
+A brief bad sample makes load unavailable and brakes compliant feed/correction,
+while preserving tare. Advancing coherent data and observer settling restore
+availability. Repeated unavailable samples for two seconds invalidate calibration.
+Contact/session, model or selected-source changes invalidate it immediately.
+No stale load is published as fresh, and no automatic tare occurs during a cut.
 
-Optional admittance uses this sequence:
-**align → prepare → measured READY → explicit no-cut tare → baseline ready →
-enable → start**. Ordinary cutting with admittance disabled needs no wrench
-or tare.
+For ordinary pitch commands, the timestamped generalized residual (minus its
+contact baseline) is projected with its own Jacobian: `J * tangent = UnitY`, then
+`task_torque = tangent.dot(residual - baseline)`. The baseline is a generalized
+vector associated with the contact, so changing pitch direction does not reuse a
+scalar baseline from the opposite direction. Legacy wrench baselines are stored
+in world axes about the world origin before projection.
+
+The ordinary admittance flow is **lock → hold unloaded and quiet → tare → verified
+baseline → enable → keyboard pitch targets or automatic pulses**. It does not
+require prepare/start. The existing prepared-path flow remains available:
+**align → prepare → measured READY → unloaded tare → enable → start**.
 
 When `admittance/source: legacy_wrench` is explicitly selected, the existing
 wrench projection behavior is retained and the raw articulated output remains
@@ -622,27 +628,31 @@ The projection shifts the moment once and uses the signed articulated body
 translation/rotation tangent, not the old fixed pivot-Y projection.
 
 ```bash
-# After prepare reaches measured READY, physically remove all cutting contact:
+# Hold a valid quiet contact (or a prepared cut at measured READY), without cutting load:
 rostopic pub -1 /gimbalrotor/perching/roll_yaw/admittance_tare std_msgs/Empty '{}'
 rostopic echo /gimbalrotor/perching/roll_yaw/diagnostics_status
 # Wait for baseline_ready=true (80 distinct fresh, synchronized, quiet samples).
 rostopic pub -1 /gimbalrotor/perching/admittance_enable std_msgs/Bool 'data: true'
-# Check admittance_enabled=true and its status, then:
-rosrun gimbalrotor roll_yaw_command.py start
+# Check admittance_enabled=true, then use keyboard body-pitch keys or the pulse script.
+# For a prepared cut only: rosrun gimbalrotor roll_yaw_command.py start
 # Disable explicitly; correction recovers with bounded path speed/acceleration:
 rostopic pub -1 /gimbalrotor/perching/admittance_enable std_msgs/Bool 'data: false'
 ```
 
-Tare works while disabled and at measured READY for a prepared cut. It asserts
-**no cutting contact**; it is never automatic during a cut. Quiet-window failure
-restarts collection. Articulated physical/source faults cancel tare and require
-a fresh request after recovery; legacy source gaps retain their existing collection behavior. A new
-preparation, lock, stopped/cancelled motion or changed tare convention clears
-the baseline and disables admittance. Prepare therefore resets the previous cut's
-compliance state. Enabling requires a READY cut, valid source configuration,
-completed baseline and a fresh synchronized projected source.
+Tare requires disabled compliance, zero correction, quiet measured contact and
+fresh synchronized load. It asserts **no cutting contact**. Quiet-window failure
+restarts collection; brief source gaps pause it, with a long gap restarting sample
+collection. A real contact/model/source change or sustained inconsistency cancels
+calibration. A new prepared path, lock, explicit stop/cancel or changed tare
+convention clears compliance. Ordinary body-pitch targets, pulses and holds retain
+it. Enable requires quiet contact, the completed baseline and a fresh valid source.
 
-Enabled admittance uses resisting external work along the geometric forward
+For ordinary local pitch, the signed correction can yield in either direction,
+within its angle/rate/acceleration bounds. Resisting load brakes nominal feeding;
+the correction is passed through the same coordinated body/joint reference and
+tracking/feasibility checks. Disabling compliance releases the correction smoothly.
+
+For a prepared path, enabled admittance uses resisting external work along the geometric forward
 stroke tangent, independent of the current velocity sign. Assisting work cannot
 increase feed. Resistance freezes nominal feed and drives a bounded negative
 stroke-angle offset. The executor brakes through zero and can retreat along the
@@ -660,9 +670,7 @@ releases the correction with bounded motion, without changing the original goal.
 
 Enabled stale/invalid interaction input brakes feeding and retains the goal.
 Feeding recovers when the required input/baseline is usable, without an automatic
-resume command. A raw-observer rebase invalidates the optional compliance baseline;
-re-arming compliance still requires an explicit no-cut tare, never a silent bias
-reset. Tracking protection remains active with admittance disabled. Lack of net
+resume command. A transient observer rebase retains calibration; persistent invalidity requires explicit unloaded tare, never a silent bias reset. Tracking protection remains active with admittance disabled. Lack of net
 measured forward progress is reported without faulting or discarding the goal.
 An explicit PAUSED state freezes progress and scalar integration while raw
 observation continues; disabling compliance does not undo an explicit pause.
@@ -756,86 +764,79 @@ Manual publish robot's perching pith (using robot's pitch joint, robot's orienta
 
 ### `auto_roll_yaw_body_pitch_experiment.py`
 
-After the existing roll–yaw perching/contact setup, this script publishes a
-signed **main-body local +Y angular velocity**. The body is the main robot body
-carrying the four rotors. Positive/negative follow its commanded local +Y at the
-current roll/yaw configuration; this does not imply globally downward/upward
-translation. The request is neither world Euler-pitch rate, CoG pitch, nor
-passive-alpha velocity. Keyboard angle commands and `perching/manual_pitch_delta`
-(absolute lock-relative passive alpha) keep their existing meanings.
+After locking roll-yaw contact in HOVER, send finite **main-body local +Y angular
+velocity pulses**, separated by holds. The four rotors are on this main body.
+Signs follow its local pitch axis at the current roll/yaw configuration.
 
 ```bash
-# Illustrative arithmetic only; 0.1 deg/s is not a hardware-tuned recommendation.
 rosrun gimbalrotor auto_roll_yaw_body_pitch_experiment.py \
-  _angular_velocity_deg_s:=0.1 _interval_sec:=8.0 _num_steps:=8
+  _angular_velocity_deg_s:=0.5 _feed_duration_sec:=1.0 _interval_sec:=8.0 _num_steps:=8
 ```
 
-`~angular_velocity_deg_s` is required, finite and numeric (not boolean); zero
-requests an explicit operator stop and hold. Nonzero operation publishes the
-`VELOCITY` mode of `RollYawMotion` in **rad/s** on
-`/gimbalrotor/perching/roll_yaw/motion`. A legacy
-`~step_deg` parameter is an error. `~interval_sec` defaults to 8.0 positive finite
-seconds; `~num_steps` defaults to 8 and must be a positive integer, not boolean.
-These define a signed angle goal: rate × interval × count. For the example above,
-the goal is +6.4°; 64 seconds is its nominal duration at full speed. Holds, bounded
-acceleration and tracking slowdown extend elapsed time rather than shorten the goal.
-One stroke must be smaller than 180° in magnitude.
-`~robot_namespace` and `~debug_prefix` retain keyboard defaults and absolute-prefix
-handling. The script reads the positive onboard command lease once; it does not
-change parameters. `~refresh_period_sec` defaults to lease/4 (2 s for the 8 s YAML
-lease), and must be at most half the lease. A monotonic wall clock drives refreshes
-and timeouts; source ROS timestamps are checked for freshness. The script waits for
-fresh contact diagnostics, reference and measured orientation, and any preceding
-manual destination to finish, before capturing the stroke start. It slows near the
-reference endpoint, sends zero, and requires the measured endpoint, stopped motion,
-advancing measurement stamps over 0.3 s and an accepted stop acknowledgement before
-reporting completion. A stationary measurement cannot complete a small stroke merely
-because it lies inside the navigator's normal tolerance.
+This requests **0.5 deg/s for one second, then an eight-second hold**, eight times.
+`interval_sec` is hold time; `hold_duration_sec` is an explicit synonym that takes
+precedence. `feed_duration_sec` defaults to 1 and must be in (0, 8]; hold time is
+nonnegative, and `num_steps` is a positive integer (default 8). The signed angular
+velocity is required. Zero requests an explicit global operator stop.
 
-`~goal_tolerance_deg` defaults to the navigator's goal tolerance and is capped at
-10% of the requested stroke. `~feedback_timeout_sec` defaults to 1 s;
-`~progress_timeout_sec` defaults to 30 s without measured forward progress.
-`~timeout_sec` defaults to the larger of three nominal durations or the nominal
-duration plus twice the progress timeout. Temporary holds send zero and retain the
-remaining goal and contact session; fresh feedback allows a new velocity request
-without disabling/enabling perching. A fault, session change, timeout, backward ROS
-time or interruption sends a scoped STOP and ends the task. SIGINT/SIGTERM are
-handled before ROS shutdown, with bounded stop retries and confirmation of the
-new epoch and stopped diagnostics. Operator cancellation revokes the task; it never
-adopts a new epoch to resume itself. Scoped zero velocity is a temporary pause in
-the same task. The finite lease remains a fallback for process/transport loss.
-Rejection never renews it. No prepare/tare/enable is sent.
+Each `RollYawMotion.PULSE` contains its rate in rad/s and duration in seconds.
+Only the current pulse is sent; no refreshes or future pulses are queued. The
+navigator expires it onboard, using ROS time and also monotonic wall time on
+hardware. A duplicate cannot extend it. A feedback hold consumes its remaining
+authorization; missed feed is never replayed after recovery. Acceleration,
+tracking, contact and feasibility bounds remain active, so the ideal 0.5-degree
+increment is not a promise of measured travel. Braking can continue after the
+one-second rate request ends. The script reports actual measured pitch change.
 
-The initial state is the coherent applied `final_target_`, including derivatives,
-with an existing producer braking before takeover when necessary. The contact is
-not recaptured. Each reference rotation right-multiplies the current body frame:
-`R_next = R_current * Exp(e_y * integral(u dt))`, so angular velocity is `[0,u,0]`
-in the commanded main body and `R_wb * [0,u,0]` in world. Constrained IK and its
-Jacobian derivative coordinate passive alpha, active roll and active yaw; fixed
-contact FK supplies body/CoG poses and feedforwards through the existing controller.
-This nominal command requires no admittance baseline and preserves raw observer
-history on refresh/takeover. `updateInteraction` still returns early without a valid
-prepared plan: this velocity-refresh script does **not** exercise prepared-path
-admittance. It does not enable compliance or add a velocity/force-control law.
+The hold starts after the nominal feed has braked. Before the next pulse, the
+script requires fresh diagnostics/orientation and measured body/joint settling
+over advancing samples. Without admittance, a pulse with no measured forward progress stops the sequence.
+With admittance, compliant retreat is allowed: completion checks nominal feed and
+measured settling around the corrected reference, while reporting signed actual travel.
+A pulse with no nominal feed stops the sequence instead of issuing another pulse. Waiting for
+settling may extend the hold. `feedback_timeout_sec` defaults to 1 second;
+`timeout_sec` bounds the whole sequence.
 
-The navigator uses a small orientation Jacobian and bounded local endpoint IK
-with accumulated orientation error checked against a retained ideal rotation.
-Accepted rotation progress right-multiplies that ideal reference; rejected motion
-never accumulates future angle. Singularity, joint derivative limits, CoG limits,
-tracking and continuous stopping/interval bounds can reduce or stop feed. A
-rejected extension uses the common mechanism brake; local-Y feed resumes from
-its resulting coherent applied posture. Requested/applied rates, remaining lease,
-blocker and endpoint errors are diagnostic quantities. Measured task completion is
-separate from command acceptance and from the requested rate's nominal duration.
+**Ctrl+C ends the sequence while leaving its accepted pulse to expire and brake.**
+Interrupting during pulse five never sends pulse six. SIGTERM has the same
+sequence behavior. Process or connection loss cannot renew that finite pulse.
+Keyboard Space/cancel, disable, relock and task failures retain immediate bounded
+braking. Stop revokes the motion epoch so late commands from the old task cannot
+restart motion. Keyboard Ctrl+C still requests immediate stop.
 
-Temporary invalid feedback uses the existing emergency hold (derivatives cleared,
-not an acceleration-continuous stop). Recovery resumes from the held posture only
-within the original lifetime; missing time is never integrated. Invalid messages
-do not renew it. Stop/cancel, manual ownership, disable, relock and genuine faults
-prevent stale rate continuation onboard. The task retains its goal across temporary
-feedback holds and refreshes only in the original valid contact session. It never
-recaptures a changed session or clears a genuine fault to continue the experiment.
-There is no direct actuator publication.
+For admittance, remove cutting load and first hold a valid contact. Either tare
+and enable manually, or request the same setup automatically:
+
+```bash
+rosrun gimbalrotor auto_roll_yaw_body_pitch_experiment.py \
+  _angular_velocity_deg_s:=0.5 _feed_duration_sec:=1.0 _interval_sec:=8.0 \
+  _num_steps:=8 _use_admittance:=true
+```
+
+`use_admittance` defaults to false and does not disable already enabled compliance.
+When true, it waits for quiet contact, requests tare, verifies a new tare generation
+and completed baseline, then verifies enable before feeding. An already enabled,
+valid baseline can be used. Enabling this option asserts that setup is unloaded;
+the script never retare-calibrates during feeding. Loss of calibration or enable
+ends an admittance sequence. A prepared cutting trajectory is not required.
+
+Keyboard body-pitch targets, pulses and compliance share one coordinated follower:
+**nominal pitch + bounded admittance offset → body, CoG and active-joint reference**.
+The offset remains active during each hold, including after Ctrl+C. Ordinary pulse
+boundaries and body-pitch target updates preserve tare. Mechanism-axis changes
+require disabling compliance and waiting for its correction to release first.
+
+The follower tries one candidate per update, then uses the existing bounded brake
+if it cannot accept that candidate. It reuses stationary references and preserves
+all interval, contact, immutable-model and motion-limit checks. The roll-yaw
+controller forwards missing roll/pitch desired-rate and acceleration terms through
+the current main-body thrust allocator; FC attitude feedback and gyro compensation
+remain in FC. This uses the existing two-link model, not distributed HYDRUS/DRAGON
+thrust assumptions. Firmware, gains and compiler settings are unchanged.
+
+`~robot_namespace` and `~debug_prefix` retain keyboard defaults. The explicit
+continuous `VELOCITY` interface still uses `body_pitch_velocity_command_duration`;
+this pulse script does not use or refresh that eight-second legacy lease.
 
 ### `auto_perching_pitch_experiment.py`
 

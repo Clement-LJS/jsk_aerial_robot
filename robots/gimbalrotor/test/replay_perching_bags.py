@@ -6,6 +6,7 @@ check that the automatic task cannot report success on the failed timelines.
 This is input replay, not a closed-loop prediction of a modified flight.
 """
 
+from perching_bag_task import Stroke
 import argparse
 import importlib.util
 import json
@@ -32,7 +33,7 @@ def inspect(path, index, samples):
     before = path.stat()
     poses = {}
     count = bad_servo = servo_count = 0
-    task = experiment.Stroke(math.radians(.1), 240., math.radians(.5), 10000.)
+    task = Stroke(math.radians(.1), 240., math.radians(.5), 10000.)
     terminal = None
     with rosbag.Bag(str(path), 'r') as bag:
         start = bag.get_start_time()
@@ -89,6 +90,45 @@ def inspect(path, index, samples):
                 malformed_servo_messages=bad_servo, task_result=terminal, completed=task.complete)
 
 
+def observer_samples(path, destination):
+    """Align recorded body/joint streams without changing the bag or publishing."""
+    import numpy as np
+    from tf.transformations import quaternion_slerp, quaternion_matrix
+    body, joints = [], []
+    with rosbag.Bag(str(path), 'r') as bag:
+        start = bag.get_start_time()
+        for topic, msg, _ in bag.read_messages(topics=['/gimbalrotor/uav/baselink/odom', '/gimbalrotor/joint_states']):
+            t = msg.header.stamp.to_sec() - start
+            if not 668 <= t <= 694:
+                continue
+            if topic.endswith('/odom'):
+                p, q, w = msg.pose.pose.position, msg.pose.pose.orientation, msg.twist.twist.angular
+                row = (t, (p.x, p.y, p.z), (q.x, q.y, q.z, q.w), (w.x, w.y, w.z))
+                if not body or t > body[-1][0]:
+                    body.append(row)
+            elif 'joint_roll' in msg.name and 'joint_yaw' in msg.name:
+                row = (t, msg.position[msg.name.index('joint_roll')], msg.position[msg.name.index('joint_yaw')])
+                if not joints or t > joints[-1][0]:
+                    joints.append(row)
+    index = 1
+    with destination.open('w') as output:
+        for t, roll, yaw in joints:
+            while index < len(body) and body[index][0] < t:
+                index += 1
+            if index >= len(body) or body[index-1][0] > t:
+                continue
+            a, b = body[index-1], body[index]
+            u = (t-a[0])/(b[0]-a[0])
+            q = quaternion_slerp(a[2], b[2], u)
+            rotation = quaternion_matrix(q)[:3, :3]
+            omega_world = ((1-u)*quaternion_matrix(a[2])[:3, :3].dot(a[3]) +
+                           u*quaternion_matrix(b[2])[:3, :3].dot(b[3]))
+            omega = rotation.T.dot(omega_world)
+            position = (1-u)*np.array(a[1]) + u*np.array(b[1])
+            values = [t, *position, *q, *omega, roll, yaw]
+            output.write(' '.join(format(x, '.17g') for x in values) + '\n')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--bag-root', type=Path, required=True, help='directory containing the four 261115 bags')
@@ -128,13 +168,17 @@ def main():
                 raise AssertionError('recording changed while reading: ' + str(fifth))
             reports.append(dict(bag=fifth.name, motion_inputs=counts,
                                 check='recorded inputs converted to replaceable targets; not a flight simulation'))
+        observer_path = Path(directory) / 'observer.txt'
+        if fifth.exists():
+            observer_samples(fifth, observer_path)
         print(json.dumps(reports, indent=2), flush=True)
         env = dict(os.environ, ROLL_YAW_BAG_SAMPLES=str(path))
         if fifth.exists():
             env['ROLL_YAW_MOTION_SAMPLES'] = str(motion_path)
+            env['ROLL_YAW_OBSERVER_SAMPLES'] = str(observer_path)
         executable = args.core_test.resolve()
         env['LD_LIBRARY_PATH'] = str(executable.parent.parent) + ':' + env.get('LD_LIBRARY_PATH', '')
-        subprocess.run([str(executable), '--gtest_filter=Regression.LatestFourBagFeedbackAndTrackingSamples:Motion.RecordedRunFiveCannotBuildJogBacklog'],
+        subprocess.run([str(executable), '--gtest_filter=Regression.LatestFourBagFeedbackAndTrackingSamples:Motion.RecordedRunFiveCannotBuildJogBacklog:Observer.RecordedQuietIntervalConditioning'],
                        env=env, check=True)
 
 

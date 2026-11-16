@@ -81,6 +81,7 @@ protected:
   virtual bool update() override;
   virtual void reset() override;
   virtual void controlCore() override;
+  virtual Eigen::Vector3d angularFeedforward() const { return Eigen::Vector3d::Zero(); }
   virtual void sendCmd() override;
 
   /*

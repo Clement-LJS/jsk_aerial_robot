@@ -774,7 +774,7 @@ public:
   double bias = 0, filtered = 0, offset = 0, rate = 0, acceleration = 0;
   int samples = 0;
   void reset();
-  void observe(double torque, double stamp, bool no_cut);
+  void observe(double torque, double stamp, bool no_cut, bool bidirectional = false);
   bool step(double dt, bool input_fresh, bool relief_only = false, double available_relief = -1);
 
 private:
@@ -793,6 +793,29 @@ namespace roll_yaw
 {
 inline double steadySeconds()
 { return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
+
+// A pulse expires even if feedback is held or the sender disappears. Real
+// hardware also uses steady time; paused simulation time must stay paused.
+// Missing roll/pitch feedforward in the angle-only FC command. Yaw already has
+// a host-side command term; measured-rate feedback remains exclusively in FC.
+Eigen::Vector3d referenceFeedforward(const Eigen::Vector3d& rate, const Eigen::Vector3d& acceleration,
+                                    const Eigen::Vector3d& gain, const Eigen::Vector3d& limit);
+
+struct PitchPulse
+{
+  std::uint64_t sequence = 0;
+  double expires = 0, wall_expires = 0;
+  bool completed = false;
+  bool expired(double now, double wall, bool simulated) const
+  { return sequence && (now >= expires || (!simulated && wall >= wall_expires)); }
+  bool start(std::uint64_t id, double duration, double now, double wall)
+  {
+    if(!id || id <= sequence || !std::isfinite(duration) || duration <= 0 || duration > 8 ||
+       !std::isfinite(now) || !std::isfinite(wall)) return false;
+    sequence = id; expires = now + duration; wall_expires = wall + duration; completed = false;
+    return true;
+  }
+};
 
 // A stop changes the epoch without changing the physical contact. Old clients
 // must not acquire the new epoch automatically and resume unfinished motion.

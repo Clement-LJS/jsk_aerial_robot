@@ -59,6 +59,7 @@ public:
 
   bool attachRollYawInteraction(const std::shared_ptr<aerial_robot_control::RollYawInteraction>&,
                                const std::function<void(const aerial_robot_control::RollYawInteractionInput&)>&) override;
+  bool rollYawReferenceActive() const override;
   void withRollYawInteraction(const std::function<void(const aerial_robot_control::RollYawInteractionInput&)>&,
                              bool publish_diagnostics = false, const std::string& key = "interaction") override;
 
@@ -502,10 +503,17 @@ private:
   {
     bool active = false, pending = false, stopping = false;
     double requested = 0, expires = 0, clock = 0;
-    Eigen::Matrix3d rotation = Eigen::Matrix3d::Identity();
-    bool rotation_valid = false;
     std::string limit = "idle";
   } pitch_velocity_;
+  roll_yaw::PitchPulse pitch_pulse_;
+  struct LocalPitch
+  {
+    bool valid = false;
+    Eigen::Matrix3d start = Eigen::Matrix3d::Identity();
+    double angle = 0, rate = 0, offset = 0, rate_limit = 0, acceleration_limit = 0;
+  } local_pitch_;
+  bool local_interaction_hold_ = false, local_resisting_load_ = false;
+  bool admitPitchPulse(double rate, double duration, std::uint64_t sequence);
   double body_pitch_velocity_command_duration_ = 8.0;
   bool admitPitchJog(double);
   void finishPitchJog(const std::string& phase, const std::string& why);

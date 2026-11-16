@@ -1,3 +1,5 @@
+#include <gimbalrotor/gimbalrotor_perching.h>
+#include <gimbalrotor/control/gimbalrotor_multilink_perching_observer.h>
 #include <gimbalrotor/model/gimbalrotor_multilink_perching_model.h>
 #include <cmath>
 #include <utility>
@@ -167,6 +169,98 @@ bool MultilinkModel::evaluate(const Eigen::VectorXd& q, const Eigen::VectorXd& r
   if(!out.momentum.allFinite() || !out.predicted_rate.allFinite() || !out.gravity.allFinite())
     return false;
   reason.clear();
+  return true;
+}
+} // namespace perching_dynamics
+
+namespace perching_dynamics
+{
+void ObservationFilter::reset()
+{
+  const double tau = time_constant;
+  *this = ObservationFilter();
+  time_constant = tau;
+}
+
+bool ObservationFilter::observe(const Eigen::Vector3d& position, const Eigen::Matrix3d& rotation,
+    const Eigen::Vector3d& measured_gyro, const Eigen::Vector3d& torque,
+    const Eigen::Matrix<double, 6, 1>& input, double stamp, double max_interval)
+{
+  if(!position.allFinite() || !rotation.allFinite() || !measured_gyro.allFinite() || !torque.allFinite() ||
+     !input.allFinite() || !std::isfinite(stamp) || stamp <= 0 || !std::isfinite(time_constant) ||
+     time_constant <= 0 || !std::isfinite(max_interval) || max_interval <= 0) return false;
+  if(stamp_ > 0 && stamp <= stamp_) return false;
+  const double dt = stamp - stamp_;
+  if(stamp_ == 0 || dt > max_interval)
+  {
+    q = previous_ = position;
+    rate.setZero(); omega.setZero(); gyro = measured_gyro; effort = torque; wrench = input;
+    previous_rotation_ = rotation;
+    stamp_ = started_ = stamp;
+    return false;
+  }
+  const double weight = -std::expm1(-dt / time_constant);
+  rate += weight * ((position - previous_) / dt - rate);
+  q += weight * (position - q);
+  // Differentiate the same synchronized pose stream used by the contact model,
+  // just as active-joint rates differentiate joint positions. Do not mix those
+  // rates with the unconditioned roll/pitch gyro used by fast attitude feedback.
+  const Eigen::Matrix3d transport = rotation.transpose() * previous_rotation_;
+  const Eigen::Vector3d measured_rate = transport *
+      roll_yaw::logSO3(previous_rotation_.transpose() * rotation) / dt;
+  omega = (1 - weight) * transport * omega + weight * measured_rate;
+  gyro = (1 - weight) * transport * gyro + weight * measured_gyro;
+  effort += weight * (torque - effort);
+  wrench += weight * (input - wrench);
+  previous_ = position; previous_rotation_ = rotation; stamp_ = stamp;
+  return stamp - started_ >= 2 * time_constant;
+}
+
+void MomentumObserver::reset(const std::string& reason)
+{
+  initial_.resize(0);
+  integral_.resize(0);
+  residual_.resize(0);
+  stamp_ = 0;
+  ready_ = false;
+  reason_ = reason;
+}
+
+bool MomentumObserver::observe(const Eigen::VectorXd& p, const Eigen::VectorXd& b,
+                               double stamp, double gain, double max_dt)
+{
+  if(p.size() == 0 || p.size() != b.size() || !p.allFinite() || !b.allFinite() ||
+     !std::isfinite(stamp) || stamp <= 0 || !std::isfinite(gain) || gain <= 0 ||
+     !std::isfinite(max_dt) || max_dt <= 0)
+  {
+    reset("invalid momentum observer input/gain");
+    return false;
+  }
+  if(stamp_ == 0)
+  {
+    initial_ = p;
+    integral_ = residual_ = Eigen::VectorXd::Zero(p.size());
+    stamp_ = stamp;
+    ready_ = false;
+    reason_ = "rebased; need an advancing synchronized sample";
+    return false;
+  }
+  const double dt = stamp - stamp_;
+  if(dt <= 0 || dt > max_dt || p.size() != initial_.size())
+  {
+    reset("invalid observer dt/dimension; rebase required");
+    return false;
+  }
+  residual_ = (gain / (1 + gain * dt)) * (p - initial_ - integral_ - dt * b);
+  integral_ += dt * (b + residual_);
+  if(!residual_.allFinite() || !integral_.allFinite())
+  {
+    reset("nonfinite momentum residual");
+    return false;
+  }
+  stamp_ = stamp;
+  ready_ = true;
+  reason_ = "ready: generalized external load including unmodelled loads";
   return true;
 }
 } // namespace perching_dynamics

@@ -35,6 +35,8 @@ struct RollYawInteractionInput
   const std::function<bool(const roll_yaw::Kinematics&, perching_dynamics::MultilinkModel&, std::string&)>& dynamics_factory;
   const std::function<bool()>& dynamics_snapshot_current;
   std::function<std::string(const roll_yaw::Feedback&)> contact_rejection, preparation_rejection;
+  bool reference_held = false, quiet_contact = false;
+  double pitch_rate = 0, local_dt = 0, local_rate_limit = 0, local_acceleration_limit = 0;
 };
 struct RollYawInteractionOutput
 {
@@ -55,8 +57,12 @@ struct RollYawInteractionDiagnostics
   bool effort_source_valid_ = false;
   std::string articulated_reason_ = "no locked dynamics snapshot";
   double articulated_worker_wall_ = 0;
+  double angular_rate_residual_ = 0;
+  Eigen::Vector3d observer_gyro_disagreement_ = Eigen::Vector3d::Zero();
+  bool observer_rates_ready_ = false;
   std::uint64_t articulated_worker_tree_calls_ = 0;
   std::string admittance_reason_ = "disarmed";
+  std::uint64_t tare_generation_ = 0;
   bool interaction_valid_ = false;
   std::string interaction_frame_, interaction_point_, interaction_topic_;
   double interaction_sign_ = 0, interaction_scale_ = 0, interaction_torque_ = 0, interaction_stamp_ = 0,
@@ -67,6 +73,7 @@ class RollYawInteractionHost
 {
 public:
   virtual ~RollYawInteractionHost() = default;
+  virtual bool rollYawReferenceActive() const = 0;
   virtual bool attachRollYawInteraction(const std::shared_ptr<RollYawInteraction>&,
                                        const std::function<void(const RollYawInteractionInput&)>& initialize) = 0;
   // Deferred to the update owner, coalesced by key. Callbacks MUST own all
@@ -115,6 +122,7 @@ public:
                   boost::shared_ptr<aerial_robot_navigation::BaseNavigator> navigator,
                   double ctrl_loop_rate) override;
 private:
+  Eigen::Vector3d angularFeedforward() const override;
   std::shared_ptr<RollYawInteraction> interaction_;
 };
 } // namespace aerial_robot_control

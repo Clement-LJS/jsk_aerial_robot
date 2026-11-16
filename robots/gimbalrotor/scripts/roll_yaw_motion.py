@@ -62,7 +62,7 @@ class MotionClient:
                 self.ack = None
             return changed
 
-    def send(self, session, mode, value=0., rate_limit=0.):
+    def send(self, session, mode, value=0., rate_limit=0., duration=0.):
         with self.lock:
             if self.epoch is None:
                 self.rearm(session)
@@ -74,7 +74,8 @@ class MotionClient:
             if mode == RollYawMotion.BODY_PITCH and self.mode != mode:
                 self.frame = self.sequence
             message = RollYawMotion(session=session, epoch=self.epoch, source=self.source,
-                                    sequence=self.sequence, mode=mode, value=value, frame=self.frame, rate_limit=rate_limit)
+                                    sequence=self.sequence, mode=mode, value=value, frame=self.frame,
+                                    rate_limit=rate_limit, duration=duration)
             self.mode = mode
             self.publisher.publish(message)
             if mode == RollYawMotion.STOP:

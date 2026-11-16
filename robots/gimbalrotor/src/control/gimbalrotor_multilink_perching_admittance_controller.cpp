@@ -2,63 +2,13 @@
 #include <gimbalrotor/control/gimbalrotor_multilink_perching_observer.h>
 #include <pluginlib/class_list_macros.h>
 #include <map>
+#include <deque>
 #include <boost/weak_ptr.hpp>
 #include <algorithm>
 #include <cmath>
 #include <tuple>
 #include <stdexcept>
 #include <Eigen/SVD>
-
-namespace perching_dynamics
-{
-void MomentumObserver::reset(const std::string& reason)
-{
-  initial_.resize(0);
-  integral_.resize(0);
-  residual_.resize(0);
-  stamp_ = 0;
-  ready_ = false;
-  reason_ = reason;
-}
-
-bool MomentumObserver::observe(const Eigen::VectorXd& p, const Eigen::VectorXd& b,
-                               double stamp, double gain, double max_dt)
-{
-  if(p.size() == 0 || p.size() != b.size() || !p.allFinite() || !b.allFinite() ||
-     !std::isfinite(stamp) || stamp <= 0 || !std::isfinite(gain) || gain <= 0 ||
-     !std::isfinite(max_dt) || max_dt <= 0)
-  {
-    reset("invalid momentum observer input/gain");
-    return false;
-  }
-  if(stamp_ == 0)
-  {
-    initial_ = p;
-    integral_ = residual_ = Eigen::VectorXd::Zero(p.size());
-    stamp_ = stamp;
-    ready_ = false;
-    reason_ = "rebased; need an advancing synchronized sample";
-    return false;
-  }
-  const double dt = stamp - stamp_;
-  if(dt <= 0 || dt > max_dt || p.size() != initial_.size())
-  {
-    reset("invalid observer dt/dimension; rebase required");
-    return false;
-  }
-  residual_ = (gain / (1 + gain * dt)) * (p - initial_ - integral_ - dt * b);
-  integral_ += dt * (b + residual_);
-  if(!residual_.allFinite() || !integral_.allFinite())
-  {
-    reset("nonfinite momentum residual");
-    return false;
-  }
-  stamp_ = stamp;
-  ready_ = true;
-  reason_ = "ready: generalized external load including unmodelled loads";
-  return true;
-}
-} // namespace perching_dynamics
 
 namespace aerial_robot_control
 {
@@ -115,6 +65,8 @@ private:
   void commandWrenchCallback(const Input&, const geometry_msgs::WrenchStampedConstPtr&,
                             const Eigen::Vector3d& offset, double receipt);
   void invalidateInteraction();
+  void rejectSample(const Input&, const std::string&);
+  bool quietContact(const Input&) const;
   bool observeInteractionSample(const Input&, const roll_yaw::Feedback&, double stamp, bool quiet);
   void admittanceCallback(const Input&, const std_msgs::BoolConstPtr&);
   void externalWrenchCallback(const Input&, const geometry_msgs::WrenchStampedConstPtr&, double receipt);
@@ -141,6 +93,17 @@ private:
   ros::Subscriber command_wrench_sub_;
   ros::Publisher generalized_load_pub_, generalized_load_valid_pub_;
   double observer_gain_ = 10;
+  perching_dynamics::ObservationFilter observation_filter_;
+  double rejection_since_ = 0, observer_settling_until_ = 0;
+  struct BodySample { roll_yaw::Feedback feedback; };
+  struct JointSample { double stamp; Eigen::Vector3d q, effort; };
+  struct CommandSample { double stamp, receipt; Eigen::Matrix<double, 6, 1> wrench; Eigen::Vector3d offset; };
+  std::deque<BodySample> body_history_;
+  std::deque<JointSample> joint_history_;
+  std::deque<CommandSample> command_history_;
+  double filtered_stamp_ = 0;
+  Eigen::VectorXd baseline_, baseline_sum_;
+  double baseline_stamp_ = 0;
   perching_dynamics::MultilinkModel articulated_model_;
   std::shared_ptr<const perching_dynamics::MultilinkModel> observation_model_;
   struct Observation
@@ -207,6 +170,22 @@ void GimbalrotorMultilinkPerchingAdmittanceController::initialize(
   if(!host->attachRollYawInteraction(interaction, [&](const RollYawInteractionInput& c)
       { interaction->initialize(c, nh, robot_model, dispatch); }))
     throw std::runtime_error("roll-yaw interaction controller registration rejected");
+}
+
+Eigen::Vector3d GimbalrotorMultilinkPerchingAdmittanceController::angularFeedforward() const
+{
+  const auto* host = dynamic_cast<const RollYawInteractionHost*>(navigator_.get());
+  if(!host || !host->rollYawReferenceActive()) return Eigen::Vector3d::Zero();
+  Eigen::Vector3d rate(target_omega_.x(), target_omega_.y(), target_omega_.z());
+  Eigen::Vector3d acceleration(target_ang_acc_.x(), target_ang_acc_.y(), target_ang_acc_.z());
+  Eigen::Vector3d gain = Eigen::Vector3d::Zero(), limit = gain;
+  for(int i = 0; i < 2; ++i)
+  {
+    const auto& pid = pid_controllers_.at(ROLL + i);
+    gain[i] = pid.getDGain();
+    limit[i] = std::min(pid.getLimitD(), pid.getLimitSum());
+  }
+  return roll_yaw::referenceFeedforward(rate, acceleration, gain, limit);
 }
 
 void RollYawInteractionRuntime::initialize(const Input& c, ros::NodeHandle nh,
@@ -329,7 +308,7 @@ void RollYawInteractionRuntime::captureModel(const Input& c)
 void RollYawInteractionRuntime::stopped()
 {
   resetCompliance();
-  admittance_reason_ = "disabled: stopped; prepare and tare again";
+  admittance_reason_ = "disabled: stopped; hold unloaded and tare again";
 }
 
 bool RollYawInteractionRuntime::motionAllowed(const Input& c) const
@@ -345,7 +324,7 @@ bool RollYawInteractionRuntime::motionAllowed(const Input& c) const
 double RollYawInteractionRuntime::holdReference(double applied_relief)
 {
   admittance_.offset = admittance_.enabled || std::abs(admittance_.offset) > 1e-10
-                           ? std::clamp(applied_relief, -admittance_.config.angle_limit, 0.0) : 0;
+                           ? std::clamp(applied_relief, -admittance_.config.angle_limit, admittance_.config.angle_limit) : 0;
   admittance_.rate = admittance_.acceleration = 0;
   return admittance_.offset;
 }
@@ -482,7 +461,7 @@ void RollYawInteractionRuntime::captureDynamicsJoints(const Input& c, const sens
      (effort_source_ == "gazebo_ode_joint_states" && !ros::Time::isSimTime()))
   {
     dynamics_joints_.clear();
-    invalidateArticulated(c, "joint effort producer unavailable or differs from the selected source");
+    rejectSample(c, "joint effort producer unavailable or differs from the selected source");
     return;
   }
   // ServoBridge and the supported JointStateController publish the complete set.
@@ -491,7 +470,7 @@ void RollYawInteractionRuntime::captureDynamicsJoints(const Input& c, const sens
      std::count(msg.name.begin(), msg.name.end(), c.yaw) != 1)
   {
     dynamics_joints_.clear();
-    invalidateArticulated(c, "verified joint-state producer omitted or duplicated roll/yaw");
+    rejectSample(c, "verified joint-state producer omitted or duplicated roll/yaw");
     return;
   }
   const double stamp = msg.header.stamp.toSec(), now = ros::Time::now().toSec();
@@ -507,20 +486,20 @@ void RollYawInteractionRuntime::captureDynamicsJoints(const Input& c, const sens
        (msg.velocity.size() != msg.name.size() || !std::isfinite(msg.velocity[i]))))
     {
       previous = DynamicsJoint();
-      invalidateArticulated(c, "invalid dynamics joint timestamp/name/position/rate array");
+      rejectSample(c, "invalid dynamics joint timestamp/name/position/rate array");
       continue;
     }
     if((name == c.roll || name == c.yaw) &&
        (msg.effort.size() != msg.name.size() || !std::isfinite(msg.effort[i])))
     {
       previous = DynamicsJoint();
-      invalidateArticulated(c, "missing/nonfinite joint-side actuation torque");
+      rejectSample(c, "missing/nonfinite joint-side actuation torque");
       continue;
     }
     if(previous.stamp > 0 && (stamp < previous.stamp || stamp - previous.stamp > c.feedback_config.timeout))
     {
       previous = DynamicsJoint();
-      invalidateArticulated(c, "discontinuous dynamics joint timestamp; awaiting coherent samples");
+      rejectSample(c, "discontinuous dynamics joint timestamp; awaiting coherent samples");
     }
     if(stamp == previous.stamp)
       continue; // Duplicate samples never refresh receipt or observer time.
@@ -542,7 +521,18 @@ void RollYawInteractionRuntime::captureDynamicsJoints(const Input& c, const sens
       sample.effort = msg.effort[i]; // Already converted; never apply torque_scale or angle_sgn again.
     previous = sample;
     if(!sample.rate_valid)
-      invalidateArticulated(c, "joint rate unavailable; awaiting advancing valid samples");
+      rejectSample(c, "joint rate unavailable; awaiting advancing valid samples");
+  }
+  if(dynamics_joints_.count(c.roll) && dynamics_joints_.count(c.yaw))
+  {
+    const auto& roll = dynamics_joints_.at(c.roll);
+    const auto& yaw = dynamics_joints_.at(c.yaw);
+    if(roll.stamp == yaw.stamp && (joint_history_.empty() || roll.stamp > joint_history_.back().stamp))
+    {
+      joint_history_.push_back({roll.stamp, Eigen::Vector3d(0, roll.position, yaw.position),
+                                Eigen::Vector3d(0, roll.effort, yaw.effort)});
+      while(joint_history_.size() > 32) joint_history_.pop_front();
+    }
   }
 }
 
@@ -559,14 +549,14 @@ void RollYawInteractionRuntime::commandWrenchCallback(const Input& c, const geom
      !Eigen::Vector3d(w.torque.x, w.torque.y, w.torque.z).allFinite())
   {
     command_wrench_receipt_ = 0;
-    invalidateArticulated(c, "invalid command wrench timestamp/frame/value");
+    rejectSample(c, "invalid command wrench timestamp/frame/value");
     return;
   }
   if(stamp < command_wrench_.header.stamp.toSec())
   {
     command_wrench_receipt_ = 0;
     command_wrench_ = geometry_msgs::WrenchStamped();
-    invalidateArticulated(c, "command wrench timestamp moved backwards; awaiting coherent samples");
+    rejectSample(c, "command wrench timestamp moved backwards; awaiting coherent samples");
     return;
   }
   if(stamp == command_wrench_.header.stamp.toSec())
@@ -576,12 +566,30 @@ void RollYawInteractionRuntime::commandWrenchCallback(const Input& c, const geom
   if(!offset.allFinite())
   {
     command_wrench_receipt_ = 0;
-    invalidateArticulated(c, "command wrench application point unavailable");
+    rejectSample(c, "command wrench application point unavailable");
     return;
   }
   command_wrench_ = *msg;
   command_cog_offset_ = offset;
   command_wrench_receipt_ = receipt;
+  Eigen::Matrix<double, 6, 1> input;
+  input << w.force.x, w.force.y, w.force.z, w.torque.x, w.torque.y, w.torque.z;
+  command_history_.push_back({stamp, receipt, input, offset});
+  while(command_history_.size() > 32) command_history_.pop_front();
+}
+
+void RollYawInteractionRuntime::rejectSample(const Input& c, const std::string& reason)
+{
+  articulated_valid_ = false;
+  interaction_valid_ = false;
+  articulated_reason_ = reason;
+  const double now = roll_yaw::steadySeconds();
+  if(rejection_since_ == 0) rejection_since_ = now;
+  // A brief dropped sample is not a changed contact calibration. Persistent
+  // inconsistency cannot silently retain an armed baseline indefinitely.
+  if(now - rejection_since_ > 2.0 && (admittance_.baseline_ready || tare_requested_))
+    invalidateInteraction();
+  publishArticulatedLoad(c);
 }
 
 void RollYawInteractionRuntime::invalidateArticulated(const Input& c, const std::string& reason)
@@ -591,6 +599,7 @@ void RollYawInteractionRuntime::invalidateArticulated(const Input& c, const std:
   (void)observation_worker_.take();
   observation_pending_ = false;
   momentum_observer_.reset(reason);
+  observer_settling_until_ = 0;
   articulated_reason_ = reason;
   articulated_valid_ = false;
   articulated_receipt_ = 0;
@@ -605,6 +614,9 @@ void RollYawInteractionRuntime::resetArticulatedSession(const Input& c, const st
   articulated_worker_wall_ = 0;
   articulated_worker_tree_calls_ = 0;
   dynamics_joints_.clear();
+  body_history_.clear(); joint_history_.clear(); command_history_.clear(); observation_filter_.reset();
+  filtered_stamp_ = 0; observer_rates_ready_ = false; observer_gyro_disagreement_.setZero();
+  rejection_since_ = 0;
   articulated_body_stamp_ = articulated_joint_stamp_ = articulated_command_stamp_ = 0;
   articulated_published_stamp_ = 0;
   command_wrench_ = geometry_msgs::WrenchStamped();
@@ -618,6 +630,7 @@ void RollYawInteractionRuntime::invalidateInteraction()
   interaction_valid_ = false;
   interaction_stamp_ = interaction_receipt_ = 0;
   tare_requested_ = false; // Recovery cannot silently restore a fault-invalidated baseline.
+  baseline_.resize(0); baseline_sum_.resize(0); baseline_stamp_ = 0;
   // Invalidate all tare/filter/contact history, retaining only the state needed
   // by the existing bounded braking route. An armed fault NEVER falls back.
   const auto previous = admittance_;
@@ -664,20 +677,21 @@ void RollYawInteractionRuntime::publishArticulatedLoad(const Input& c)
 
 bool RollYawInteractionRuntime::observeArticulatedSample(const Input& c, const roll_yaw::Feedback& f)
 {
-  auto fail = [this, &c](const std::string& reason) { invalidateArticulated(c, reason); return false; };
+  auto fail = [this, &c](const std::string& reason) { rejectSample(c, reason); return false; };
+  auto invalid = [this, &c](const std::string& reason) { invalidateArticulated(c, reason); return false; };
   if(!c.lock_valid || !f.hover)
-    return fail("requires valid synchronized attached HOVER state");
+    return invalid("requires valid synchronized attached HOVER state");
   const auto contact_error = c.contact_rejection(f);
   if(!contact_error.empty())
     return fail("invalid contact/feedback: " + contact_error);
   if(c.last_body_message_stamp != f.body_stamp || c.last_joint_message_stamp != f.joint_stamp)
     return fail("latest body/joint measurement was rejected; awaiting valid inputs");
   if(!articulated_model_valid_)
-    return fail("invalid locked dynamics snapshot; recapture with valid inertias and geometry");
+    return invalid("invalid locked dynamics snapshot; recapture with valid inertias and geometry");
   if(!c.dynamics_snapshot_current || !c.dynamics_snapshot_current())
-    return fail("robot topology/inertia/extra modules changed since lock; recapture required");
+    return invalid("robot topology/inertia/extra modules changed since lock; recapture required");
   if(!effort_source_valid_ || (effort_source_ == "gazebo_ode_joint_states" && !ros::Time::isSimTime()))
-    return fail("selected joint effort source is unavailable or incorrectly configured");
+    return invalid("selected joint effort source is unavailable or incorrectly configured");
   const double wall = roll_yaw::steadySeconds();
   if(f.now - f.body_stamp > c.feedback_config.timeout)
     return fail("dynamics observation timestamp exceeds maximum age");
@@ -728,56 +742,94 @@ bool RollYawInteractionRuntime::observeArticulatedSample(const Input& c, const r
     articulated_command_stamp_ = result->command_stamp;
     articulated_jacobian_ = result->jacobian;
     articulated_receipt_ = result->receipt; // Original source capture, never completion time.
-    articulated_valid_ = ready;
-    if(!ready && momentum_observer_.stamp() == 0) return fail(articulated_reason_);
+    if(!ready) observer_settling_until_ = result->body_stamp + 3 / observer_gain_;
+    articulated_valid_ = ready && result->body_stamp >= observer_settling_until_;
+    if(ready && !articulated_valid_) articulated_reason_ = "momentum observer settling; contact baseline retained";
+    if(!ready && momentum_observer_.stamp() == 0)
+      articulated_reason_ = "observer rebase after sample gap; contact baseline retained";
+  }
+  if(body_history_.empty() || f.body_stamp > body_history_.back().feedback.body_stamp)
+  {
+    body_history_.push_back({f});
+    while(body_history_.size() > 32) body_history_.pop_front();
   }
   if(observation_pending_) return articulatedLoadValid(c, f);
-  // Recheck physical state even when only part of the synchronized sample advances.
-  // Each body/joint/known-input sample is consumed at most once; repeated samples
-  // retain both the residual's timestamp and its matching projection Jacobian.
-  if(f.body_stamp <= articulated_body_stamp_ || f.joint_stamp <= articulated_joint_stamp_ ||
-     input_stamp <= articulated_command_stamp_)
-  {
-    if(f.body_stamp < articulated_body_stamp_ || f.joint_stamp < articulated_joint_stamp_ ||
-       input_stamp < articulated_command_stamp_)
-      return fail("dynamics measurement time moved backwards");
-    if(f.now - momentum_observer_.stamp() > c.feedback_config.timeout)
-      return fail("no advancing coherent dynamics sample within feedback timeout");
+  // Interpolate measured pose/gyro and joint position to one observation time.
+  // The applied command is held between publications, never extrapolated from
+  // a future input. All subsequent filtering uses this same advancing clock.
+  if(body_history_.size() < 2 || joint_history_.size() < 2 || command_history_.empty())
+    return fail("awaiting synchronized observation history");
+  const double sample_stamp = std::min({f.body_stamp, joint_history_.back().stamp, command_history_.back().stamp});
+  if(sample_stamp <= filtered_stamp_)
     return articulatedLoadValid(c, f);
+  auto aligned = f;
+  bool body_found = false, joints_found = false;
+  for(std::size_t i = 1; i < body_history_.size(); ++i)
+  {
+    const auto& a = body_history_[i - 1].feedback;
+    const auto& b = body_history_[i].feedback;
+    if(a.body_stamp <= sample_stamp && sample_stamp <= b.body_stamp)
+    {
+      const double u = (sample_stamp - a.body_stamp) / (b.body_stamp - a.body_stamp);
+      aligned.body.translation() = (1 - u) * a.body.translation() + u * b.body.translation();
+      aligned.body.linear() = Eigen::Quaterniond(a.body.linear()).slerp(u, Eigen::Quaterniond(b.body.linear())).toRotationMatrix();
+      aligned.body_omega = aligned.body.linear().transpose() *
+          ((1 - u) * a.body.linear() * a.body_omega + u * b.body.linear() * b.body_omega);
+      body_found = b.body_stamp - a.body_stamp <= c.feedback_config.observer_max_interval;
+      break;
+    }
   }
+  for(std::size_t i = 1; i < joint_history_.size(); ++i)
+  {
+    const auto& a = joint_history_[i - 1];
+    const auto& b = joint_history_[i];
+    if(a.stamp <= sample_stamp && sample_stamp <= b.stamp)
+    {
+      const double u = (sample_stamp - a.stamp) / (b.stamp - a.stamp);
+      aligned.eta = (1 - u) * a.q + u * b.q;
+      joint_load = (1 - u) * a.effort + u * b.effort;
+      joints_found = b.stamp - a.stamp <= c.feedback_config.observer_max_interval;
+      break;
+    }
+  }
+  const CommandSample* command = nullptr;
+  for(const auto& sample : command_history_)
+    if(sample.stamp <= sample_stamp) command = &sample;
+  if(!body_found || !joints_found || !command || sample_stamp - command->stamp > c.synchronization_tolerance)
+    return fail("awaiting bracketing body/joint and applied-command samples");
   roll_yaw::Estimate estimate;
-  Eigen::Vector3d q = f.eta, rate = f.joint_rate;
-  Eigen::Matrix3d j;
-  Eigen::Isometry3d body, cog;
-  if(!c.model.estimate(f.body, q, estimate))
-    return fail("passive hinge position unavailable");
+  Eigen::Vector3d q = aligned.eta;
+  if(!c.model.estimate(aligned.body, q, estimate)) return fail("passive hinge position unavailable");
   q[0] = estimate.alpha;
-  if(!c.model.jacobian(q, j) || !c.model.evaluate(q, body, cog))
-    return fail("body Jacobian/FK unavailable");
+  filtered_stamp_ = sample_stamp;
+  observer_rates_ready_ = observation_filter_.observe(q, aligned.body.linear(), aligned.body_omega,
+      joint_load, command->wrench, sample_stamp, c.feedback_config.observer_max_interval);
+  observer_gyro_disagreement_ = observation_filter_.gyro - observation_filter_.omega;
+  if(!observer_rates_ready_) return fail("observer pose derivatives settling after initialization or a measurement gap");
+  q = observation_filter_.q;
+  Eigen::Vector3d rate = observation_filter_.rate;
+  Eigen::Matrix3d j;
+  if(!c.model.jacobian(q, j)) return invalid("body Jacobian unavailable");
   Eigen::JacobiSVD<Eigen::Matrix3d> svd(j, Eigen::ComputeFullU | Eigen::ComputeFullV);
   if(svd.singularValues().minCoeff() < c.planning_config.min_singular_value || j.col(0).squaredNorm() < 1e-10)
     return fail("singular body Jacobian for generalized state reconstruction");
-  // StateEstimator publishes angular twist in BASELINK (child_frame) axes.
-  // Kinematics::jacobian has the same body axes and [alpha,roll,yaw] order.
-  const Eigen::Vector3d passive = f.body_omega - j.rightCols<2>() * rate.tail<2>();
+  const Eigen::Vector3d passive = observation_filter_.omega - j.rightCols<2>() * rate.tail<2>();
   rate[0] = j.col(0).dot(passive) / j.col(0).squaredNorm();
-  // External motion is not limited by commanded planner speeds. This residual
-  // tests the constrained velocity relation, not command tracking.
-  if(!rate.allFinite() || (j * rate - f.body_omega).norm() > c.planning_config.rate_tolerance)
+  angular_rate_residual_ = (j * rate - observation_filter_.omega).norm();
+  if(!rate.allFinite() || angular_rate_residual_ > c.planning_config.rate_tolerance)
     return fail("passive angular rate inconsistent with constrained body motion");
-  const auto& w = command_wrench_.wrench;
-  const Eigen::Vector3d force(w.force.x, w.force.y, w.force.z), moment(w.torque.x, w.torque.y, w.torque.z);
-  // Both wrench and link Jacobians use world axes. Shift the moment from the
-  // command's instantaneous CoG to body B exactly once inside evaluate(). Only
-  // this input application point is live; all reduced inertial geometry stays
-  // at its captured internal configuration and current alpha/roll/yaw.
-  if(!observation_model_) return fail("immutable dynamics model unavailable");
+  rejection_since_ = 0;
+  joint_load = observation_filter_.effort;
+  const Eigen::Vector3d force = observation_filter_.wrench.head<3>();
+  const Eigen::Vector3d moment = observation_filter_.wrench.tail<3>();
+  if(!observation_model_) return invalid("immutable dynamics model unavailable");
   const auto model = observation_model_;
-  const auto offset = command_cog_offset_;
+  const auto offset = command->offset;
   const auto session = c.session, epoch = observation_epoch_;
-  const double body_stamp = f.body_stamp, joint_stamp = f.joint_stamp;
+  const double body_stamp = sample_stamp, joint_stamp = sample_stamp;
+  const double receipt = std::min({command->receipt, dynamics_joints_.at(c.roll).receipt, dynamics_joints_.at(c.yaw).receipt});
   observation_pending_ = observation_worker_.submit(
-      [model, q, rate, joint_load, force, moment, offset, session, epoch, body_stamp, joint_stamp, input_stamp, wall, j]
+      [model, q, rate, joint_load, force, moment, offset, session, epoch, body_stamp, joint_stamp, input_stamp, receipt, j]
       (const std::function<bool()>& cancelled)
       {
         Observation result;
@@ -786,7 +838,7 @@ bool RollYawInteractionRuntime::observeArticulatedSample(const Input& c, const r
         result.body_stamp = body_stamp;
         result.joint_stamp = joint_stamp;
         result.command_stamp = input_stamp;
-        result.receipt = wall;
+        result.receipt = receipt;
         result.jacobian = j;
         const double started = roll_yaw::steadySeconds();
         roll_yaw::workCounters() = roll_yaw::WorkCounters();
@@ -805,18 +857,27 @@ void RollYawInteractionRuntime::resetCompliance()
   admittance_.reset();
   external_wrench_ = geometry_msgs::WrenchStamped();
   tare_requested_ = false;
+  baseline_.resize(0); baseline_sum_.resize(0); baseline_stamp_ = 0;
   interaction_valid_ = false;
   interaction_stamp_ = 0;
   interaction_receipt_ = 0;
   compliance_time_ = 0;
-  admittance_reason_ = "disabled: prepare to measured READY, then no-cut tare with a fresh external wrench";
+  admittance_reason_ = "disabled: hold contact, tare unloaded, then enable and send pitch commands";
 }
+bool RollYawInteractionRuntime::quietContact(const Input& c) const
+{
+  return c.lock_valid && c.feedback.hover && c.reference_held && !c.stopping &&
+      c.contact_rejection(c.feedback).empty() &&
+      (c.plan ? c.plan->ok && !c.plan->goal.align_only && c.stage == roll_yaw::Stage::READY &&
+                c.preparation_rejection(c.feedback).empty() : c.quiet_contact);
+}
+
 void RollYawInteractionRuntime::admittanceCallback(const Input& c, const std_msgs::BoolConstPtr& msg)
 {
   if(!msg->data)
   {
     admittance_.enabled = false;
-    admittance_reason_ = "disabled; bounded correction release along prepared path";
+    admittance_reason_ = "disabled; bounded coordinated correction release";
   }
   else if(!interaction_configured_ || !admittance_.config.valid())
   {
@@ -827,16 +888,15 @@ void RollYawInteractionRuntime::admittanceCallback(const Input& c, const std_msg
   {
     admittance_reason_ = "unavailable: " + articulated_reason_;
   }
-  else if(!c.plan || !c.plan->ok || c.plan->goal.align_only || c.stage != roll_yaw::Stage::READY ||
-          !c.preparation_rejection(c.feedback).empty())
+  else if(!quietContact(c))
   {
     admittance_reason_ =
-        "unavailable: require a prepared cut at measured READY with current quiet/tracking/contact feedback";
+        "unavailable: require a quiet held contact with measured tracking/settling";
   }
   else if(!admittance_.baseline_ready)
   {
     admittance_reason_ =
-        "unavailable: no completed baseline; tare at quiet no-cut READY with a fresh synchronized wrench";
+        "unavailable: no completed baseline; tare at quiet unloaded contact with a fresh synchronized load";
   }
   else if(!interaction_valid_ || interaction_stamp_ <= 0 ||
           ros::Time::now().toSec() - interaction_stamp_ > c.feedback_config.timeout ||
@@ -858,12 +918,11 @@ void RollYawInteractionRuntime::tareCallback(const Input& c, const TareRequest& 
   const auto sign = request.sign, scale = request.scale;
   const auto& frame = request.frame;
   const auto& point = request.point;
-  if(session != c.session || generation != c.generation || admittance_.enabled || !c.plan ||
-     c.stage != roll_yaw::Stage::READY || std::abs(admittance_.offset) > 1e-8 ||
-     !c.preparation_rejection(c.feedback).empty())
+  if(session != c.session || generation != c.generation || admittance_.enabled ||
+     std::abs(admittance_.offset) > 1e-8 || !quietContact(c))
   {
     admittance_reason_ =
-        "tare rejected: disable, wait for zero correction and measured READY cut; retry after state change";
+        "tare rejected: disable, wait for zero correction and quiet held contact; retry after state change";
     return;
   }
   const bool source_changed = loadInteractionSource(c, retired, request.source);
@@ -889,14 +948,15 @@ void RollYawInteractionRuntime::tareCallback(const Input& c, const TareRequest& 
         "tare rejected: invalid source, observer gain, admittance dynamics or legacy wrench mapping";
     return;
   }
-  if(!c.plan || !c.plan->ok || c.plan->goal.align_only || c.stage != roll_yaw::Stage::READY ||
-     admittance_.enabled || std::abs(admittance_.offset) > 1e-8)
+  if(!quietContact(c) || admittance_.enabled || std::abs(admittance_.offset) > 1e-8)
   {
-    admittance_reason_ = "tare rejected: require READY cut, disabled and zero correction; remove cutting contact";
+    admittance_reason_ = "tare rejected: require quiet held contact, disabled and zero correction; remove cutting contact";
     return;
   }
   admittance_.reset();
   tare_requested_ = true;
+  ++tare_generation_;
+  baseline_.resize(0); baseline_sum_.resize(0); baseline_stamp_ = 0;
   interaction_stamp_ = interaction_source_ == InteractionSource::LEGACY_WRENCH ? external_wrench_.header.stamp.toSec()
                                                                             : momentum_observer_.stamp();
   interaction_receipt_ = 0;
@@ -928,67 +988,75 @@ void RollYawInteractionRuntime::externalWrenchCallback(const Input& c, const geo
 }
 bool RollYawInteractionRuntime::observeInteractionSample(const Input& c, const roll_yaw::Feedback& f, double stamp, bool quiet)
 {
-  const auto& goal = c.plan->goal;
-  const double direction = goal.pitch_end >= goal.pitch_start ? 1 : -1;
+  const double direction = c.plan && c.plan->goal.pitch_end < c.plan->goal.pitch_start ? -1 : 1;
+  Eigen::VectorXd load;
+  Eigen::Vector3d force = Eigen::Vector3d::Zero(), moment = force;
+  Eigen::Vector3d q = f.eta;
   bool fresh = false;
-  if(interaction_source_ == InteractionSource::ARTICULATED_MOMENTUM)
+  const bool articulated = interaction_source_ == InteractionSource::ARTICULATED_MOMENTUM;
+  if(articulated)
   {
-    // Project the already observed residual with the Jacobian from THAT sample.
-    // A path/projection failure cannot invalidate the physical generalized load.
-    fresh = articulatedLoadValid(c, f) && std::isfinite(goal.pitch_start) && std::isfinite(goal.pitch_end) &&
-            goal.pitch_end != goal.pitch_start;
+    fresh = articulatedLoadValid(c, f);
     stamp = momentum_observer_.stamp();
-    if(fresh)
-    {
-      const auto& j = articulated_jacobian_;
-      Eigen::JacobiSVD<Eigen::Matrix3d> svd(j, Eigen::ComputeFullU | Eigen::ComputeFullV);
-      const Eigen::Vector3d tangent = svd.solve(direction * Eigen::Vector3d::UnitY());
-      interaction_torque_ = tangent.dot(momentum_observer_.load());
-      fresh = tangent.allFinite() && (j * tangent - direction * Eigen::Vector3d::UnitY()).norm() <= 1e-8 &&
-              std::isfinite(interaction_torque_);
-      if(fresh)
-        interaction_receipt_ = articulated_receipt_;
-    }
+    if(fresh) { load = momentum_observer_.load(); interaction_receipt_ = articulated_receipt_; }
   }
   else if(interaction_source_ == InteractionSource::LEGACY_WRENCH)
   {
-    roll_yaw::Estimate e;
-    Eigen::Vector3d q = f.eta;
+    roll_yaw::Estimate estimate;
     Eigen::Isometry3d body, cog;
-    fresh = c.model.estimate(f.body, q, e);
-    q[0] = e.alpha;
-    if(fresh)
-      fresh = c.model.evaluate(q, body, cog);
+    fresh = c.model.estimate(f.body, q, estimate);
+    q[0] = estimate.alpha;
+    fresh = fresh && c.model.evaluate(q, body, cog);
     if(fresh)
     {
       const auto& w = external_wrench_.wrench;
-      Eigen::Vector3d force(w.force.x, w.force.y, w.force.z), moment(w.torque.x, w.torque.y, w.torque.z);
-      if(interaction_frame_ == "body")
-      {
-        force = f.body.linear() * force;
-        moment = f.body.linear() * moment;
-      }
+      force << w.force.x, w.force.y, w.force.z;
+      moment << w.torque.x, w.torque.y, w.torque.z;
+      if(interaction_frame_ == "body") { force = f.body.linear() * force; moment = f.body.linear() * moment; }
       Eigen::Vector3d source = Eigen::Vector3d::Zero();
-      if(interaction_point_ == "body")
-        source = f.body.translation();
-      if(interaction_point_ == "cog")
-        source = f.body * (body.inverse() * cog).translation();
-      fresh = roll_yaw::pathInteractionTorque(c.model, q, direction, c.planning_config.min_singular_value, force, moment, source,
-                                    interaction_torque_);
-      interaction_torque_ *= interaction_sign_ * interaction_scale_;
-      fresh = fresh && std::isfinite(interaction_torque_);
+      if(interaction_point_ == "body") source = f.body.translation();
+      if(interaction_point_ == "cog") source = f.body * (body.inverse() * cog).translation();
+      load.resize(6);
+      load << force, (moment + source.cross(force)).eval(); // World origin, independent of later pitch targets.
+      load *= interaction_sign_ * interaction_scale_;
     }
   }
+  if(!fresh || !load.allFinite()) return false;
+  if(tare_requested_ && quiet && stamp > baseline_stamp_)
+  {
+    if(baseline_sum_.size() != load.size() || (baseline_stamp_ > 0 && stamp - baseline_stamp_ > 2.0))
+    { baseline_sum_ = Eigen::VectorXd::Zero(load.size()); admittance_.samples = 0; }
+    baseline_sum_ += load;
+    baseline_stamp_ = stamp;
+    if(++admittance_.samples >= admittance_.config.baseline_samples)
+    {
+      baseline_ = baseline_sum_ / admittance_.samples;
+      admittance_.baseline_ready = true;
+      tare_requested_ = false;
+      admittance_reason_ = "disabled/ready: unloaded contact baseline complete; enable explicitly";
+    }
+  }
+  if(admittance_.baseline_ready)
+  {
+    if(baseline_.size() != load.size()) return false;
+    load -= baseline_;
+  }
+  if(articulated)
+  {
+    const auto& j = articulated_jacobian_;
+    Eigen::JacobiSVD<Eigen::Matrix3d> svd(j, Eigen::ComputeFullU | Eigen::ComputeFullV);
+    const Eigen::Vector3d tangent = svd.solve(direction * Eigen::Vector3d::UnitY());
+    interaction_torque_ = tangent.dot(load);
+    fresh = tangent.allFinite() && (j * tangent - direction * Eigen::Vector3d::UnitY()).norm() <= 1e-8;
+  }
+  else
+    fresh = roll_yaw::pathInteractionTorque(c.model, q, direction, c.planning_config.min_singular_value,
+        load.head<3>(), load.tail<3>(), Eigen::Vector3d::Zero(), interaction_torque_);
+  fresh = fresh && std::isfinite(interaction_torque_);
   if(fresh)
   {
-    if(stamp > interaction_stamp_)
-      admittance_.observe(interaction_torque_, stamp, tare_requested_ && quiet && c.stage == roll_yaw::Stage::READY);
+    if(stamp > interaction_stamp_) admittance_.observe(interaction_torque_, stamp, false, !c.plan);
     interaction_stamp_ = stamp;
-    if(tare_requested_ && admittance_.baseline_ready)
-    {
-      tare_requested_ = false;
-      admittance_reason_ = "disabled/ready: no-cut baseline complete; enable explicitly";
-    }
   }
   return fresh;
 }
@@ -1002,7 +1070,7 @@ RollYawInteractionRuntime::Output RollYawInteractionRuntime::updateInteraction(c
   Output out;
   const double dt = compliance_time_ > 0 ? f.now - compliance_time_ : 0;
   compliance_time_ = f.now;
-  if(!c.plan || !c.plan->ok || c.plan->goal.align_only)
+  if(!c.lock_valid || (c.plan && (!c.plan->ok || c.plan->goal.align_only)))
   {
     interaction_valid_ = false;
     return out;
@@ -1019,12 +1087,11 @@ RollYawInteractionRuntime::Output RollYawInteractionRuntime::updateInteraction(c
   else
     fresh = fresh && interaction_receipt_ > 0 &&
             roll_yaw::steadySeconds() - interaction_receipt_ <= c.feedback_config.timeout;
-  const bool quiet = f.body_omega.norm() < c.feedback_config.settle_body_rate &&
-                     f.joint_rate.tail<2>().norm() < c.feedback_config.settle_joint_rate &&
-                     (!tare_requested_ || c.preparation_rejection(f).empty());
+  const bool quiet = quietContact(c);
   if(tare_requested_ && !quiet)
   {
     admittance_.reset();
+    baseline_sum_.resize(0); baseline_stamp_ = 0;
     admittance_reason_ = "tare waiting for quiet no-cut posture";
   }
   if(fresh && !articulated && stamp == interaction_stamp_)
@@ -1039,8 +1106,7 @@ RollYawInteractionRuntime::Output RollYawInteractionRuntime::updateInteraction(c
     fresh = false; // A fault requires explicit disarm and a new no-contact tare.
   if(tare_requested_ && !fresh)
   {
-    admittance_.reset();
-    admittance_reason_ = "tare waiting for a continuous fresh synchronized no-cut source";
+    admittance_reason_ = "tare waiting for a fresh synchronized unloaded source";
   }
   if(admittance_.enabled && !fresh)
     admittance_reason_ =
@@ -1050,26 +1116,39 @@ RollYawInteractionRuntime::Output RollYawInteractionRuntime::updateInteraction(c
   if(articulated && !fresh)
     admittance_reason_ = (articulatedLoadValid(c, f) ? "signed path projection/compliance unavailable"
                                                 : "articulated unavailable: " + articulated_reason_) +
-                         (admittance_.enabled ? "; feed held; compliance baseline requires explicit disarm/tare" : "");
+                         (admittance_.enabled ? "; feed held until coherent load recovers" : "");
   // Observation/filtering continues at a hold; integration never advances an
   // invisible correction while explicitly PAUSED, aligning or READY.
-  if(c.stage == roll_yaw::Stage::EXECUTING && !c.stopping &&
+  if(((c.plan && c.stage == roll_yaw::Stage::EXECUTING) || !c.plan) && !c.stopping &&
      (admittance_.enabled || std::abs(admittance_.offset) > 1e-10 || std::abs(admittance_.rate) > 1e-10))
   {
-    const auto& plan = *c.plan;
-    double angle = 0, cross = 0;
-    const Eigen::Matrix3d pre = roll_yaw::cuttingOrientation(plan.neutral, plan.goal, 0, 0, 0).rotation;
-    const bool mapped =
-        roll_yaw::taskPitch(pre, plan.cut.desired(c.nominal_progress).rotation, plan.goal.pitch_start, angle, cross);
-    const double available =
-        std::max(0.0, (plan.goal.pitch_end >= plan.goal.pitch_start ? 1 : -1) * (angle - plan.goal.pitch_start));
-    const int steps = c.feedback_config.integrationSteps(dt);
+    double available = admittance_.config.angle_limit;
+    bool mapped = true;
+    if(c.plan)
+    {
+      const auto& plan = *c.plan;
+      double angle = 0, cross = 0;
+      const Eigen::Matrix3d pre = roll_yaw::cuttingOrientation(plan.neutral, plan.goal, 0, 0, 0).rotation;
+      mapped = roll_yaw::taskPitch(pre, plan.cut.desired(c.nominal_progress).rotation, plan.goal.pitch_start, angle, cross);
+      available = std::min(c.relief_available,
+          std::max(0.0, (plan.goal.pitch_end >= plan.goal.pitch_start ? 1 : -1) * (angle - plan.goal.pitch_start)));
+    }
+    const double elapsed = c.plan ? dt : c.local_dt;
+    const int steps = c.feedback_config.integrationSteps(elapsed);
     auto candidate = admittance_;
+    if(!c.plan)
+    {
+      candidate.config.rate_limit = std::min(candidate.config.rate_limit, c.local_rate_limit);
+      candidate.config.acceleration_limit = std::min(candidate.config.acceleration_limit, c.local_acceleration_limit);
+    }
     bool integrated = mapped && steps >= 0;
     for(int i = 0; integrated && i < steps; ++i)
-      integrated = candidate.step(dt / steps, fresh, true, std::min(available, c.relief_available));
+      integrated = candidate.step(elapsed / steps, fresh, c.plan != nullptr, available);
     if(integrated)
+    {
+      candidate.config = admittance_.config; // Physical limits constrain this step, not the configured law.
       admittance_ = candidate;
+    }
     else
     {
       fresh = false;
@@ -1077,13 +1156,15 @@ RollYawInteractionRuntime::Output RollYawInteractionRuntime::updateInteraction(c
       admittance_reason_ = "scalar state unavailable; bounded feed hold";
     }
   }
-  if(articulated && scalar_failed)
-    invalidateInteraction();
+  // A constrained integration step is not a changed contact calibration.
+  // The follower brakes and reconciles its applied correction before retrying.
+
   interaction_valid_ = fresh;
   out.updated = true;
-  out.relief = std::min(0.0, admittance_.offset);
+  out.relief = c.plan ? std::min(0.0, admittance_.offset) : admittance_.offset;
   out.interaction_hold = (admittance_.enabled && !fresh) || scalar_failed;
-  out.resisting_load = admittance_.enabled && fresh && admittance_.contact;
+  out.resisting_load = admittance_.enabled && fresh && admittance_.contact &&
+      (c.plan || c.pitch_rate * admittance_.filtered < 0);
   out.relief_enabled = admittance_.enabled;
   out.relief_angle_limit = admittance_.config.angle_limit;
   out.relief_rate_limit = admittance_.config.rate_limit;

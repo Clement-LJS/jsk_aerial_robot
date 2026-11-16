@@ -225,10 +225,16 @@ void GimbalrotorController::controlCore()
 	target_pitch_ = navigator_->getTargetRPY().y();
       }
 
-    /*  calculate target base thrust (considering only translational components)*/
+    // The FC supplies attitude feedback and gyro compensation. Only the
+    // reference-rate/acceleration terms missing from FourAxisCommand go here.
+    Eigen::VectorXd reference_force = Eigen::VectorXd::Zero(target_vectoring_f_trans_.size());
+    if(gimbal_calc_in_fc_ && !effective_underactuate)
+      reference_force = integrated_map_inv_rot_ * angularFeedforward();
+    /* calculate target base thrust */
     double max_yaw_scale = 0; // for reconstruct yaw control term in spinal
     for(int i = 0; i < motor_num_; i++){
-      Eigen::VectorXd f_i = target_vectoring_f_trans_.segment(last_col, rotor_coef_);
+      Eigen::VectorXd f_i = target_vectoring_f_trans_.segment(last_col, rotor_coef_) +
+          reference_force.segment(last_col, rotor_coef_);
       if(gimbal_dof_ == 1)
         {
           target_base_thrust_.at(rotor_coef_ * i) = f_i[0];

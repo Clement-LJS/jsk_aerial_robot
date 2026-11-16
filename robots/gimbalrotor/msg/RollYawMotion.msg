@@ -11,6 +11,7 @@ uint8 BODY_PITCH=3
 uint8 VELOCITY=4
 uint8 STOP=5
 uint8 JOG=6
+uint8 PULSE=7
 uint8 mode
 float64 value
 # BODY_PITCH frame identity, chosen by the source on each entry to target mode.
@@ -18,3 +19,6 @@ uint64 frame
 # Positive speed limit for BODY_PITCH. Its value is an absolute offset from the
 # body's local-Y frame captured when this source enters body-pitch target mode.
 float64 rate_limit
+# PULSE only: finite feed time, measured onboard from acceptance. Repeated or
+# late requests cannot extend an accepted pulse. Hold time belongs to the script.
+float64 duration

@@ -1,4 +1,5 @@
 #include <gtest/gtest.h>
+#include <gimbalrotor/control/gimbalrotor_multilink_perching_observer.h>
 #include <gimbalrotor/gimbalrotor_perching.h>
 #include <kdl_parser/kdl_parser.hpp>
 #include <kdl/treefksolverpos_recursive.hpp>
@@ -802,4 +803,147 @@ TEST(ActualUrdf,JacobianCogAndOfflinePlan)
     auto stroke=prepare(model,a.align.knots.back().eta,b.linear(),r,c);
     ASSERT_TRUE(stroke.ok)<<stroke.reason; EXPECT_GT(stroke.proxy_drop,0);
   }
+}
+
+TEST(Motion,PulseDeadlineSurvivesFeedbackHoldAndProcessLoss)
+{
+  PitchPulse pulse;
+  EXPECT_FALSE(pulse.start(1, std::numeric_limits<double>::quiet_NaN(), 100, 200));
+  EXPECT_FALSE(pulse.start(1, 9, 100, 200));
+  ASSERT_TRUE(pulse.start(5, 1, 100, 200));
+  EXPECT_FALSE(pulse.expired(100.5, 200.5, false));
+  EXPECT_TRUE(pulse.expired(101, 201, false));
+  // ROS time stalls, but physical motion authorization still ends on wall time.
+  EXPECT_TRUE(pulse.expired(100.5, 202, false));
+  EXPECT_FALSE(pulse.expired(100.5, 202, true));
+  EXPECT_FALSE(pulse.start(5, 1, 105, 205)); // A duplicate cannot extend authorization.
+  EXPECT_FALSE(pulse.start(4, 1, 105, 205));
+  EXPECT_TRUE(pulse.expired(108, 208, false)); // Recovery cannot replay held feed.
+}
+
+TEST(Admittance,BidirectionalLocalPitchKeepsBaselineAcrossPulsesAndOutage)
+{
+  Fixture fixture;
+  for(double sign : {-1., 1.})
+  {
+    PitchAdmittance a; a.config.baseline_samples=3;
+    for(int i=0; i<4; ++i) a.observe(0, 1 + i*.025, true, true);
+    ASSERT_TRUE(a.baseline_ready);
+    a.enabled=true;
+    Reference applied;
+    ASSERT_TRUE(mechanismReference(fixture.model, Vec::Zero(), Vec::Zero(), Vec::Zero(), applied));
+    const Mat start=applied.body.linear();
+    double nominal=0, time=2;
+    for(int i=0; i<240; ++i)
+    {
+      time+=.025;
+      const bool fresh=i<100 || i>120;
+      if(fresh) a.observe(sign*2*a.config.on_threshold, time, false, true);
+      ASSERT_TRUE(a.step(.025, fresh, false));
+      // One nominal local-pitch target plus one independent correction produces
+      // both body and active-joint references from the same configuration.
+      const double feed=i<40 ? .001 : 0;
+      nominal+=feed*.025;
+      Reference corrected; std::string reason;
+      ASSERT_TRUE(localPitchReference(fixture.model, start*expSO3(Vec::UnitY()*(nominal+a.offset)),
+          applied.eta, feed+a.rate, a.acceleration, fixture.config, corrected, reason)) << reason;
+      Pose body,cog; ASSERT_TRUE(fixture.model.evaluate(corrected.eta,body,cog));
+      EXPECT_LT(logSO3(body.linear().transpose()*corrected.body.linear()).norm(), 1e-8);
+      EXPECT_LT((body.translation()-corrected.body.translation()).norm(), 1e-8);
+      EXPECT_TRUE(a.baseline_ready);
+      applied=corrected;
+    }
+    EXPECT_GT(sign*a.offset,0);
+  }
+}
+
+TEST(Observer,PoseDerivativesUseOneBandwidthWithoutChangingAttitudeGyro)
+{
+  perching_dynamics::ObservationFilter f;
+  const Vec bias(.0178, -.006, .003);
+  const Eigen::Matrix<double,6,1> input=Eigen::Matrix<double,6,1>::Zero();
+  bool ready=false;
+  for(int i=0; i<120; ++i)
+    ready=f.observe(Vec::Zero(),Mat::Identity(),bias,Vec::Zero(),input,1+i*.02,.15);
+  ASSERT_TRUE(ready);
+  EXPECT_LT(f.omega.norm(),1e-10);
+  EXPECT_LT((f.gyro-bias).norm(),1e-10);
+  EXPECT_FALSE(f.observe(Vec::Zero(),Mat::Identity(),bias,Vec::Zero(),input,3,.15));
+  EXPECT_FALSE(f.observe(Vec::Zero(),Mat::Identity(),bias,Vec::Zero(),input,4,.15));
+  for(int i=1; i<400; ++i)
+  {
+    const double t=i*.02;
+    ready=f.observe(Vec(0,t*.008,0),expSO3(Vec::UnitY()*t*.008),bias+Vec(0,.008,0),
+                    Vec::Zero(),input,4+t,.15);
+  }
+  EXPECT_TRUE(ready);
+  EXPECT_NEAR(f.rate.y(),.008,1e-5);
+  EXPECT_NEAR(f.omega.y(),.008,1e-5);
+  // Frame transport of a body-fixed sensor bias has a bounded O(omega*tau) lag.
+  EXPECT_LT((f.gyro-f.omega-bias).norm(),1.01*bias.norm()*.008*f.time_constant);
+  f.reset(); EXPECT_EQ(f.omega,Vec::Zero());
+}
+
+TEST(Observer,InconsistentPoseMotionIsNotForcedIntoTheJointConstraint)
+{
+  Fixture fixture;
+  perching_dynamics::ObservationFilter f;
+  const Eigen::Matrix<double,6,1> input=Eigen::Matrix<double,6,1>::Zero();
+  for(int i=0; i<200; ++i)
+    f.observe(Vec::Zero(),expSO3(Vec::UnitX()*.002*i),Vec(.1,0,0),Vec::Zero(),input,1+i*.02,.15);
+  Mat j; ASSERT_TRUE(fixture.model.jacobian(Vec::Zero(),j));
+  Vec rate=f.rate; rate[0]=j.col(0).dot(f.omega)/j.col(0).squaredNorm();
+  EXPECT_GT((j*rate-f.omega).norm(),.01);
+}
+
+TEST(Control,ReferenceFeedforwardDoesNotDuplicateDampingOrYaw)
+{
+  const Vec gain(7,7,7), limit(10,10,10), rate(.001,.00872664626,.2), acceleration(.002,.003,.5);
+  const Vec ff=referenceFeedforward(rate,acceleration,gain,limit);
+  EXPECT_EQ(ff.z(),0);
+  EXPECT_LT((ff.head<2>()-(gain.cwiseProduct(rate)+acceleration).head<2>()).norm(),1e-12);
+  const Vec measured(.003,.004,.005);
+  const Vec fc=-gain.cwiseProduct(measured);
+  EXPECT_NEAR((fc+ff).y(), gain.y()*(rate.y()-measured.y())+acceleration.y(),1e-12);
+  EXPECT_EQ(referenceFeedforward(Vec::Zero(),Vec::Zero(),gain,limit),Vec::Zero());
+  EXPECT_LE(referenceFeedforward(100*rate,100*acceleration,gain,Vec(.01,.01,.01)).norm(),std::sqrt(2)*.01+1e-12);
+}
+
+TEST(Observer,RecordedQuietIntervalConditioning)
+{
+  const char* file=std::getenv("ROLL_YAW_OBSERVER_SAMPLES");
+  if(!file) GTEST_SKIP()<<"Set ROLL_YAW_OBSERVER_SAMPLES to aligned run-five quiet samples";
+  std::ifstream input(file);
+  Fixture fixture;
+  perching_dynamics::ObservationFilter filter;
+  if(const char* tau=std::getenv("ROLL_YAW_OBSERVER_TAU")) filter.time_constant=std::stod(tau);
+  const Eigen::Matrix<double,6,1> wrench=Eigen::Matrix<double,6,1>::Zero();
+  double t, x,y,z,qx,qy,qz,qw,wx,wy,wz,roll,yaw;
+  int raw_bad=0, ready=0, rejected=0, total=0, bad_run=0, max_bad_run=0;
+  bool locked=false;
+  while(input>>t>>x>>y>>z>>qx>>qy>>qz>>qw>>wx>>wy>>wz>>roll>>yaw)
+  {
+    Pose body=Pose::Identity(); body.translation()=Vec(x,y,z);
+    body.linear()=Eigen::Quaterniond(qw,qx,qy,qz).toRotationMatrix();
+    Vec q(0,roll,yaw), omega(wx,wy,wz);
+    if(!locked) { ASSERT_TRUE(fixture.model.lock(body,q)); locked=true; }
+    Estimate estimate; ASSERT_TRUE(fixture.model.estimate(body,q,estimate)); q[0]=estimate.alpha;
+    const bool valid=filter.observe(q,body.linear(),omega,Vec::Zero(),wrench,t,.15);
+    if(t<670 || t>692) continue;
+    ++total;
+    Mat j; ASSERT_TRUE(fixture.model.jacobian(filter.q,j));
+    Vec rate=filter.rate;
+    rate[0]=j.col(0).dot(omega-j.rightCols<2>()*rate.tail<2>())/j.col(0).squaredNorm();
+    if((j*rate-omega).norm()>.01) ++raw_bad;
+    if(!valid) continue;
+    rate[0]=j.col(0).dot(filter.omega-j.rightCols<2>()*rate.tail<2>())/j.col(0).squaredNorm();
+    if((j*rate-filter.omega).norm()>.01) { ++rejected; ++bad_run; max_bad_run=std::max(max_bad_run,bad_run); }
+    else { ++ready; bad_run=0; }
+  }
+  ASSERT_GT(total,500);
+  std::cout<<"Run-five quiet aligned samples: "<<total<<", raw gyro rejections: "<<raw_bad
+           <<", conditioned consistency passes: "<<ready<<", rejected: "<<rejected<<", longest rejection: "<<max_bad_run*.02<<" s"
+           <<", filtered gyro/pose-rate disagreement: "<<(filter.gyro-filter.omega).transpose()<<" rad/s\n";
+  EXPECT_GT(ready,.8*total);
+  EXPECT_LT(rejected,raw_bad);
 }

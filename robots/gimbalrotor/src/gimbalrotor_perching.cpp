@@ -3114,13 +3114,24 @@ bool AdmittanceConfig::valid() const
   return std::isfinite(reference_torque) && std::isfinite(off_threshold) && off_threshold >= 0 &&
          off_threshold < on_threshold && angle_limit < .5 && baseline_samples >= 2 && baseline_samples <= 10000;
 }
+Eigen::Vector3d referenceFeedforward(const Eigen::Vector3d& rate, const Eigen::Vector3d& acceleration,
+                                    const Eigen::Vector3d& gain, const Eigen::Vector3d& limit)
+{
+  Eigen::Vector3d result = Eigen::Vector3d::Zero();
+  if(!rate.allFinite() || !acceleration.allFinite() || !gain.allFinite() || !limit.allFinite() ||
+     (limit.array() < 0).any()) return result;
+  for(int i = 0; i < 2; ++i)
+    result[i] = std::clamp(gain[i] * rate[i] + acceleration[i], -limit[i], limit[i]);
+  return result;
+}
+
 void PitchAdmittance::reset()
 {
   const auto c = config;
   *this = PitchAdmittance();
   config = c;
 }
-void PitchAdmittance::observe(double torque, double stamp, bool no_cut)
+void PitchAdmittance::observe(double torque, double stamp, bool no_cut, bool bidirectional)
 {
   if(!std::isfinite(torque) || !std::isfinite(stamp) || stamp <= stamp_)
     return;
@@ -3157,7 +3168,7 @@ void PitchAdmittance::observe(double torque, double stamp, bool no_cut)
   if(!contact)
   {
     off_ = 0;
-    on_ = -filtered > config.on_threshold ? on_ + dt : 0;
+    on_ = (bidirectional ? std::abs(filtered) : -filtered) > config.on_threshold ? on_ + dt : 0;
     if(on_ >= config.on_dwell)
     {
       contact = true;
@@ -3167,7 +3178,7 @@ void PitchAdmittance::observe(double torque, double stamp, bool no_cut)
   else
   {
     on_ = 0;
-    off_ = -filtered < config.off_threshold ? off_ + dt : 0;
+    off_ = (bidirectional ? std::abs(filtered) : -filtered) < config.off_threshold ? off_ + dt : 0;
     if(off_ >= config.off_dwell)
     {
       contact = false;
@@ -3193,7 +3204,7 @@ bool PitchAdmittance::step(double dt, bool fresh, bool relief_only, double avail
                             : 0;
   // Implicit force balance with x_next = x + dt * (v_old + v_next) / 2.
   // Active motion limits below make this a bounded approximation.
-  const double proposed = relief_only && enabled && !fresh
+  const double proposed = enabled && !fresh
                               ? 0
                               : (config.inertia * rate + dt * (torque - config.stiffness * offset) -
                                  0.5 * dt * dt * config.stiffness * rate) /
