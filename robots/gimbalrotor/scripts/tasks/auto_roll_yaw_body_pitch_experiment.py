@@ -4,19 +4,25 @@
 The signed angle is angular_velocity_deg_s * interval_sec * num_steps. Holds
 retain that goal and contact session; elapsed time is not completed motion.
 No enable/relock/tare is sent. A fault, changed session, timeout or interruption
-requests zero velocity. Completion requires both reference and measured progress.
+cancels this motion owner before ROS shutdown. Completion requires both reference and measured progress.
 """
 
 import math
-import re
+import os
+import signal
+import sys
 import threading
 import time
 
 import rospy
 from diagnostic_msgs.msg import DiagnosticArray
 from nav_msgs.msg import Odometry
-from std_msgs.msg import Float64, String
 from tf.transformations import quaternion_conjugate, quaternion_multiply
+try:
+    from roll_yaw_motion import MotionClient, RollYawMotion
+except ModuleNotFoundError:
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from roll_yaw_motion import MotionClient, RollYawMotion
 
 
 def finite_number(value, name):
@@ -117,13 +123,11 @@ class Feedback:
         self.lock = threading.Lock()
         self.status = None
         self.poses = {}
-        self.ack = None
         self.subscribers = [
             rospy.Subscriber(prefix + '/diagnostics_status', DiagnosticArray, self.diagnostic, queue_size=1),
             rospy.Subscriber(prefix + '/body_reference', Odometry, self.pose, callback_args='reference', queue_size=1),
             rospy.Subscriber(prefix + '/body_measured', Odometry, self.pose, callback_args='measured', queue_size=1),
         ]
-        self.subscribers.append(rospy.Subscriber(prefix + '/command_ack', String, self.acknowledgement, queue_size=10))
 
     def diagnostic(self, message):
         for status in message.status:
@@ -140,21 +144,13 @@ class Feedback:
         with self.lock:
             self.poses[kind] = (time.monotonic(), message.header.stamp.to_sec(), value)
 
-    def acknowledgement(self, message):
-        if not message.data.startswith('action=body_pitch_velocity '):
-            return
-        fields = dict(re.findall(r'\b(session|accepted)=(\S+)', message.data))
-        if 'session' in fields and 'accepted' in fields:
-            with self.lock:
-                self.ack = (time.monotonic(), fields, message.data)
-
     def snapshot(self):
         with self.lock:
-            return self.status, dict(self.poses), self.ack
+            return self.status, dict(self.poses)
 
 
 def main():
-    rospy.init_node('auto_roll_yaw_body_pitch_experiment')
+    rospy.init_node('auto_roll_yaw_body_pitch_experiment', disable_signals=True)
 
     interval_sec = finite_number(rospy.get_param('~interval_sec', 8.0), '~interval_sec')
     if rospy.has_param('~step_deg'):
@@ -204,51 +200,68 @@ def main():
         raise ValueError('timeouts must be positive and goal tolerance must be in (0, 5] degrees')
     task = Stroke(angular_velocity_rad_s, experiment_duration, math.radians(tolerance), progress_timeout)
     feedback = Feedback(topic_prefix)
-    publisher = rospy.Publisher(topic_prefix + '/body_pitch_velocity', Float64, queue_size=1)
+    motion = MotionClient(topic_prefix)
     rospy.loginfo('Body-local Y goal %+.6g deg at up to %+.6g deg/s; same contact session, measured completion',
                   math.degrees(angle), angular_velocity_deg_s)
     started = time.monotonic()
     previous = rospy.get_time()
     last_send, last_rate, first_motion = 0., None, None
+    interrupted = threading.Event()
+    previous_handlers = {number: signal.signal(number, lambda *_: interrupted.set())
+                         for number in (signal.SIGINT, signal.SIGTERM)}
     try:
-        while not rospy.is_shutdown():
+        while not rospy.is_shutdown() and not interrupted.is_set():
             now, ros_now = time.monotonic(), rospy.get_time()
             if ros_now < previous:
                 raise ValueError('ROS time moved backwards; experiment abandoned')
             previous = ros_now
             if now - started > timeout:
                 raise ValueError('experiment timeout: ' + task.reason)
-            if angular_velocity_rad_s == 0 and publisher.get_num_connections():
-                publisher.publish(Float64(data=0.0))
-                last_rate = 0.
-                return
-            status, poses, ack = feedback.snapshot()
+            status, poses = feedback.snapshot()
+            with motion.lock:
+                ack = motion.ack
+                if motion.epoch is not None and motion.epoch != motion.current_epoch:
+                    raise ValueError('Motion cancelled by operator or contact transition; task abandoned')
             rate = 0.
             fresh = False
             if status and all(k in poses for k in ('reference', 'measured')):
                 received, stamp, state, values = status
                 session = int(values.get('session_id', '0'))
+                if angular_velocity_rad_s == 0 and session and motion.current_epoch is not None:
+                    if not motion.cancel(session):
+                        raise ValueError('Operator stop was not confirmed before timeout')
+                    return
                 samples = [(received, stamp)] + [(p[0], p[1]) for p in poses.values()]
                 fresh = all(0 <= now - r <= feedback_timeout and -.02 <= ros_now - s <= feedback_timeout
                             for r, s in samples)
+                if (fresh and session and state.startswith('CONTACT_LOCKED') and
+                        motion.session is None and motion.current_epoch is not None):
+                    # Pin even while waiting for the preceding motion. An
+                    # operator stop must also cancel this not-yet-started task.
+                    motion.rearm(session)
                 holding = values.get('feedback_waiting', '1') != '0'
                 stopping = values.get('stopping', '1') != '0' or values.get('body_pitch_velocity_pending', '0') != '0'
                 moving = stopping or values.get('body_pitch_velocity_active', '0') != '0'
                 if task.started is None:
-                    holding = holding or moving or values.get('accepted_destination_pending', '0') != '0'
+                    holding = (holding or moving or values.get('accepted_destination_pending', '0') != '0'
+                               or motion.current_epoch is None)
                 rate = task.step(now, session, state, poses['reference'][2], poses['measured'][2],
                                  fresh, holding, moving, max(.5, feedback_timeout), poses['measured'][1])
                 if ack and task.session and int(ack[1]['session']) == task.session:
                     if ack[1]['accepted'] != 'true':
+                        # Feedback holds can reject one refresh; a competing or
+                        # revoked source must never be retried under a new epoch.
+                        if 'another source' in ack[2] or 'cancelled motion epoch' in ack[2]:
+                            raise ValueError(ack[2])
                         rate = 0.
                         rospy.logwarn_throttle(2., ack[2])
                 if first_motion is not None and (not ack or int(ack[1]['session']) != task.session or
                                                   ack[0] < first_motion or now - ack[0] > command_duration):
                     if now - first_motion > command_duration:
                         raise ValueError('velocity acknowledgement missing/stale')
-            owns_motion = task.started is not None or angular_velocity_rad_s == 0
-            if owns_motion and publisher.get_num_connections() and (last_rate is None or rate != last_rate or now - last_send >= refresh_period):
-                publisher.publish(Float64(data=rate))
+            owns_motion = task.started is not None
+            if owns_motion and motion.publisher.get_num_connections() and (last_rate is None or rate != last_rate or now - last_send >= refresh_period):
+                motion.send(task.session, RollYawMotion.VELOCITY, rate)
                 last_send, last_rate = now, rate
                 if rate != 0 and first_motion is None:
                     first_motion = now
@@ -263,8 +276,14 @@ def main():
                                   math.degrees(task.reference_progress), math.degrees(task.measured_progress))
             time.sleep(.05)
     finally:
-        if last_rate is not None and publisher.get_num_connections():
-            publisher.publish(Float64(data=0.0))
+        try:
+            if not motion.stop(wait=True):
+                rospy.logerr('Stop was not confirmed before timeout; check navigator stop/hold status.')
+        except (RuntimeError, rospy.ROSException) as error:
+            rospy.logerr('Could not confirm stop: %s', error)
+        finally:
+            for number, handler in previous_handlers.items():
+                signal.signal(number, handler)
 
 
 if __name__ == '__main__':
@@ -272,6 +291,6 @@ if __name__ == '__main__':
         main()
     except rospy.ROSInterruptException:
         pass
-    except ValueError as exc:
+    except (ValueError, RuntimeError) as exc:
         rospy.logerr('%s', exc)
         raise SystemExit(1)

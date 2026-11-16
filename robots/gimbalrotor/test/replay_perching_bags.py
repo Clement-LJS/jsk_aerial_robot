@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read the four 261115 bags without a ROS master or actuator publishers.
+"""Read the four failed 261115 bags and run 5 without a ROS master or actuator publishers.
 
 Export recorded feedback/governor inputs to the compiled regression test and
 check that the automatic task cannot report success on the failed timelines.
@@ -98,11 +98,43 @@ def main():
         path = Path(directory) / 'samples.txt'
         with path.open('w') as samples:
             reports = [inspect(args.bag_root / name, index, samples) for index, name in enumerate(FILES)]
+        motion_path = Path(directory) / 'motion.txt'
+        fifth = args.bag_root / '5cutsuccess_codexchanged.bag'
+        if fifth.exists():
+            before = fifth.stat()
+            angle = 0.
+            counts = {'keyboard': 0, 'velocity': 0, 'stop': 0}
+            topics = [PREFIX + key for key in ('body_pitch_delta', 'body_pitch_velocity', 'cancel')]
+            topics += ['/gimbalrotor/perching/enable', '/gimbalrotor/perching/relock']
+            with rosbag.Bag(str(fifth), 'r') as bag, motion_path.open('w') as output:
+                start = bag.get_start_time()
+                for topic, message, stamp in bag.read_messages(topics=topics):
+                    if topic.endswith('/body_pitch_delta'):
+                        angle = max(-math.radians(20), min(math.radians(20), angle + message.data))
+                        kind, value = 0, angle
+                        counts['keyboard'] += 1
+                    elif topic.endswith('/body_pitch_velocity'):
+                        kind, value = 1, message.data
+                        angle = 0.
+                        counts['velocity'] += 1
+                    elif topic.endswith('/enable') and message.data:
+                        continue
+                    else:
+                        kind, value, angle = 2, 0., 0.
+                        counts['stop'] += 1
+                    output.write('{:.9f} {} {:.17g}\n'.format(stamp.to_sec() - start, kind, value))
+            after = fifth.stat()
+            if (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
+                raise AssertionError('recording changed while reading: ' + str(fifth))
+            reports.append(dict(bag=fifth.name, motion_inputs=counts,
+                                check='recorded inputs converted to replaceable targets; not a flight simulation'))
         print(json.dumps(reports, indent=2), flush=True)
         env = dict(os.environ, ROLL_YAW_BAG_SAMPLES=str(path))
+        if fifth.exists():
+            env['ROLL_YAW_MOTION_SAMPLES'] = str(motion_path)
         executable = args.core_test.resolve()
         env['LD_LIBRARY_PATH'] = str(executable.parent.parent) + ':' + env.get('LD_LIBRARY_PATH', '')
-        subprocess.run([str(executable), '--gtest_filter=Regression.LatestFourBagFeedbackAndTrackingSamples'],
+        subprocess.run([str(executable), '--gtest_filter=Regression.LatestFourBagFeedbackAndTrackingSamples:Motion.RecordedRunFiveCannotBuildJogBacklog'],
                        env=env, check=True)
 
 

@@ -30,6 +30,7 @@
 #include <nav_msgs/Odometry.h>
 #include <geometry_msgs/Vector3Stamped.h>
 #include <std_msgs/UInt64.h>
+#include <gimbalrotor/RollYawMotion.h>
 #include <geometry_msgs/WrenchStamped.h>
 #include <diagnostic_msgs/DiagnosticArray.h>
 #include <limits>
@@ -481,6 +482,22 @@ private:
   void bodyPitchVelocityCallback(const std_msgs::Float64ConstPtr&);
   bool admitPitchVelocity(double, double receipt);
   bool advancePitchVelocity(roll_yaw::Reference&, double dt, double now);
+  void motionCallback(const gimbalrotor::RollYawMotionConstPtr&);
+  bool rejectUnscopedMotion(const std::string& action);
+  bool admitPitchTarget(double angle, double rate, std::uint64_t frame);
+  void revokeMotion();
+  roll_yaw::MotionIdentity motion_identity_;
+  roll_yaw::MotionIdentity input_motion_identity_; // input_mutex_; receipt ordering before coalescing
+  std::atomic<std::uint64_t> input_motion_epoch_{1};
+  bool motion_dispatch_ = false;
+  ros::Publisher motion_epoch_pub_;
+  struct PitchTarget
+  {
+    bool valid = false, frame_valid = false, complete = false;
+    std::uint64_t frame = 0;
+    Eigen::Matrix3d start = Eigen::Matrix3d::Identity();
+    double angle = 0, rate = 0, progress = 0;
+  } pitch_target_;
   struct PitchVelocity
   {
     bool active = false, pending = false, stopping = false;
@@ -661,7 +678,8 @@ private:
   std::atomic<std::uint64_t> input_session_{0};
   std::uint64_t input_sequence_ = 0, urgent_sequence_ = 0, calculation_sequence_ = 0;
   std::uint64_t consumed_joint_sequence_ = 0, coalesced_joint_samples_ = 0;
-  bool deferRollYawCommand(const std::string&, std::function<void()>, bool urgent = false);
+  bool deferRollYawCommand(const std::string&, std::function<void()>, bool urgent = false,
+                          const gimbalrotor::RollYawMotion* motion = nullptr);
   void drainRollYawCommands();
   void cancelQueuedRollYawCommands(const std::string&, bool all = false);
   std::uint64_t dispatch_sequence_ = 0;

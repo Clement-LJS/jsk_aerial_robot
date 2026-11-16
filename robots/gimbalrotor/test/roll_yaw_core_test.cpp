@@ -628,6 +628,126 @@ TEST(Worker,BoundedQueueCancellationAndNonblockingTake)
   EXPECT_FALSE(worker.submit([](const std::function<bool()>&){return Plan();}));
   while(!started) std::this_thread::yield(); worker.cancel();
 }
+
+TEST(Motion,StopRevokesLateCommandsWithoutRelocking)
+{
+  MotionIdentity identity;
+  const auto epoch = identity.epoch;
+  EXPECT_TRUE(identity.rejection(epoch, "auto", 1).empty());
+  identity.accept("auto", 1);
+  EXPECT_FALSE(identity.rejection(epoch, "keyboard", 2).empty());
+  EXPECT_FALSE(identity.rejection(epoch, "auto", 1).empty());
+  identity.revoke(); // Operator cancel; contact identity is unchanged.
+  EXPECT_FALSE(identity.rejection(epoch, "auto", 2).empty());
+  EXPECT_TRUE(identity.rejection(identity.epoch, "keyboard", 1).empty());
+  identity.accept("keyboard", 1);
+  EXPECT_FALSE(identity.rejection(epoch, "auto", 3).empty());
+  EXPECT_FALSE(identity.rejection(identity.epoch, "auto", 3).empty());
+  EXPECT_EQ(identity.source, "keyboard");
+  EXPECT_FALSE(identity.rejection(identity.epoch, "bad source", 1).empty());
+}
+
+TEST(Motion,RepeatedKeysHaveOneDestinationAndIndependentAxes)
+{
+  struct Command { std::string key; bool urgent; double target; };
+  std::deque<Command> pending;
+  auto send = [&](const std::string& key, double target, bool urgent = false)
+  {
+    replacePendingMotion(pending, key);
+    pending.push_back({key, urgent, target});
+  };
+  for(int i = 1; i <= 1322; ++i)
+  {
+    send("motion_body", i * .001);
+    ASSERT_EQ(pending.size(), 1u); // Run 5 produced 1322 keyboard messages.
+  }
+  send("motion_body", -.002);
+  EXPECT_DOUBLE_EQ(pending.front().target, -.002);
+  send("motion_axis1", .1);
+  send("motion_axis2", .2);
+  send("motion_axis1", .3);
+  ASSERT_EQ(pending.size(), 2u);
+  EXPECT_EQ(pending.front().key, "motion_axis2");
+  EXPECT_DOUBLE_EQ(pending.front().target, .2);
+  send("motion_velocity", .01);
+  ASSERT_EQ(pending.size(), 1u);
+  send("motion_stop", 0, true);
+  send("motion_body", .1); // Stop stays ahead of a late command.
+  ASSERT_EQ(pending.size(), 2u);
+  EXPECT_TRUE(pending.front().urgent);
+}
+
+TEST(Motion,AbsolutePitchTargetConvergesAndReversesAtNonzeroAttitude)
+{
+  Fixture fixture;
+  for(const Vec initial : {Vec::Zero().eval(), Vec(.1, .2, -.3)})
+  {
+    Reference applied;
+    ASSERT_TRUE(mechanismReference(fixture.model, initial, Vec::Zero(), Vec::Zero(), applied));
+    const Mat start = applied.body.linear();
+    double progress = 0, goal = .04, previous_rate = 0;
+    for(int i = 0; i < 1800; ++i)
+    {
+      if(i == 100) goal = -.02;
+      double cross;
+      ASSERT_TRUE(taskPitch(start, applied.body.linear(), progress, progress, cross));
+      const double requested = pitchTargetRate(goal, progress, .00872664626);
+      // Independent acceleration-limited plant, using the real local-Y IK/FK.
+      const double rate = previous_rate + std::clamp(requested - previous_rate, -.02 * .025, .02 * .025);
+      const Mat rotation = applied.body.linear() * expSO3(Vec::UnitY() * (.5 * (previous_rate + rate) * .025));
+      Reference next; std::string error;
+      ASSERT_TRUE(localPitchReference(fixture.model, rotation, applied.eta, rate,
+                                    (rate - previous_rate) / .025, fixture.config, next, error)) << error;
+      EXPECT_LE(std::abs(rate), .00872664626 + 1e-12);
+      EXPECT_LT(cross, 1e-7);
+      applied = next;
+      previous_rate = rate;
+    }
+    EXPECT_NEAR(progress, -.02, 1e-5);
+    EXPECT_NEAR(previous_rate, 0, 1e-6);
+  }
+}
+
+TEST(Motion,RecordedRunFiveCannotBuildJogBacklog)
+{
+  const char* path = std::getenv("ROLL_YAW_MOTION_SAMPLES");
+  if(!path) GTEST_SKIP() << "Run test/replay_perching_bags.py for run 5 commands";
+  // Test both the recorded approximately 30 Hz execution and a deliberately
+  // slower 5 Hz consumer. Neither may accumulate future motion destinations.
+  for(double period : {1. / 30, .2})
+  {
+    std::ifstream input(path); ASSERT_TRUE(input.good());
+    struct Command { std::string key; bool urgent; double target; };
+    std::deque<Command> pending;
+    double stamp, value, tick = 0, latest = 0;
+    int kind, keys = 0, rates = 0;
+    std::string latest_key;
+    while(input >> stamp >> kind >> value)
+    {
+      while(tick <= stamp)
+      {
+        if(!pending.empty())
+        {
+          const auto command = pending.front(); pending.pop_front();
+          if(!command.urgent)
+          {
+            EXPECT_EQ(command.key, latest_key);
+            EXPECT_DOUBLE_EQ(command.target, latest);
+          }
+        }
+        tick += period;
+      }
+      const std::string key = kind == 0 ? "motion_body" : kind == 1 ? "motion_velocity" : "motion_stop";
+      replacePendingMotion(pending, key);
+      pending.push_back({key, kind == 2, value});
+      if(kind != 2) { latest_key = key; latest = value; }
+      keys += kind == 0; rates += kind == 1;
+      EXPECT_LE(std::count_if(pending.begin(), pending.end(), [](const Command& c) { return !c.urgent; }), 1);
+    }
+    EXPECT_EQ(keys, 1322);
+    EXPECT_EQ(rates, 52);
+  }
+}
 TEST(ActualUrdf,JacobianCogAndOfflinePlan)
 {
   const char* file=std::getenv("ROLL_YAW_TEST_URDF"); if(!file) GTEST_SKIP()<<"Set ROLL_YAW_TEST_URDF to expanded current beetle Xacro";

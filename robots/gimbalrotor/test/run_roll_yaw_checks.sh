@@ -22,6 +22,7 @@ xacro "$package_dir/robots/beetle/gimbalrotor.urdf.xacro" \
   use_roll_yaw_joint:=true use_pitch_joint_only:=false use_roll_joint:=false \
   use_yaw_joint:=false use_hand:=false > "$check_dir/robot.urdf"
 export LD_LIBRARY_PATH="$check_dir/devel/lib:${LD_LIBRARY_PATH:-}"
+export PYTHONPATH="$check_dir/devel/lib/python3/dist-packages:${PYTHONPATH:-}"
 ROLL_YAW_TEST_URDF="$check_dir/robot.urdf" \
   "$check_dir/devel/lib/gimbalrotor/roll_yaw_core_test" \
   --gtest_output="xml:$check_dir/tests.xml" | tee "$check_dir/core-tests.log"

@@ -73,8 +73,8 @@ cause before retrying. These keyboard checks are distinct from general navigator
 relock policy. Successful relock refreshes every nominal baseline without zeroing
 the active servos.
 
-Mechanism `Float64` topics under `/gimbalrotor/perching/roll_yaw` are
-`alpha_target`, `roll_target`, and `yaw_target`. Values are absolute radians in the
+Manual motion uses `gimbalrotor/RollYawMotion` on
+`/gimbalrotor/perching/roll_yaw/motion`. Modes `ALPHA`, `ROLL`, and `YAW` are absolute radians in the
 lock-relative passive coordinate or calibrated URDF servo coordinates. They are
 **not body Euler angles**. Each changes only its own accepted destination; quick
 axis changes retain the others. Effective configured/URDF bounds are published as
@@ -103,34 +103,41 @@ The full update commits one body/CoG/active-joint reference; rejected updates ea
 no hidden displacement. Passive alpha is never published as an actuator command.
 Automatic alignment and cut-start connections retain offline path validation.
 
-```bash
-# Absolute servo yaw and passive alpha, radians (not body yaw/pitch):
-rostopic pub -1 /gimbalrotor/perching/roll_yaw/yaw_target std_msgs/Float64 'data: -0.3'
-rostopic pub -1 /gimbalrotor/perching/roll_yaw/alpha_target std_msgs/Float64 'data: 0.05'
-```
+Each request carries the UInt64 contact `session`, the published `motion_epoch`,
+a unique client `source`, and an increasing `sequence`. One source owns motion
+until stop, pause, disable, relock or setup takeover revokes that epoch. Stop does
+not recapture the contact. Old epochs and reordered requests are rejected before
+they can replace newer pending targets. `scripts/roll_yaw_motion.py` implements
+this protocol for both supplied clients. Rebuild the package after updating it
+so the generated message and navigator agree; then restart/source the workspace.
+Press space to release keyboard ownership before starting the automatic script.
+The script pins its epoch while waiting, so a later operator stop abandons that
+waiting task too; restart the script deliberately to begin a new task.
 
-The separate `body_pitch_delta` (`std_msgs/Float64`) requests a small relative
-main-body +Y rotation: `R_goal = R_applied * Exp(e_y * delta)`.
-Keyboard `o/u` sends positive/negative `~body_pitch_step_deg` (default 0.2°);
-`i/k` remains passive alpha. The 1° `body_pitch_jog_max_delta` is unchanged.
-Nonfinite, oversized or unreachable increments are explicitly rejected; zero
-is a no-op. Each publication is one increment, not an absolute refresh.
+**Latest destination:** pending updates to the same axis replace each other;
+different mechanism axes retain their destinations. Body-pitch and velocity modes
+replace incompatible pending motion. Input never waits for the previous movement
+to finish. Lifecycle requests retain priority; observations have separate slots.
+The bounded follower still brakes before reversal/takeover as necessary.
 
-**Ordering:** finish the preceding accepted destination before starting a jog.
-Thus yaw accepted at -36.22° with applied yaw at -11.99° stays pending and advances
-boundedly; a queued pitch jog waits instead of composing a tiny jog with that
-24.23° backlog. Two received increments occupy two ordered entries. Later commands
-cannot pass a jog. Space/stop/disable/relock explicitly cancel the queued intent.
-The 64-entry command queue rejects overflow and emits receipt/queue diagnostics;
-ROS transport drops before callback delivery remain outside this acknowledgement
-contract. Branch/point and wrench observations use separate latest-value slots.
+Keyboard `o/u` now changes one total `BODY_PITCH` destination: +0.2°, +0.4°,
++0.6°, then a negative key gives +0.4°. Its `frame` identifies the body-local +Y
+starting orientation, captured after any preceding mode brakes. Switching modes
+creates a new frame, even when intermediate inputs coalesce within one update.
+`i/k` remains passive alpha. Defaults are `~body_pitch_step_deg:=0.2`,
+`~body_pitch_rate_deg_s:=0.5`, and `~body_pitch_limit_deg:=20`.
+The navigator approaches the destination through the existing bounded local-Y
+velocity generator, slowing near the endpoint. Releasing a key retains the target;
+space cancels it and brakes to hold. This is target control, not key-release stop.
 
-Endpoint IK runs once in a worker (16 iterations maximum), seeded from the
-coherent applied pose after the preceding destination finishes. Execution uses
-the same rate/acceleration follower and governor as mechanism commands, with no
-whole-distance polynomial or per-key settling requirement. Intermediate joint
-motion approximates a body-Y arc; the endpoint is the requested SO(3) rotation.
-No prepare/tare, saw geometry or observer readiness is required for these commands.
+The optional `JOG` mode retains small relative endpoint-IK increments (at most 1°).
+A busy jog is rejected promptly, never retained for delayed execution. It is not
+used by the keyboard. Old unscoped `Float64` motion inputs (`alpha_target`,
+`roll_target`, `yaw_target`, `body_pitch_delta`, nonzero `body_pitch_velocity`),
+the old vector target, and roll-yaw manual-pitch/nav shortcuts reject motion with
+a migration acknowledgement. An unscoped zero velocity remains an operator stop.
+Nojoint and active-pitch multilink inputs are unchanged. Numeric body-alignment
+and prepared-cut lifecycle interfaces below are also unchanged.
 
 `command_ack` distinguishes received/`queued`, accepted/`waiting`, `moving`, `replaced`,
 `reference_complete`, `cancelled`,
@@ -204,11 +211,11 @@ Feedback ingestion has its own short mutex. Body/joint callbacks validate and co
 inputs there; joint rates are differentiated from consecutive advancing **source**
 stamps at the producer rate, with producer identity retained. The update owner
 copies that state, then runs reference/observer work without the ingestion mutex.
-Commands use a bounded ordered queue with explicit overflow rejection. One command
-is admitted per update; observation slots are drained independently of jog barriers.
+Motion uses replaceable pending destinations. One command is admitted per update;
+relative jogs reject busy state rather than becoming an ordering barrier.
 Acceptance and request-specific acknowledgements occur on the update owner. An ordinary
 absolute refresh can wait for that update without invalidating an in-flight
-reference. Stop, zero velocity, pause, disable and relock mark the current
+reference. Stop, pause, disable and relock mark the current
 calculation obsolete. Commit rechecks physical eligibility and installs body/CoG
 and joint output together; unpublished progress is discarded on preemption.
 A stop during feedback loss clears the owner before automatic recovery. The
@@ -324,6 +331,10 @@ failed timelines as successful. Separate execution tests cover recovery and meas
 completion with an ideal follower, including the older 0.0309128 rad hinge excursion.
 The script tests cover a 1.51 s outage, completion after recovery, both pitch signs,
 duplicate measurements, faults, session changes and absent measured progress.
+Run 5 adds 1,322 recorded keyboard inputs and 52 velocity inputs to a replacement
+policy replay at 30 Hz and 5 Hz. It checks that at most one body/velocity destination
+is pending. Separate tests cover cancellation generations, rapid reversal, body
+frame changes, Ctrl-C before ROS shutdown, and stop acknowledgement loss.
 Build and offline checks use temporary artifacts and start no ROS master or flight
 nodes:
 
@@ -351,9 +362,7 @@ Examples for an already-running robot stack (namespace defaults shown):
 ```bash
 rosrun gimbalrotor keyboard_roll_yaw_perching.py _body_pitch_step_deg:=0.2
 # e -> z -> wait ready-HOLD -> b. j/l yaw, a/f roll, i/k alpha.
-# +0.2 degrees, then -0.2 degrees after reference completion:
-rostopic pub -1 /gimbalrotor/perching/roll_yaw/body_pitch_delta std_msgs/Float64 'data: 0.0034906585'
-rostopic pub -1 /gimbalrotor/perching/roll_yaw/body_pitch_delta std_msgs/Float64 'data: -0.0034906585'
+# o/u changes the total body-local pitch destination; space cancels it.
 rostopic echo /gimbalrotor/perching/roll_yaw/command_ack
 rosrun gimbalrotor roll_yaw_command.py stop
 ```
@@ -762,8 +771,9 @@ rosrun gimbalrotor auto_roll_yaw_body_pitch_experiment.py \
 ```
 
 `~angular_velocity_deg_s` is required, finite and numeric (not boolean); zero
-requests bounded braking and hold. The ROS payload is `std_msgs/Float64` in
-**rad/s** on `/gimbalrotor/perching/roll_yaw/body_pitch_velocity`. A legacy
+requests an explicit operator stop and hold. Nonzero operation publishes the
+`VELOCITY` mode of `RollYawMotion` in **rad/s** on
+`/gimbalrotor/perching/roll_yaw/motion`. A legacy
 `~step_deg` parameter is an error. `~interval_sec` defaults to 8.0 positive finite
 seconds; `~num_steps` defaults to 8 and must be a positive integer, not boolean.
 These define a signed angle goal: rate × interval × count. For the example above,
@@ -789,8 +799,12 @@ because it lies inside the navigator's normal tolerance.
 duration plus twice the progress timeout. Temporary holds send zero and retain the
 remaining goal and contact session; fresh feedback allows a new velocity request
 without disabling/enabling perching. A fault, session change, timeout, backward ROS
-time or interruption requests zero and ends the task. Lost final zero still leaves
-the finite onboard lease. Rejection never renews it. No prepare/tare/enable is sent.
+time or interruption sends a scoped STOP and ends the task. SIGINT/SIGTERM are
+handled before ROS shutdown, with bounded stop retries and confirmation of the
+new epoch and stopped diagnostics. Operator cancellation revokes the task; it never
+adopts a new epoch to resume itself. Scoped zero velocity is a temporary pause in
+the same task. The finite lease remains a fallback for process/transport loss.
+Rejection never renews it. No prepare/tare/enable is sent.
 
 The initial state is the coherent applied `final_target_`, including derivatives,
 with an existing producer braking before takeover when necessary. The contact is

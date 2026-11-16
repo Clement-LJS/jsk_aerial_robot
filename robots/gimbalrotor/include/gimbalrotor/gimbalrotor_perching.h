@@ -794,6 +794,48 @@ namespace roll_yaw
 inline double steadySeconds()
 { return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
 
+// A stop changes the epoch without changing the physical contact. Old clients
+// must not acquire the new epoch automatically and resume unfinished motion.
+struct MotionIdentity
+{
+  std::uint64_t epoch = 1, sequence = 0;
+  std::string source;
+  std::string rejection(std::uint64_t e, const std::string& s, std::uint64_t n) const
+  {
+    if(e != epoch) return "cancelled motion epoch";
+    if(s.empty() || s.size() > 128 || n == 0 ||
+       s.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-") != std::string::npos)
+      return "invalid motion identity";
+    if(!source.empty() && source != s) return "another source owns motion; use operator cancel before takeover";
+    if(source == s && n <= sequence) return "old motion sequence";
+    return "";
+  }
+  void accept(const std::string& s, std::uint64_t n) { source = s; sequence = n; }
+  void revoke() { ++epoch; source.clear(); sequence = 0; }
+};
+
+// Keep different mechanism axes independent, but never retain a superseded
+// body/velocity mode. Called under the navigator input mutex.
+template<class Command> void replacePendingMotion(std::deque<Command>& pending, const std::string& key)
+{
+  if(key.compare(0, 7, "motion_") != 0) return;
+  const bool axis = key.compare(0, 11, "motion_axis") == 0;
+  for(auto it = pending.begin(); it != pending.end();)
+  {
+    const bool old_motion = it->key.compare(0, 7, "motion_") == 0;
+    const bool other_axis = axis && it->key.compare(0, 11, "motion_axis") == 0 && it->key != key;
+    if(old_motion && !it->urgent && !other_axis) it = pending.erase(it);
+    else ++it;
+  }
+}
+
+inline double pitchTargetRate(double target, double progress, double limit)
+{
+  // A half-second approach horizon leaves the existing bounded velocity
+  // generator responsible for acceleration, tracking and braking limits.
+  return std::clamp((target - progress) / .5, -limit, limit);
+}
+
 // One persistent thread, at most one job/result. Callback methods never wait.
 // Cancellation is cooperative; destruction joins ONLY during plugin shutdown.
 template<class Result> class Worker

@@ -2,6 +2,7 @@
 import importlib.util
 import io
 import math
+import signal
 from pathlib import Path
 import struct
 import unittest
@@ -24,6 +25,26 @@ keyboard_spec.loader.exec_module(keyboard)
 experiment_spec = importlib.util.spec_from_file_location('roll_yaw_experiment', ROOT / 'scripts/tasks/auto_roll_yaw_body_pitch_experiment.py')
 experiment = importlib.util.module_from_spec(experiment_spec)
 experiment_spec.loader.exec_module(experiment)
+
+
+def simulated_motion(clock, publisher, consume):
+    """Actual client protocol with an in-memory receiver, no ROS master."""
+    def create(prefix):
+        motion = keyboard.MotionClient(prefix)
+        motion.epoch_callback(keyboard.UInt64(1))
+
+        def receive(message):
+            consume(message)
+            motion.ack_callback(keyboard.String(
+                'action=motion session={} epoch={} source={} sequence={} accepted=true'.format(
+                    message.session, message.epoch, message.source, message.sequence)))
+            if message.mode == keyboard.RollYawMotion.STOP:
+                motion.epoch_callback(keyboard.UInt64(message.epoch + 1))
+                motion.status = (clock[0], {'motion_epoch': str(message.epoch + 1),
+                                          'stopping': '0', 'body_pitch_velocity_active': '0'})
+        publisher.publish.side_effect = receive
+        return motion
+    return create
 
 
 class VelocityExperiment(unittest.TestCase):
@@ -114,7 +135,7 @@ class VelocityExperiment(unittest.TestCase):
         published = []
         publisher = MagicMock()
         publisher.get_num_connections.return_value = 1
-        publisher.publish.side_effect = lambda message: published.append((clock[0], message.data))
+        consume = lambda message: published.append((clock[0], message.value))
         params = {'~angular_velocity_deg_s': .1,
                   '/gimbalrotor/navigation/roll_yaw_perching/body_pitch_velocity_command_duration': 8.}
 
@@ -123,7 +144,7 @@ class VelocityExperiment(unittest.TestCase):
             values = {'session_id': '123', 'feedback_waiting': '0', 'stopping': '0',
                       'accepted_destination_pending': '1' if clock[0] < .5 else '0'}
             pose = (clock[0], 100 + clock[0], self.pitch(0))
-            return (clock[0], 100 + clock[0], state, values), {'reference': pose, 'measured': pose}, None
+            return (clock[0], 100 + clock[0], state, values), {'reference': pose, 'measured': pose}
 
         with patch.object(experiment.rospy, 'init_node'), \
              patch.object(experiment.rospy, 'get_param', side_effect=lambda key, default=None: params.get(key, default)), \
@@ -131,6 +152,8 @@ class VelocityExperiment(unittest.TestCase):
              patch.object(experiment.rospy, 'get_time', side_effect=lambda: 100 + clock[0]), \
              patch.object(experiment.rospy, 'is_shutdown', return_value=False), \
              patch.object(experiment.rospy, 'Publisher', return_value=publisher), \
+             patch.object(experiment.rospy, 'Subscriber', return_value=MagicMock()), \
+             patch.object(experiment, 'MotionClient', side_effect=simulated_motion(clock, publisher, consume)), \
              patch.object(experiment.rospy, 'loginfo'), patch.object(experiment.rospy, 'loginfo_throttle'), \
              patch.object(experiment, 'Feedback') as feedback, \
              patch.object(experiment.time, 'monotonic', side_effect=lambda: clock[0]), \
@@ -144,7 +167,7 @@ class VelocityExperiment(unittest.TestCase):
 
     def test_runner_completes_measured_stroke_after_feedback_outage(self):
         clock = [0.]
-        plant = {'reference': 0., 'measured': 0., 'rate': 0., 'ack': None, 'sample': 0.}
+        plant = {'reference': 0., 'measured': 0., 'rate': 0., 'sample': 0.}
         published = []
         publisher = MagicMock()
         publisher.get_num_connections.return_value = 1
@@ -152,9 +175,8 @@ class VelocityExperiment(unittest.TestCase):
                   '/gimbalrotor/navigation/roll_yaw_perching/body_pitch_velocity_command_duration': 8.}
 
         def publish(message):
-            plant['rate'] = message.data
-            plant['ack'] = (clock[0], {'session': '123', 'accepted': 'true'}, 'accepted')
-            published.append((clock[0], message.data))
+            plant['rate'] = message.value
+            published.append((clock[0], message.value))
 
         def advance(duration):
             clock[0] += duration
@@ -169,7 +191,7 @@ class VelocityExperiment(unittest.TestCase):
             values = {'session_id': '123', 'feedback_waiting': str(int(waiting)), 'stopping': '0',
                       'body_pitch_velocity_active': str(int(plant['rate'] != 0))}
             poses = {kind: (stamp, 100 + stamp, self.pitch(plant[kind])) for kind in ('reference', 'measured')}
-            return (clock[0], 100 + clock[0], 'CONTACT_LOCKED: test', values), poses, plant['ack']
+            return (clock[0], 100 + clock[0], 'CONTACT_LOCKED: test', values), poses
 
         publisher.publish.side_effect = publish
         with patch.object(experiment.rospy, 'init_node'), \
@@ -178,6 +200,8 @@ class VelocityExperiment(unittest.TestCase):
              patch.object(experiment.rospy, 'get_time', side_effect=lambda: 100 + clock[0]), \
              patch.object(experiment.rospy, 'is_shutdown', return_value=False), \
              patch.object(experiment.rospy, 'Publisher', return_value=publisher), \
+             patch.object(experiment.rospy, 'Subscriber', return_value=MagicMock()), \
+             patch.object(experiment, 'MotionClient', side_effect=simulated_motion(clock, publisher, publish)), \
              patch.object(experiment.rospy, 'loginfo'), patch.object(experiment.rospy, 'loginfo_throttle'), \
              patch.object(experiment, 'Feedback') as feedback, \
              patch.object(experiment.time, 'monotonic', side_effect=lambda: clock[0]), \
@@ -189,6 +213,105 @@ class VelocityExperiment(unittest.TestCase):
         self.assertEqual(published[-1][1], 0)
         self.assertTrue(any(2. <= stamp < 3.51 and rate == 0 for stamp, rate in published))
         self.assertTrue(any(stamp >= 3.51 and rate > 0 for stamp, rate in published))
+
+    def test_ctrl_c_sends_stop_before_ros_shutdown(self):
+        clock, messages = [0.], []
+        publisher = MagicMock()
+        publisher.get_num_connections.return_value = 1
+        params = {'~angular_velocity_deg_s': .5,
+                  '/gimbalrotor/navigation/roll_yaw_perching/body_pitch_velocity_command_duration': 8.}
+
+        def snapshot():
+            pose = (clock[0], 100 + clock[0], self.pitch(0))
+            values = {'session_id': '123', 'feedback_waiting': '0', 'stopping': '0'}
+            return (clock[0], 100 + clock[0], 'CONTACT_LOCKED: test', values), {'reference': pose, 'measured': pose}
+
+        def advance(duration):
+            clock[0] += duration
+            if clock[0] > .6:
+                signal.raise_signal(signal.SIGINT)  # Exercise the installed real signal handler.
+
+        old_handler = signal.getsignal(signal.SIGINT)
+        with patch.object(experiment.rospy, 'init_node') as initialize, \
+             patch.object(experiment.rospy, 'get_param', side_effect=lambda key, default=None: params.get(key, default)), \
+             patch.object(experiment.rospy, 'has_param', side_effect=lambda key: key in params), \
+             patch.object(experiment.rospy, 'get_time', side_effect=lambda: 100 + clock[0]), \
+             patch.object(experiment.rospy, 'is_shutdown', return_value=False), \
+             patch.object(experiment.rospy, 'signal_shutdown') as shutdown, \
+             patch.object(experiment.rospy, 'Publisher', return_value=publisher), \
+             patch.object(experiment.rospy, 'Subscriber', return_value=MagicMock()), \
+             patch.object(experiment, 'MotionClient', side_effect=simulated_motion(clock, publisher, messages.append)), \
+             patch.object(experiment.rospy, 'loginfo'), patch.object(experiment.rospy, 'loginfo_throttle'), \
+             patch.object(experiment, 'Feedback') as feedback, \
+             patch.object(experiment.time, 'monotonic', side_effect=lambda: clock[0]), \
+             patch.object(experiment.time, 'sleep', side_effect=advance):
+            feedback.return_value.snapshot.side_effect = snapshot
+            experiment.main()
+            initialize.assert_called_once_with('auto_roll_yaw_body_pitch_experiment', disable_signals=True)
+            shutdown.assert_not_called()
+        self.assertEqual(messages[0].mode, keyboard.RollYawMotion.VELOCITY)
+        self.assertEqual(messages[-1].mode, keyboard.RollYawMotion.STOP)
+        self.assertLess(clock[0], 1.)  # No eight-second lease wait after Ctrl-C.
+        self.assertEqual(signal.getsignal(signal.SIGINT), old_handler)
+
+    def test_old_client_does_not_refresh_or_stop_new_owner(self):
+        with patch.object(keyboard.rospy, 'Publisher', return_value=MagicMock()), \
+             patch.object(keyboard.rospy, 'Subscriber', return_value=MagicMock()):
+            client = keyboard.MotionClient('/test')
+        client.epoch_callback(keyboard.UInt64(7))
+        client.send(123, keyboard.RollYawMotion.VELOCITY, .01)
+        message = client.publisher.publish.call_args.args[0]
+        wire = io.BytesIO()
+        message.serialize(wire)
+        restored = keyboard.RollYawMotion().deserialize(wire.getvalue())
+        self.assertEqual((restored.session, restored.epoch, restored.source), (123, 7, client.source))
+        client.epoch_callback(keyboard.UInt64(8))
+        with self.assertRaisesRegex(RuntimeError, 'cancelled'):
+            client.send(123, keyboard.RollYawMotion.VELOCITY, .01)
+        self.assertTrue(client.stop(wait=True))
+        self.assertEqual(client.publisher.publish.call_count, 1)
+
+    def test_stop_retries_until_observed_hold_even_if_ack_was_lost(self):
+        with patch.object(keyboard.rospy, 'Publisher', return_value=MagicMock()), \
+             patch.object(keyboard.rospy, 'Subscriber', return_value=MagicMock()):
+            client = keyboard.MotionClient('/test')
+        client.epoch_callback(keyboard.UInt64(1))
+        client.send(123, keyboard.RollYawMotion.VELOCITY, .01)
+        clock, stops = [0.], []
+
+        def receive(message):
+            stops.append(message)
+            if len(stops) == 2:
+                client.epoch_callback(keyboard.UInt64(2))
+                client.status = (clock[0], {'motion_epoch': '2', 'stopping': '0', 'body_pitch_velocity_active': '0'})
+        client.publisher.publish.side_effect = receive
+        with patch.object(keyboard.rospy, 'is_shutdown', return_value=False), \
+             patch.object(keyboard.time, 'monotonic', side_effect=lambda: clock[0]), \
+             patch.object(keyboard.time, 'sleep', side_effect=lambda dt: clock.__setitem__(0, clock[0] + dt)):
+            self.assertTrue(client.stop(wait=True))
+        self.assertEqual(len(stops), 2)
+        self.assertEqual(stops[0].sequence, stops[1].sequence)
+
+    def test_operator_zero_cancels_other_owner_without_repeated_cancellation(self):
+        publisher = MagicMock()
+        with patch.object(keyboard.rospy, 'Publisher', return_value=publisher), \
+             patch.object(keyboard.rospy, 'Subscriber', return_value=MagicMock()):
+            client = keyboard.MotionClient('/test')
+        client.epoch_callback(keyboard.UInt64(1))
+        clock = [0.]
+        publisher.publish.side_effect = lambda message: client.epoch_callback(keyboard.UInt64(2))
+
+        def advance(dt):
+            clock[0] += dt
+            if clock[0] > .35:
+                client.status = (clock[0], {'motion_epoch': '2', 'stopping': '0', 'body_pitch_velocity_active': '0'})
+        with patch.object(keyboard.rospy, 'Publisher', return_value=publisher), \
+             patch.object(keyboard.rospy, 'is_shutdown', return_value=False), \
+             patch.object(keyboard.time, 'monotonic', side_effect=lambda: clock[0]), \
+             patch.object(keyboard.time, 'sleep', side_effect=advance):
+            self.assertTrue(client.cancel(123))
+        publisher.publish.assert_called_once()
+        self.assertEqual(publisher.publish.call_args.args[0].data, 123)
 
 
 class Interfaces(unittest.TestCase):
@@ -210,6 +333,7 @@ class Interfaces(unittest.TestCase):
              patch.object(keyboard.rospy, 'Subscriber', return_value=MagicMock()):
             k = keyboard.Keyboard()
         k.session_callback(keyboard.UInt64(123))
+        k.motion.epoch_callback(keyboard.UInt64(1))
         k.flight_callback(keyboard.UInt8(5))
         k.state_callback(keyboard.String('CONTACT_LOCKED: test'))
         for bound, value in [('lower', -1.), ('upper', 1.)]:
@@ -236,33 +360,71 @@ class Interfaces(unittest.TestCase):
         self.assertEqual(k.commanded[2], 1.)
         k.manual('yaw', -1)
         self.assertAlmostEqual(k.commanded[2], 1. - k.steps['yaw'])
-        self.assertEqual(k.pubs['yaw'].publish.call_args[0][0].data, k.commanded[2])
+        self.assertEqual(k.motion.publisher.publish.call_args[0][0].value, k.commanded[2])
 
     def test_keyboard_stale_feedback_and_new_session_do_not_queue(self):
         k = self.make_keyboard()
         k.state_time = time.monotonic() - 2
         with self.assertRaises(RuntimeError):
             k.manual('yaw', 1)
-        k.pubs['yaw'].publish.assert_not_called()
+        k.motion.publisher.publish.assert_not_called()
         k.session_callback(keyboard.UInt64(124))
         self.assertIsNone(k.commanded)
         with self.assertRaises(RuntimeError):
             k.manual('roll', 1)
-        k.pubs['roll'].publish.assert_not_called()
+        k.motion.publisher.publish.assert_not_called()
 
-    def test_body_pitch_keys_are_separate_relative_inputs(self):
+    def test_pitch_frame_survives_updates_but_changes_after_axis_takeover(self):
         k = self.make_keyboard()
         k.key('o')
-        self.assertAlmostEqual(k.pubs['body_pitch'].publish.call_args[0][0].data, math.radians(.2))
+        first = k.motion.publisher.publish.call_args.args[0]
+        k.key('o')
+        second = k.motion.publisher.publish.call_args.args[0]
+        self.assertEqual(first.frame, second.frame)
+        # Fresh accepted nominal feedback permits a mechanism-axis takeover.
+        nominal = keyboard.Vector3Stamped()
+        nominal.header.frame_id = 'perching_lock_123'
+        k.angles_callback(nominal)
+        k.manual('roll', 1)
+        k.key('o')
+        third = k.motion.publisher.publish.call_args.args[0]
+        self.assertGreater(third.frame, second.frame)
+        self.assertAlmostEqual(third.value, math.radians(.2))
+
+    def test_stop_rearms_from_applied_pose_not_cancelled_nominal(self):
+        k = self.make_keyboard()
+        k.manual('yaw', 1)
+        k.angles = (0., 0., .8)
+        k.applied, k.applied_time = (0., 0., .1), time.monotonic()
+        # Simulate a very fast epoch callback during cancel publication.
+        k.pubs['stop'].publish.side_effect = lambda _: k.motion.epoch_callback(keyboard.UInt64(2))
+        k.manual()
+        k.manual('yaw', 1)
+        self.assertAlmostEqual(k.motion.publisher.publish.call_args.args[0].value, .1 + math.radians(.2))
+
+    def test_stale_keyboard_display_does_not_cancel_an_automatic_owner(self):
+        k = self.make_keyboard()
+        k.had_feedback = True
+        k.state_time = time.monotonic() - 2
+        with patch.object(k, 'show_status'):
+            k.tick()
+        k.pubs['stop'].publish.assert_not_called()
+
+    def test_body_pitch_keys_replace_total_destination_and_reverse(self):
+        k = self.make_keyboard()
+        k.key('o')
+        self.assertAlmostEqual(k.motion.publisher.publish.call_args[0][0].value, math.radians(.2))
+        k.key('o')
+        k.key('o')
+        self.assertAlmostEqual(k.motion.publisher.publish.call_args[0][0].value, math.radians(.6))
         k.key('u')
-        self.assertAlmostEqual(k.pubs['body_pitch'].publish.call_args[0][0].data, -math.radians(.2))
+        self.assertAlmostEqual(k.motion.publisher.publish.call_args[0][0].value, math.radians(.4))
         self.assertIsNone(k.commanded)  # Reconcile the navigator's coordinated nominal vector.
         self.assertEqual(k.pending_axes, [False] * 3)
-        for axis in ('pitch', 'roll', 'yaw', 'stop'):
-            k.pubs[axis].publish.assert_not_called()
+        k.pubs['stop'].publish.assert_not_called()
         k.state_callback(keyboard.String('PRE_ALIGN: body-local pitch jog moving'))
         k.key('o')  # Navigator accepts a replacement through the normal nominal path.
-        self.assertEqual(k.pubs['body_pitch'].publish.call_count, 3)
+        self.assertEqual(k.motion.publisher.publish.call_count, 5)
         k.pubs['stop'].publish.assert_not_called()
         k.had_feedback = True
         k.state_time = time.monotonic() - 2
@@ -271,6 +433,12 @@ class Interfaces(unittest.TestCase):
         k.pubs['stop'].publish.assert_not_called()  # Preserve automatic pause/resume.
         k.key(' ')
         k.pubs['stop'].publish.assert_called_once()
+        k.state_callback(keyboard.String('CONTACT_LOCKED: test'))
+        with self.assertRaisesRegex(RuntimeError, 'Waiting'):
+            k.key('o')
+        k.motion.epoch_callback(keyboard.UInt64(2))
+        k.key('u')
+        self.assertAlmostEqual(k.motion.publisher.publish.call_args[0][0].value, -math.radians(.2))
 
     def test_body_pitch_parameter_namespace_and_acknowledgements(self):
         params = {'~robot_namespace': '/other', '~debug_prefix': 'custom',
@@ -282,7 +450,7 @@ class Interfaces(unittest.TestCase):
         self.assertEqual(k.prefix, '/other/custom')
         self.assertAlmostEqual(k.steps['body_pitch'], math.radians(.4))
         self.assertAlmostEqual(k.steps['pitch'], math.radians(.1))
-        self.assertIn('/other/custom/body_pitch_delta', [c.args[0] for c in publisher.call_args_list])
+        self.assertIn('/other/custom/motion', [c.args[0] for c in publisher.call_args_list])
         k.session = 123
         with patch('builtins.print') as output:
             k.ack_callback(keyboard.String('action=body_pitch_delta session=122 accepted=false phase=rejected reason=busy'))

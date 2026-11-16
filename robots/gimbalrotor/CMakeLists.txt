@@ -10,6 +10,7 @@ find_package(catkin REQUIRED COMPONENTS
   aerial_robot_msgs
   diagnostic_msgs
   geometry_msgs
+  message_generation
   nav_msgs
   tf_conversions
   spinal
@@ -23,6 +24,9 @@ find_package(catkin REQUIRED COMPONENTS
 find_package(Eigen3 REQUIRED)
 find_package(gazebo QUIET)
 
+add_message_files(FILES RollYawMotion.msg)
+generate_messages()
+
 catkin_package(
   CATKIN_DEPENDS
     aerial_robot_control
@@ -31,6 +35,7 @@ catkin_package(
     aerial_robot_msgs
     diagnostic_msgs
     geometry_msgs
+    message_runtime
     nav_msgs
     tf_conversions
     pluginlib
@@ -68,7 +73,7 @@ add_library(gimbalrotor_navigation
   src/gimbalrotor_navigation.cpp
   src/gimbalrotor_perching_navigation.cpp)
 target_link_libraries(gimbalrotor_navigation gimbalrotor_perching gimbalrotor_robot_model ${catkin_LIBRARIES})
-add_dependencies(gimbalrotor_navigation ${catkin_EXPORTED_TARGETS})
+add_dependencies(gimbalrotor_navigation ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 
 if(gazebo_FOUND)
   add_library(gimbalrotor_perching_gazebo src/gimbalrotor_perching_gazebo.cpp)
@@ -89,6 +94,12 @@ catkin_install_python(PROGRAMS scripts/keyboard_command/keyboard_roll_yaw_perchi
   scripts/visualization/cog_markers.py
   scripts/urdf/urdf_inertia_markers.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})
+
+# Imported by both entry points. A catkin executable relay does not export its
+# executed globals when imported, so keep this helper as a normal Python module.
+configure_file(scripts/roll_yaw_motion.py
+  ${CATKIN_DEVEL_PREFIX}/${CATKIN_PACKAGE_BIN_DESTINATION}/roll_yaw_motion.py COPYONLY)
+install(FILES scripts/roll_yaw_motion.py DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})
 
 # Keep helper imports beside installed entry points; no setup.py/build is needed
 # for source-tree execution. Install the preset's Xacro and mesh resources too.
