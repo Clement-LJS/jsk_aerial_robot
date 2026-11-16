@@ -316,7 +316,8 @@ bool RollYawInteractionRuntime::motionAllowed(const Input& c) const
   return !(admittance_.enabled && (!interaction_valid_ || !admittance_.baseline_ready ||
            current.now - interaction_stamp_ > c.feedback_config.timeout ||
            current.now - interaction_stamp_ < -c.feedback_config.future_tolerance ||
-           std::abs(interaction_stamp_ - current.body_stamp) > c.synchronization_tolerance ||
+           (articulated() ? !articulatedLoadValid(c, current) :
+            std::abs(interaction_stamp_ - current.body_stamp) > c.synchronization_tolerance) ||
            roll_yaw::steadySeconds() - interaction_receipt_ > c.feedback_config.timeout));
 }
 
@@ -887,7 +888,9 @@ void RollYawInteractionRuntime::admittanceCallback(const Input& c, const std_msg
   }
   else if(interaction_source_ == InteractionSource::ARTICULATED_MOMENTUM && !articulatedLoadValid(c, c.feedback))
   {
-    admittance_reason_ = "unavailable: " + articulated_reason_;
+    admittance_reason_ = articulated_valid_ && momentum_observer_.ready()
+        ? "unavailable: waiting for a fresh valid articulated result"
+        : "unavailable: articulated observer: " + articulated_reason_;
   }
   else if(!quietContact(c))
   {
@@ -896,15 +899,19 @@ void RollYawInteractionRuntime::admittanceCallback(const Input& c, const std_msg
   }
   else if(!admittance_.baseline_ready)
   {
-    admittance_reason_ =
-        "unavailable: no completed baseline; tare at quiet unloaded contact with a fresh synchronized load";
+    admittance_reason_ = tare_requested_
+        ? "unavailable: tare collecting; wait for the unloaded baseline to complete"
+        : "unavailable: no completed baseline; tare at quiet unloaded contact with a fresh synchronized load";
   }
   else if(!interaction_valid_ || interaction_stamp_ <= 0 ||
           ros::Time::now().toSec() - interaction_stamp_ > c.feedback_config.timeout ||
           roll_yaw::steadySeconds() - interaction_receipt_ > c.feedback_config.timeout ||
-          std::abs(interaction_stamp_ - c.feedback.body_stamp) > c.synchronization_tolerance)
+          (articulated() ? c.feedback.now - interaction_stamp_ < -c.feedback_config.future_tolerance :
+           std::abs(interaction_stamp_ - c.feedback.body_stamp) > c.synchronization_tolerance))
   {
-    admittance_reason_ = "unavailable: external wrench invalid, stale or unsynchronized with body feedback";
+    admittance_reason_ = articulated()
+        ? "unavailable: waiting for a fresh projected articulated interaction"
+        : "unavailable: external wrench invalid, stale or unsynchronized with body feedback";
   }
   else
   {
@@ -1029,6 +1036,7 @@ bool RollYawInteractionRuntime::observeInteractionSample(const Input& c, const r
     if(baseline_sum_.size() != load.size() || (baseline_stamp_ > 0 && stamp - baseline_stamp_ > 2.0))
     { baseline_sum_ = Eigen::VectorXd::Zero(load.size()); admittance_.samples = 0; }
     baseline_sum_ += load;
+    if(!baseline_sum_.allFinite()) return false;
     baseline_stamp_ = stamp;
     if(++admittance_.samples >= admittance_.config.baseline_samples)
     {
@@ -1037,6 +1045,8 @@ bool RollYawInteractionRuntime::observeInteractionSample(const Input& c, const r
       tare_requested_ = false;
       admittance_reason_ = "disabled/ready: unloaded contact baseline complete; enable explicitly";
     }
+    else
+      admittance_reason_ = "taring: collecting fresh quiet unloaded samples";
   }
   if(admittance_.baseline_ready)
   {
@@ -1046,6 +1056,7 @@ bool RollYawInteractionRuntime::observeInteractionSample(const Input& c, const r
   if(articulated)
   {
     const auto& j = articulated_jacobian_;
+    if(!j.allFinite()) return false;
     Eigen::JacobiSVD<Eigen::Matrix3d> svd(j, Eigen::ComputeFullU | Eigen::ComputeFullV);
     const Eigen::Vector3d tangent = svd.solve(direction * Eigen::Vector3d::UnitY());
     interaction_torque_ = tangent.dot(load);
@@ -1057,7 +1068,10 @@ bool RollYawInteractionRuntime::observeInteractionSample(const Input& c, const r
   fresh = fresh && std::isfinite(interaction_torque_);
   if(fresh)
   {
-    if(stamp > interaction_stamp_) admittance_.observe(interaction_torque_, stamp, false, !c.plan);
+    // Articulated vector tare owns its sample count and gap policy. The scalar filter's
+    // pre-baseline gap reset must not reset that count while retaining its sum.
+    if(stamp > interaction_stamp_ && (!articulated || admittance_.baseline_ready))
+      admittance_.observe(interaction_torque_, stamp, false, !c.plan);
     interaction_stamp_ = stamp;
   }
   return fresh;
@@ -1079,15 +1093,16 @@ RollYawInteractionRuntime::Output RollYawInteractionRuntime::updateInteraction(c
   }
   const bool articulated = interaction_source_ == InteractionSource::ARTICULATED_MOMENTUM;
   const double stamp = articulated ? momentum_observer_.stamp() : external_wrench_.header.stamp.toSec();
-  bool scalar_failed = false;
-  bool fresh = interaction_configured_ && c.contact_rejection(f).empty() &&
-               stamp > 0 && f.now - stamp >= -c.feedback_config.future_tolerance &&
-               f.now - stamp <= c.feedback_config.timeout &&
-               std::abs(stamp - f.body_stamp) <= c.synchronization_tolerance;
+  bool scalar_failed = false, projection_failed = false;
+  bool fresh = interaction_configured_ && c.contact_rejection(f).empty();
   if(articulated)
+    // Input synchronization was checked before worker submission. Consume the
+    // load/Jacobian pair by its original stamp/receipt, not the newest pose.
     fresh = fresh && articulatedLoadValid(c, f);
   else
-    fresh = fresh && interaction_receipt_ > 0 &&
+    fresh = fresh && stamp > 0 && f.now - stamp >= -c.feedback_config.future_tolerance &&
+            f.now - stamp <= c.feedback_config.timeout &&
+            std::abs(stamp - f.body_stamp) <= c.synchronization_tolerance && interaction_receipt_ > 0 &&
             roll_yaw::steadySeconds() - interaction_receipt_ <= c.feedback_config.timeout;
   const bool quiet = quietContact(c);
   if(tare_requested_ && !quiet)
@@ -1101,9 +1116,10 @@ RollYawInteractionRuntime::Output RollYawInteractionRuntime::updateInteraction(c
   if(fresh && (articulated || stamp > interaction_stamp_))
   {
     fresh = observeInteractionSample(c, f, stamp, quiet);
+    projection_failed = articulated && !fresh && articulatedLoadValid(c, f);
+    if(projection_failed)
+      invalidateInteraction(); // An attempted mapping failed on a usable source.
   }
-  if(articulated && !fresh && articulatedLoadValid(c, f))
-    invalidateInteraction(); // Source is valid; only the path/compliance contract failed.
   if(articulated && admittance_.enabled && !admittance_.baseline_ready)
     fresh = false; // A fault requires explicit disarm and a new no-contact tare.
   if(tare_requested_ && !fresh)
@@ -1115,10 +1131,23 @@ RollYawInteractionRuntime::Output RollYawInteractionRuntime::updateInteraction(c
         "stale/unavailable interaction: bounded path stop, correction braking/held; original goal retained";
   else if(admittance_.enabled)
     admittance_reason_ = "enabled/ready: approximate external work, resistance reduces penetration";
+  else if(fresh && admittance_.baseline_ready)
+    admittance_reason_ = "disabled/ready: unloaded contact baseline complete; enable explicitly";
   if(articulated && !fresh)
-    admittance_reason_ = (articulatedLoadValid(c, f) ? "signed path projection/compliance unavailable"
-                                                : "articulated unavailable: " + articulated_reason_) +
-                         (admittance_.enabled ? "; feed held until coherent load recovers" : "");
+  {
+    admittance_reason_ = projection_failed ? "signed path projection failed; disarm and tare unloaded after recovery"
+        : admittance_.enabled && !admittance_.baseline_ready ? "unavailable: no completed baseline"
+        : articulated_valid_ && momentum_observer_.ready() ? "waiting for a fresh valid articulated result"
+        : "articulated observer unavailable: " + articulated_reason_;
+    if(tare_requested_)
+      admittance_reason_ += quiet ? "; tare collection paused" : "; tare waiting for quiet no-cut posture";
+    else if(admittance_.baseline_ready)
+      admittance_reason_ += "; completed tare retained";
+    else if(admittance_.enabled)
+      admittance_reason_ += "; no completed baseline; disarm and tare unloaded";
+    if(admittance_.enabled)
+      admittance_reason_ += "; feed held with correction braking/held";
+  }
   // Observation/filtering continues at a hold; integration never advances an
   // invisible correction while explicitly PAUSED, aligning or READY.
   if(((c.plan && c.stage == roll_yaw::Stage::EXECUTING) || !c.plan) && !c.stopping &&

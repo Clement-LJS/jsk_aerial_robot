@@ -212,6 +212,7 @@ def main():
     started = time.monotonic()
     previous = rospy.get_time()
     sent_at = None
+    connection_deadline = None
     normal_exit = False
     startup = AdmittanceStartup()
     measured_start = None
@@ -229,6 +230,8 @@ def main():
                 ack = motion.ack
                 if motion.epoch is not None and motion.epoch != motion.current_epoch:
                     raise ValueError('Motion cancelled by operator or contact transition; task abandoned')
+            if connection_deadline is not None and now >= connection_deadline:
+                raise RuntimeError('Timed out waiting for motion subscriber on ' + prefix + '/motion')
             if not status:
                 time.sleep(.02)
                 continue
@@ -253,7 +256,18 @@ def main():
                 normal_exit = True
                 return
             if not motion.claimed:
+                if connection_deadline is None:
+                    connection_deadline = now + feedback_timeout + 1
+                if not motion.publisher.get_num_connections():
+                    # Keep checking session, epoch and cancellation in the main loop.
+                    # Status/epoch subscribers may connect before this publisher.
+                    interrupted.wait(.02)
+                    continue
+                if interrupted.is_set() or rospy.is_shutdown():
+                    break
                 motion.claim(session)
+                connection_deadline = None
+                continue  # Recheck cancellation and feedback after the acknowledgement wait.
             if sent_at is not None:
                 matched = ack and int(ack[1].get('sequence', '0')) == task.sequence
                 if matched and ack[1].get('accepted') != 'true':
