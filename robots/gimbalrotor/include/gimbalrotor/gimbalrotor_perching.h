@@ -800,6 +800,8 @@ inline double steadySeconds()
 // a host-side command term; measured-rate feedback remains exclusively in FC.
 Eigen::Vector3d referenceFeedforward(const Eigen::Vector3d& rate, const Eigen::Vector3d& acceleration,
                                     const Eigen::Vector3d& gain, const Eigen::Vector3d& limit);
+Eigen::Vector3d referenceAngularAcceleration(const Eigen::Matrix3d& current, const Eigen::Matrix3d& desired,
+                                             const Eigen::Vector3d& acceleration);
 
 struct PitchPulse
 {
@@ -823,13 +825,13 @@ struct MotionIdentity
 {
   std::uint64_t epoch = 1, sequence = 0;
   std::string source;
-  std::string rejection(std::uint64_t e, const std::string& s, std::uint64_t n) const
+  std::string rejection(std::uint64_t e, const std::string& s, std::uint64_t n, bool claim = false) const
   {
     if(e != epoch) return "cancelled motion epoch";
     if(s.empty() || s.size() > 128 || n == 0 ||
        s.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-") != std::string::npos)
       return "invalid motion identity";
-    if(!source.empty() && source != s) return "another source owns motion; use operator cancel before takeover";
+    if(!claim && !source.empty() && source != s) return "another source owns motion; claim after nominal motion finishes";
     if(source == s && n <= sequence) return "old motion sequence";
     return "";
   }

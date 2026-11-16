@@ -6,7 +6,6 @@ check that the automatic task cannot report success on the failed timelines.
 This is input replay, not a closed-loop prediction of a modified flight.
 """
 
-from perching_bag_task import Stroke
 import argparse
 import importlib.util
 import json
@@ -18,6 +17,7 @@ import subprocess
 import tempfile
 
 import rosbag
+from tf.transformations import quaternion_conjugate, quaternion_multiply
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('experiment', ROOT / 'scripts/tasks/auto_roll_yaw_body_pitch_experiment.py')
@@ -27,6 +27,75 @@ spec.loader.exec_module(experiment)
 FILES = ('1_afterperch_navfailed.bag', '2_aftercodex_keyboardnavfailed.bag',
          '3_navfailed.bag', '4stillfailed.bag')
 PREFIX = '/gimbalrotor/perching/roll_yaw/'
+
+
+local_pitch = experiment.local_pitch
+
+
+class Stroke:
+    """Historical velocity-task monitor for the November bag regressions only."""
+    def __init__(self, rate, duration, tolerance, progress_timeout, settle_time=.3):
+        self.rate, self.goal = rate, rate * duration
+        self.tolerance = min(tolerance, abs(self.goal) * .1) if self.goal else tolerance
+        self.progress_timeout, self.settle_time = progress_timeout, settle_time
+        self.reference_tolerance = min(1e-4, abs(self.goal) * .01)
+        self.session = None
+        self.reference_start = self.measured_start = None
+        self.started = self.last_progress = self.settled_since = None
+        self.best_progress = 0.
+        self.reference_progress = self.measured_progress = 0.
+        self.reason = 'waiting for fresh enabled contact'
+        self.complete = False
+
+    def step(self, now, session, state, reference, measured, fresh, holding, stopping, horizon, sample_stamp=None):
+        self.complete = False
+        sample_stamp = now if sample_stamp is None else sample_stamp
+        stage = state.partition(':')[0]
+        if stage in ('FAULT_HOLD', 'LOCK_FAILED'):
+            raise ValueError('navigation left the active contact: ' + state)
+        if self.started is not None:
+            if session != self.session:
+                raise ValueError('contact session changed; remaining stroke was not recaptured')
+            if stage in ('FREE_FLIGHT', 'FAULT_HOLD', 'LOCK_FAILED') or stage.startswith('PITCH_REZERO_'):
+                raise ValueError('navigation left the active contact: ' + state)
+            if now - self.last_progress > self.progress_timeout:
+                raise ValueError('no measured progress before timeout: ' + self.reason)
+        if not fresh or holding or stage != 'CONTACT_LOCKED':
+            self.settled_since = None
+            self.reason = 'holding remaining stroke: ' + state
+            return 0.
+        if self.started is None:
+            if not session or stopping:
+                return 0.
+            self.session = session
+            self.reference_start, self.measured_start = reference, measured
+            self.started = self.last_progress = now
+        self.reference_progress = local_pitch(self.reference_start, reference)
+        self.measured_progress = local_pitch(self.measured_start, measured)
+        direction = 1 if self.rate > 0 else -1
+        forward = direction * self.measured_progress
+        if forward > self.best_progress + min(self.tolerance * .1, abs(self.goal) * .01):
+            self.best_progress = forward
+            self.last_progress = now
+        remaining = direction * (self.goal - self.reference_progress)
+        if remaining <= self.reference_tolerance:
+            self.reason = 'reference complete; waiting for measured endpoint and stop'
+            endpoint = quaternion_multiply(self.measured_start,
+                                          (0., math.sin(self.goal / 2), 0., math.cos(self.goal / 2)))
+            error = quaternion_multiply(quaternion_conjugate(endpoint), measured)
+            angular_error = 2 * math.atan2(math.sqrt(sum(x*x for x in error[:3])), abs(error[3]))
+            if angular_error <= self.tolerance and not stopping:
+                if self.settled_since is None:
+                    self.settled_since = sample_stamp
+                self.complete = sample_stamp - self.settled_since >= self.settle_time
+            else:
+                self.settled_since = None
+            return 0.
+        self.settled_since = None
+        self.reason = 'advancing remaining stroke'
+        # Slow near the endpoint, leaving time for the onboard bounded brake.
+        return direction * min(abs(self.rate), remaining / horizon)
+
 
 
 def inspect(path, index, samples):

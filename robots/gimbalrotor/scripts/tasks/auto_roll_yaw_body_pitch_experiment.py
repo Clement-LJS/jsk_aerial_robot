@@ -3,7 +3,7 @@
 
 interval_sec is HOLD time; feed_duration_sec defaults to one second. Ctrl+C
 ends the sequence while its accepted pulse expires onboard. Errors cancel it.
-Optional use_admittance tares unloaded contact and verifies enable before feed.
+Optional use_admittance reuses valid tare or collects it unloaded, then verifies enable.
 """
 
 import math
@@ -112,6 +112,76 @@ class PulseSequence:
                 (self.hold_since is None or stamp - self.hold_since >= self.hold))
 
 
+class AdmittanceStartup:
+    """Collect while disarmed, then verify arming, as in no-joint perching.
+
+    Retry only a processed refusal. Missing acknowledgements must not produce
+    duplicate tare requests that could later erase an accepted calibration.
+    """
+    def __init__(self):
+        self.started = self.generation = self.producer = None
+        self.pending = None
+        self.retry_at = 0.
+        self.baseline_seen = False
+
+    def ready(self, now, values, quiet, tare, enable):
+        generation = int(values['tare_generation'])
+        producer = int(values['producer_generation'])
+        if self.started is None:
+            self.started, self.producer = now, producer
+        if producer != self.producer:
+            raise ValueError('Contact model changed during admittance startup')
+        if values.get('admittance_configured') != '1':
+            raise ValueError('Admittance configuration unavailable: ' + values.get('admittance_status', ''))
+        if self.pending:
+            action, sequence, requested, previous_generation = self.pending
+            processed = int(values[action + '_request_sequence'])
+            if processed == sequence:
+                if now - requested > 2.:
+                    raise ValueError(action + ' acknowledgement missing; request is not repeated')
+                return False
+            if processed != sequence + 1 or (action == 'enable' and values.get('admittance_enable_requested') != '1'):
+                raise ValueError('Admittance startup interrupted by another request')
+            self.pending = None
+            self.retry_at = now + .5
+            if action == 'tare' and generation != previous_generation:
+                if generation != previous_generation + 1:
+                    raise ValueError('Tare changed unexpectedly during startup')
+                self.generation = generation
+        if self.generation is not None and generation != self.generation:
+            raise ValueError('Admittance baseline changed; task abandoned')
+        baseline = values.get('baseline_ready') == '1'
+        if self.baseline_seen and not baseline:
+            raise ValueError('Admittance baseline lost; automatic re-tare is forbidden')
+        self.baseline_seen |= baseline
+        if values.get('admittance_enabled') == '1':
+            if not baseline:
+                raise ValueError('Armed admittance has no baseline; disarm and tare unloaded')
+            self.generation = generation
+            return True
+        if now - self.started > 30.:
+            raise ValueError('No verified admittance baseline/enable within 30 seconds: ' + values.get('admittance_status', ''))
+        collecting = values.get('tare_collecting') == '1'
+        if baseline or collecting:
+            self.generation = generation
+        # Use the controller's complete quiet window, not just instantaneous rates.
+        if not quiet or values.get('admittance_quiet') != '1' or now < self.retry_at:
+            return False
+        if baseline:
+            if values.get('task_torque_valid') != '1' or not enable.get_num_connections():
+                return False
+            action, publisher, message = 'enable', enable, Bool(data=True)
+        else:
+            if self.generation is not None or collecting or abs(float(values.get('offset_rad', 'inf'))) > 1e-8:
+                return False  # An accepted collection must never be restarted by retry.
+            if not tare.get_num_connections():
+                return False
+            action, publisher, message = 'tare', tare, Empty()
+        self.pending = (action, int(values[action + '_request_sequence']), now, generation)
+        publisher.publish(message)
+        return False
+
+
 def main():
     rospy.init_node('auto_roll_yaw_body_pitch_experiment', disable_signals=True)
     rate = math.radians(finite_number(rospy.get_param('~angular_velocity_deg_s'), '~angular_velocity_deg_s'))
@@ -141,9 +211,9 @@ def main():
                 for number in (signal.SIGINT, signal.SIGTERM)}
     started = time.monotonic()
     previous = rospy.get_time()
-    sent_at = tare_at = enable_at = None
+    sent_at = None
     normal_exit = False
-    tare_generation = None
+    startup = AdmittanceStartup()
     measured_start = None
     nominal_start = None
     rospy.loginfo('Feed %+.6g deg/s for %.3g s, then hold %.3g s; %d pulses. Ctrl+C ends the sequence.',
@@ -182,6 +252,8 @@ def main():
                     raise ValueError('Operator stop was not confirmed')
                 normal_exit = True
                 return
+            if not motion.claimed:
+                motion.claim(session)
             if sent_at is not None:
                 matched = ack and int(ack[1].get('sequence', '0')) == task.sequence
                 if matched and ack[1].get('accepted') != 'true':
@@ -199,21 +271,11 @@ def main():
                      float(values.get('effective_body_tracking_error_rad', 'inf')) < float(values.get('effective_body_tracking_limit_rad', '.04')))
             if use_admittance and task.sequence and (values.get('admittance_enabled') != '1' or values.get('baseline_ready') != '1'):
                 raise ValueError('Admittance calibration or enable was lost; sequence stopped')
+            if use_admittance and startup.generation is not None and (
+                    int(values['tare_generation']) != startup.generation or int(values['producer_generation']) != startup.producer):
+                raise ValueError('Admittance baseline or contact model changed; sequence stopped')
             if use_admittance and not task.sequence:
-                armed = values.get('admittance_enabled') == '1'
-                if armed and values.get('baseline_ready') != '1':
-                    raise ValueError('Armed admittance has no baseline; disarm and tare unloaded')
-                if not armed:
-                    if tare_at is None and quiet and abs(float(values.get('offset_rad', 'inf'))) < 1e-8 and tare.get_num_connections():
-                        tare_generation = int(values.get('tare_generation', '0'))
-                        tare.publish(Empty())
-                        tare_at = now
-                    if (tare_at is not None and int(values.get('tare_generation', '0')) > tare_generation and
-                            values.get('baseline_ready') == '1' and quiet and enable_at is None and enable.get_num_connections()):
-                        enable.publish(Bool(data=True))
-                        enable_at = now
-                    if tare_at is not None and now - tare_at > 30:
-                        raise ValueError('No verified admittance baseline/enable within 30 seconds')
+                if not startup.ready(now, values, quiet, tare, enable):
                     time.sleep(.02)
                     continue
             pose = poses.get('measured')
@@ -253,7 +315,9 @@ def main():
         normal_exit = True  # Ctrl+C leaves only the already dispatched finite pulse.
     finally:
         try:
-            if not normal_exit and not motion.stop(wait=True):
+            if normal_exit and not motion.release():
+                rospy.logwarn('Ownership release unconfirmed; pulse still expires onboard. Next client must claim while idle.')
+            elif not normal_exit and not motion.stop(wait=True):
                 rospy.logerr('Stop was not confirmed; inspect navigator hold status.')
         finally:
             for number, handler in handlers.items():

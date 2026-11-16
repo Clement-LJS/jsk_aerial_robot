@@ -20,6 +20,7 @@ class MotionClient:
         self.session = self.epoch = self.current_epoch = None
         self.sequence = 0
         self.mode = None
+        self.claimed = False
         self.frame = 0
         self.stop_epoch = None
         self.stop_message = None
@@ -59,8 +60,49 @@ class MotionClient:
             if changed:
                 self.session, self.epoch = session, self.current_epoch
                 self.mode = None
+                self.claimed = False
                 self.ack = None
             return changed
+
+    def claim(self, session, timeout=2.):
+        """Explicit idle handover; never reacquire after a task was cancelled."""
+        with self.lock:
+            if self.claimed:
+                if self.session != session or self.epoch != self.current_epoch:
+                    raise RuntimeError('Motion was cancelled; task will not resume.')
+                return
+            sequence = self.send(session, RollYawMotion.CLAIM)
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline and not rospy.is_shutdown():
+            with self.lock:
+                if self.ack and int(self.ack[1].get('sequence', '0')) == sequence:
+                    if self.ack[1].get('accepted') != 'true':
+                        raise RuntimeError(self.ack[2])
+                    epoch = int(self.ack[1]['motion_epoch'])
+                    if self.current_epoch == epoch:
+                        self.epoch, self.claimed = epoch, True
+                        return
+                    if self.current_epoch > epoch:
+                        raise RuntimeError('Motion cancelled during ownership handover.')
+            time.sleep(.02)
+        raise RuntimeError('Motion ownership acknowledgement missing; no motion sent.')
+
+    def release(self, timeout=2.):
+        """Keep the accepted finite reference, retire this source and its late packets."""
+        with self.lock:
+            if not self.claimed or self.current_epoch != self.epoch:
+                return True
+            sequence = self.send(self.session, RollYawMotion.RELEASE)
+            self.claimed = False
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline and not rospy.is_shutdown():
+            with self.lock:
+                if self.ack and int(self.ack[1].get('sequence', '0')) == sequence:
+                    return self.ack[1].get('accepted') == 'true'
+                if self.current_epoch != self.epoch:
+                    return True  # Release or operator cancellation retired this source.
+            time.sleep(.02)
+        return False  # Idle CLAIM remains possible even if this process disappears.
 
     def send(self, session, mode, value=0., rate_limit=0., duration=0.):
         with self.lock:
@@ -85,7 +127,7 @@ class MotionClient:
 
     def stop(self, wait=False, timeout=2.):
         with self.lock:
-            if self.session is None or self.sequence == 0:
+            if self.session is None or self.sequence == 0 or (self.mode == RollYawMotion.CLAIM and not self.claimed):
                 return True
             # Another stop/session transition already revoked this task. Never
             # stop a new owner merely because this old process is shutting down.

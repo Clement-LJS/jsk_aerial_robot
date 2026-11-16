@@ -3125,6 +3125,12 @@ Eigen::Vector3d referenceFeedforward(const Eigen::Vector3d& rate, const Eigen::V
   return result;
 }
 
+Eigen::Vector3d referenceAngularAcceleration(const Eigen::Matrix3d& current, const Eigen::Matrix3d& desired,
+                                             const Eigen::Vector3d& acceleration)
+{
+  return current.transpose() * desired * acceleration;
+}
+
 void PitchAdmittance::reset()
 {
   const auto c = config;

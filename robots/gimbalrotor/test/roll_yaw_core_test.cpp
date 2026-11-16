@@ -648,6 +648,27 @@ TEST(Motion,StopRevokesLateCommandsWithoutRelocking)
   EXPECT_FALSE(identity.rejection(identity.epoch, "bad source", 1).empty());
 }
 
+TEST(Motion,RetiredSourceCannotExtendPulseOrClaimAnotherEpoch)
+{
+  MotionIdentity identity;
+  PitchPulse pulse;
+  identity.accept("auto", 5);
+  const auto epoch = identity.epoch;
+  ASSERT_TRUE(pulse.start(5, 1, 100, 200));
+  // RELEASE retires only command identity. Its retained reference still expires
+  // at the original deadline; neither an old refresh nor a new owner can extend it.
+  identity.revoke();
+  EXPECT_FALSE(identity.rejection(epoch, "auto", 6).empty());
+  EXPECT_FALSE(pulse.expired(100.5, 200.5, false));
+  EXPECT_TRUE(pulse.expired(101, 201, false));
+  identity.accept("auto2", 1);
+  EXPECT_FALSE(identity.rejection(identity.epoch, "keyboard", 1).empty());
+  EXPECT_TRUE(identity.rejection(identity.epoch, "keyboard", 1, true).empty());
+  identity.revoke(); // Explicit idle takeover also retires a killed client's packets.
+  identity.accept("keyboard", 1);
+  EXPECT_FALSE(identity.rejection(epoch + 1, "auto2", 2, true).empty());
+}
+
 TEST(Motion,RepeatedKeysHaveOneDestinationAndIndependentAxes)
 {
   struct Command { std::string key; bool urgent; double target; };
@@ -907,6 +928,43 @@ TEST(Control,ReferenceFeedforwardDoesNotDuplicateDampingOrYaw)
   EXPECT_NEAR((fc+ff).y(), gain.y()*(rate.y()-measured.y())+acceleration.y(),1e-12);
   EXPECT_EQ(referenceFeedforward(Vec::Zero(),Vec::Zero(),gain,limit),Vec::Zero());
   EXPECT_LE(referenceFeedforward(100*rate,100*acceleration,gain,Vec(.01,.01,.01)).norm(),std::sqrt(2)*.01+1e-12);
+}
+
+TEST(Control,ReferenceAccelerationUsesCurrentCogAxes)
+{
+  const Mat current = expSO3(Vec(.3,-.2,.5));
+  const Mat desired = current * expSO3(Vec::UnitZ() * M_PI/2);
+  const Vec acceleration(0,.03,0);
+  const Vec applied = referenceAngularAcceleration(current, desired, acceleration);
+  EXPECT_LT((applied - Vec(-.03,0,0)).norm(), 1e-12);
+  EXPECT_LT((current * applied - desired * acceleration).norm(), 1e-12);
+  EXPECT_LT((referenceAngularAcceleration(current,current,acceleration)-acceleration).norm(), 1e-12);
+  EXPECT_LT((referenceAngularAcceleration(current,desired,Vec::Zero())).norm(), 1e-12);
+}
+
+TEST(Observer,ConditioningStepResponseIsMeasuredSeparatelyFromAvailability)
+{
+  perching_dynamics::ObservationFilter f;
+  Eigen::Matrix<double,6,1> input = Eigen::Matrix<double,6,1>::Zero();
+  for(int i=0;i<=100;++i)
+    f.observe(Vec::Zero(),Mat::Identity(),Vec::Zero(),Vec::Zero(),input,1+i*.02,.15);
+  input[4] = 1;
+  double rise90 = 0, release90 = 0;
+  for(int i=1;i<=150;++i)
+  {
+    ASSERT_TRUE(f.observe(Vec::Zero(),Mat::Identity(),Vec::Zero(),Vec::Zero(),input,3+i*.02,.15));
+    if(!rise90 && f.wrench[4] >= .9) rise90 = i*.02;
+  }
+  input.setZero();
+  for(int i=1;i<=150;++i)
+  {
+    ASSERT_TRUE(f.observe(Vec::Zero(),Mat::Identity(),Vec::Zero(),Vec::Zero(),input,6+i*.02,.15));
+    if(!release90 && f.wrench[4] <= .1) release90 = i*.02;
+  }
+  EXPECT_NEAR(rise90, -f.time_constant*std::log(.1), .02);
+  EXPECT_NEAR(release90, -f.time_constant*std::log(.1), .02);
+  std::cout << "Observation input filter rise/release t90: " << rise90 << "/" << release90
+            << " s (synthetic input; not end-to-end wrench validation)\n";
 }
 
 TEST(Observer,RecordedQuietIntervalConditioning)

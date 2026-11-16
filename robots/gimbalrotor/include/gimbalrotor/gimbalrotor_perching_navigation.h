@@ -486,7 +486,7 @@ private:
   void motionCallback(const gimbalrotor::RollYawMotionConstPtr&);
   bool rejectUnscopedMotion(const std::string& action);
   bool admitPitchTarget(double angle, double rate, std::uint64_t frame);
-  void revokeMotion();
+  void revokeMotion(bool retain_reference = false);
   roll_yaw::MotionIdentity motion_identity_;
   roll_yaw::MotionIdentity input_motion_identity_; // input_mutex_; receipt ordering before coalescing
   std::atomic<std::uint64_t> input_motion_epoch_{1};

@@ -47,8 +47,8 @@ Reference completion and measured endpoint error are reported separately.
 ~body_pitch_step_deg is separate from passive ~pitch_step_deg.
 ~body_pitch_rate_deg_s defaults to 0.5; ~body_pitch_limit_deg defaults to 20.
 Feedback loss holds the accepted destination and resumes when coherent feedback returns. New invalid requests are rejected.
-Jogs are geometric only: no admittance/tare. Prepare a cut, reach READY, tare, enable,
-then start for compliant cutting. Space cancels preparation or motion and holds.
+Body-pitch targets use enabled admittance after a quiet unloaded tare; a prepared
+cut is optional. Space cancels preparation or motion and holds.
 Other destinations survive quick axis changes. Space holds without zeroing joints.
 Targets clamp to navigator effective limits; reversal at a limit takes one step.
 Quitting preserves contact hold and restores the terminal. No saw command is sent.
@@ -312,14 +312,20 @@ class Keyboard:
         return ''
 
     def rearm_motion(self, session):
-        previous = self.motion.epoch
-        if self.motion.rearm(session):
-            self.body_pitch_mode = False
-            self.body_pitch_target = 0.
-            self.commanded = ([self.clamp_target(i, v) for i, v in enumerate(self.applied)]
-                              if previous is not None and self.applied is not None and
-                              time.monotonic() - self.applied_time < 1 and self.limits_valid() else None)
-            self.pending_axes = [False] * 3
+        with self.lock:
+            previous = self.motion.epoch
+            if self.motion.rearm(session):
+                self.body_pitch_mode = False
+                self.body_pitch_target = 0.
+                self.commanded = ([self.clamp_target(i, v) for i, v in enumerate(self.applied)]
+                                  if previous is not None and self.applied is not None and
+                                  time.monotonic() - self.applied_time < 1 and self.limits_valid() else None)
+                self.pending_axes = [False] * 3
+        # Do not hold the display/state mutex while waiting for ROS callbacks.
+        self.motion.claim(session)
+        rejection = self.movement_rejection(self.snapshot())
+        if rejection:
+            raise RuntimeError(rejection)
 
     def manual(self, axis=None, sign=0):
         s = self.snapshot()
@@ -342,8 +348,8 @@ class Keyboard:
         if rejection:
             raise RuntimeError(rejection)
         index = {'roll': 0, 'pitch': 1, 'yaw': 2}[axis]
+        self.rearm_motion(s['session'])
         with self.lock:
-            self.rearm_motion(s['session'])
             if self.session != s['session']:
                 raise RuntimeError('Lock changed; waiting for its nominal baseline.')
             if self.angles_time < self.nominal_after_jog:
@@ -436,8 +442,10 @@ class Keyboard:
             rejection = self.movement_rejection(s)
             if rejection:
                 raise RuntimeError(rejection)
+            self.rearm_motion(s['session'])
             with self.lock:
-                self.rearm_motion(s['session'])
+                if self.session != s['session']:
+                    raise RuntimeError('Lock changed during motion handover.')
                 now = time.monotonic()
                 value = (self.body_pitch_target if self.body_pitch_mode else 0.) + self.steps['body_pitch'] * (1 if key == 'o' else -1)
                 value = max(-self.body_pitch_limit, min(self.body_pitch_limit, value))

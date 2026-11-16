@@ -66,7 +66,7 @@ private:
                             const Eigen::Vector3d& offset, double receipt);
   void invalidateInteraction();
   void rejectSample(const Input&, const std::string&);
-  bool quietContact(const Input&) const;
+  bool quietContact(const Input&) const override;
   bool observeInteractionSample(const Input&, const roll_yaw::Feedback&, double stamp, bool quiet);
   void admittanceCallback(const Input&, const std_msgs::BoolConstPtr&);
   void externalWrenchCallback(const Input&, const geometry_msgs::WrenchStampedConstPtr&, double receipt);
@@ -133,7 +133,6 @@ private:
   geometry_msgs::WrenchStamped command_wrench_;
   Eigen::Vector3d command_cog_offset_ = Eigen::Vector3d::Constant(std::numeric_limits<double>::quiet_NaN());
   double command_wrench_receipt_ = 0, articulated_joint_stamp_ = 0, articulated_command_stamp_ = 0;
-  bool interaction_configured_ = false, tare_requested_ = false;
   double compliance_time_ = 0;
   geometry_msgs::WrenchStamped external_wrench_;
   double previous_offset_ = 0, previous_rate_ = 0, previous_acceleration_ = 0;
@@ -874,6 +873,8 @@ bool RollYawInteractionRuntime::quietContact(const Input& c) const
 
 void RollYawInteractionRuntime::admittanceCallback(const Input& c, const std_msgs::BoolConstPtr& msg)
 {
+  ++enable_request_sequence_;
+  enable_requested_ = msg->data;
   if(!msg->data)
   {
     admittance_.enabled = false;
@@ -914,6 +915,7 @@ void RollYawInteractionRuntime::admittanceCallback(const Input& c, const std_msg
 }
 void RollYawInteractionRuntime::tareCallback(const Input& c, const TareRequest& request, ros::Subscriber& retired)
 {
+  ++tare_request_sequence_;
   const auto session = request.session, generation = request.generation;
   const auto sign = request.sign, scale = request.scale;
   const auto& frame = request.frame;

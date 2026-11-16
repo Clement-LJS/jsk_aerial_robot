@@ -63,6 +63,9 @@ struct RollYawInteractionDiagnostics
   std::uint64_t articulated_worker_tree_calls_ = 0;
   std::string admittance_reason_ = "disarmed";
   std::uint64_t tare_generation_ = 0;
+  std::uint64_t tare_request_sequence_ = 0, enable_request_sequence_ = 0;
+  bool interaction_configured_ = false, tare_requested_ = false;
+  bool enable_requested_ = false;
   bool interaction_valid_ = false;
   std::string interaction_frame_, interaction_point_, interaction_topic_;
   double interaction_sign_ = 0, interaction_scale_ = 0, interaction_torque_ = 0, interaction_stamp_ = 0,
@@ -107,6 +110,7 @@ public:
   virtual void resetCompliance() = 0;
   virtual void stopped() = 0;
   virtual bool motionAllowed(const Input&) const = 0;
+  virtual bool quietContact(const Input&) const = 0;
   virtual Output updateInteraction(const Input&, const roll_yaw::Feedback&) = 0;
   virtual double reconcileReference(bool accepted, bool paused, double applied_relief) = 0;
   virtual double holdReference(double applied_relief) = 0;

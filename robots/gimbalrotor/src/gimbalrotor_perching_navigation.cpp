@@ -3709,9 +3709,10 @@ bool GimbalrotorPerchingNavigator::deferRollYawCommand(
         input_motion_identity_ = roll_yaw::MotionIdentity();
         input_motion_identity_.epoch = epoch;
       }
-      auto error = input_motion_identity_.rejection(motion->epoch, motion->source, motion->sequence);
+      const bool claim = motion->mode == gimbalrotor::RollYawMotion::CLAIM;
+      auto error = input_motion_identity_.rejection(motion->epoch, motion->source, motion->sequence, claim);
       if(!motion->session || motion->session != input_session_.load()) error = "old contact session";
-      if(motion->mode > gimbalrotor::RollYawMotion::PULSE || !std::isfinite(motion->value)) error = "invalid motion request";
+      if(motion->mode > gimbalrotor::RollYawMotion::RELEASE || !std::isfinite(motion->value)) error = "invalid motion request";
       if(motion->mode == gimbalrotor::RollYawMotion::BODY_PITCH &&
          (!motion->frame || motion->frame > motion->sequence || std::abs(motion->value) >= M_PI ||
           !std::isfinite(motion->rate_limit) || motion->rate_limit <= 0))
@@ -3719,7 +3720,7 @@ bool GimbalrotorPerchingNavigator::deferRollYawCommand(
       if(motion->mode == gimbalrotor::RollYawMotion::PULSE &&
          (!std::isfinite(motion->duration) || motion->duration <= 0 || motion->duration > 8 || motion->value == 0))
         error = "invalid pulse duration or rate";
-      if((motion->mode == gimbalrotor::RollYawMotion::JOG || motion->mode == gimbalrotor::RollYawMotion::PULSE) &&
+      if((claim || motion->mode == gimbalrotor::RollYawMotion::JOG || motion->mode == gimbalrotor::RollYawMotion::PULSE) &&
          std::any_of(pending_commands_.begin(), pending_commands_.end(),
                      [](const PendingCommand& c) { return !c.urgent && c.key.compare(0, 7, "motion_") == 0; }))
         error = "busy; finite motion rejected, not retained";
@@ -3733,7 +3734,7 @@ bool GimbalrotorPerchingNavigator::deferRollYawCommand(
       }
       // Claim input ownership and reject reordered arrivals before a stale
       // command could overwrite a newer pending destination.
-      input_motion_identity_.accept(motion->source, motion->sequence);
+      if(!claim) input_motion_identity_.accept(motion->source, motion->sequence);
     }
     const auto sequence = ++input_sequence_;
     if(key == "branch" || key == "point" || key == "interaction_command_wrench" || key == "interaction_external_wrench")
@@ -4403,12 +4404,15 @@ void GimbalrotorPerchingNavigator::bodyAlignmentCallback(const std_msgs::Float64
   if(!defer_diagnostics_) last_diagnostics_ = 0;
   publishRollYawDiagnostics();
 }
-void GimbalrotorPerchingNavigator::revokeMotion()
+void GimbalrotorPerchingNavigator::revokeMotion(bool retain_reference)
 {
   motion_identity_.revoke();
   input_motion_epoch_.store(motion_identity_.epoch);
-  pitch_target_ = PitchTarget();
-  pitch_pulse_ = roll_yaw::PitchPulse();
+  if(!retain_reference)
+  {
+    pitch_target_ = PitchTarget();
+    pitch_pulse_ = roll_yaw::PitchPulse();
+  }
   if(motion_epoch_pub_)
   {
     std_msgs::UInt64 epoch;
@@ -4434,14 +4438,41 @@ void GimbalrotorPerchingNavigator::motionCallback(const gimbalrotor::RollYawMoti
   {
     CallbackTimer timing{manual_wall_, roll_yaw::steadySeconds()};
     const bool stop = msg->mode == Motion::STOP;
+    const bool claim = msg->mode == Motion::CLAIM, release = msg->mode == Motion::RELEASE;
     bool accepted = false;
-    std::string error = motion_identity_.rejection(msg->epoch, msg->source, msg->sequence);
+    std::string error = motion_identity_.rejection(msg->epoch, msg->source, msg->sequence, claim);
     if(!lock_valid_ || msg->session != roll_yaw_lock_stamp_.toNSec()) error = "old contact session";
-    if(error.empty() && (!std::isfinite(msg->value) || msg->mode > Motion::PULSE)) error = "invalid motion request";
+    if(error.empty() && (!std::isfinite(msg->value) || msg->mode > Motion::RELEASE)) error = "invalid motion request";
+    if(error.empty() && !claim && motion_identity_.source.empty()) error = "claim motion ownership first";
     if(error.empty())
     {
       motion_dispatch_ = true;
-      if(stop)
+      if(claim)
+      {
+        if(pitch_velocity_.active || manual_tracking_ || retarget_pending_ || jog_.active || jog_pending_ ||
+           stop_pending_ || prepare_pending_ || planner_ ||
+           (local_pitch_.valid ? std::abs(local_pitch_.rate) > 1e-5 : final_target_.velocity.norm() > 1e-5))
+          reason_ = "busy; claim rejected until nominal motion finishes";
+        else
+        {
+          revokeMotion();
+          motion_identity_.accept(msg->source, msg->sequence);
+          // Receipt-side admission must see the newly claimed owner too.
+          std::lock_guard<std::mutex> lock(input_mutex_);
+          input_motion_identity_ = motion_identity_;
+          accepted = true;
+          reason_ = "idle motion ownership acquired; contact and admittance retained";
+        }
+      }
+      else if(release)
+      {
+        // Retire old packets now, but keep the pulse deadline and bounded brake.
+        // A new CLAIM is rejected until that nominal motion has finished.
+        revokeMotion(true);
+        accepted = true;
+        reason_ = "motion ownership released; accepted reference and admittance retained";
+      }
+      else if(stop)
       {
         requestRollYaw("stop", msg->session);
         accepted = last_command_accepted_;
@@ -4468,7 +4499,7 @@ void GimbalrotorPerchingNavigator::motionCallback(const gimbalrotor::RollYawMoti
         if(accepted) pitch_target_ = PitchTarget();
       }
       motion_dispatch_ = false;
-      if(accepted && !stop)
+      if(accepted && !stop && !claim && !release)
       {
         motion_identity_.accept(msg->source, msg->sequence);
         if(msg->mode != Motion::PULSE) pitch_pulse_ = roll_yaw::PitchPulse();
@@ -4479,13 +4510,15 @@ void GimbalrotorPerchingNavigator::motionCallback(const gimbalrotor::RollYawMoti
     std::ostringstream detail;
     detail << std::setprecision(17) << "action=motion session=" << msg->session << " epoch=" << msg->epoch
            << " source=" << msg->source << " sequence=" << msg->sequence << " mode=" << int(msg->mode)
+           << " motion_epoch=" << motion_identity_.epoch
            << " accepted=" << (accepted ? "true" : "false") << " value=" << msg->value
            << " accepted_value=" << (msg->mode <= Motion::YAW ? nominal_[msg->mode] : pitch_target_.angle)
            << " reason=" << error;
     ack.data = detail.str();
     ack_pub_.publish(ack);
   };
-  const std::string key = msg->mode <= Motion::YAW ? "motion_axis" + std::to_string(msg->mode)
+  const std::string key = msg->mode == Motion::CLAIM ? "owner_claim" : msg->mode == Motion::RELEASE ? "owner_release"
+      : msg->mode <= Motion::YAW ? "motion_axis" + std::to_string(msg->mode)
       : msg->mode == Motion::BODY_PITCH ? "motion_body" : msg->mode == Motion::VELOCITY ? "motion_velocity"
       : msg->mode == Motion::JOG ? "motion_jog" : msg->mode == Motion::PULSE ? "motion_pulse" : "motion_stop";
   if(deferRollYawCommand(key, apply, msg->mode == Motion::STOP, msg.get())) return;
@@ -5850,7 +5883,13 @@ void GimbalrotorPerchingNavigator::commandRollYawBaselinkPose(const roll_yaw::Re
   setTargetAcc(tfVector(r.cog_acceleration));
   setTargetRPY(tf::Vector3(roll, pitch, yaw));
   setTargetOmega(tfVector(r.cog_omega));
-  setTargetAngAcc(tfVector(r.cog_angular_acceleration));
+  // PoseLinearController rotates desired omega, but consumes acceleration in
+  // current CoG axes. Convert here for roll-yaw only, including its PID/input
+  // wrench estimate as well as the FC reference feedforward.
+  Eigen::Matrix3d current;
+  tf::matrixTFToEigen(estimator_->getOrientation(Frame::BASELINK, estimate_mode_), current);
+  current = (current * robot_model_->getCogDesireOrientation<Eigen::Matrix3d>().transpose()).eval();
+  setTargetAngAcc(tfVector(roll_yaw::referenceAngularAcceleration(current, r.cog.linear(), r.cog_angular_acceleration)));
 }
 void GimbalrotorPerchingNavigator::publishRollYawJointTarget()
 {
@@ -6659,6 +6698,12 @@ void GimbalrotorPerchingNavigator::publishRollYawDiagnostics()
   field("settling_mean_limit_rad_s", feedback_config_.settle_mean_rate);
   field("settling_timeout_s", feedback_config_.settle_timeout);
   field("admittance_enabled", interaction_diagnostic.admittance_.enabled);
+  field("admittance_configured", interaction_diagnostic.interaction_configured_ && interaction_diagnostic.admittance_.config.valid());
+  field("admittance_quiet", interaction->quietContact(interactionInput(f)));
+  field("tare_collecting", interaction_diagnostic.tare_requested_);
+  field("tare_request_sequence", interaction_diagnostic.tare_request_sequence_);
+  field("enable_request_sequence", interaction_diagnostic.enable_request_sequence_);
+  field("admittance_enable_requested", interaction_diagnostic.enable_requested_);
   field("admittance_status", interaction_diagnostic.admittance_reason_);
   field("contact", interaction_diagnostic.admittance_.contact);
   field("baseline_ready", interaction_diagnostic.admittance_.baseline_ready);
