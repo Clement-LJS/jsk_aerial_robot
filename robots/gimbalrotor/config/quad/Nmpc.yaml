@@ -1,0 +1,29 @@
+# Opt-in, UNVERIFIED_USER_CONFIGURATION_REQUIRED. No hardware calibration here.
+aerial_robot_control_name: aerial_robot_control/gimbalrotor_nmpc
+flight_navigation_plugin_name: aerial_robot_navigation/gimbalrotor_nmpc
+controller:
+  nmpc:
+    enabled: false
+    calibration_verified: false
+    firmware_verified: false
+    emergency_motor_stop_verified: false
+    # Firmware failure response is motor stop, NOT stabilized force landing.
+    sample_time: 0.025
+    steps: 20
+    # 20 x 0.025 = 0.5 s; tuning placeholders, not flight-qualified.
+    state_weights: [10, 10, 10, 1, 1, 1, 10, 10, 10, 1, 1, 1, 0.1, 0.1, 0.1, 0.1]
+    input_weights: [0.1, 0.1, 0.1, 0.1, 1, 1, 1, 1]
+    terminal_scale: 1.0
+    solve_budget: 0.020
+    state_timeout: 0.10
+    servo_timeout: 0.10
+    # Fill all arrays in rotor1..4 / gimbal1..4 order; values have no defaults.
+    servo_time_constants: []       # seconds, measured XC330-T181-T response
+    thrust_min: []                 # N, each >= 0
+    thrust_max: []                 # N, within MotorInfo and URDF limits
+    angle_min: []                  # rad, within calibrated URDF limits
+    angle_max: []                  # rad
+    velocity_max: []               # three world-axis absolute limits, m/s
+    angular_velocity_max: []       # three body-axis absolute limits, rad/s
+    # Calibration remains in the user's URDF, MotorInfo.yaml and Servo.yaml.
+    # CoG, full inertia, pivot/rotor transforms, drag signs are read at runtime.

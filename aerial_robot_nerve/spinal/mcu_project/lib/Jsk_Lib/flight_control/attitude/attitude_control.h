@@ -63,6 +63,18 @@
 #define CONTROL_FEEDBACK_STATE_PUB_INTERVAL 25
 #define PWM_PUB_INTERVAL 100 //100ms
 
+// Explicit experimental opt-in on STM32H7_v2 only. Leave zero until the user
+// reviews the direct-mode stop policy and performs propeller-off validation.
+#ifndef NMPC_DIRECT_THRUST
+#define NMPC_DIRECT_THRUST 0
+#endif
+#if NMPC_DIRECT_THRUST && !defined(SIMULATION) && STM32H7_V2 && !DSHOT && DYNAMIXEL && !KONDO
+#define NMPC_DIRECT_THRUST_SUPPORTED 1
+#else
+#define NMPC_DIRECT_THRUST_SUPPORTED 0
+#endif
+#define NMPC_COMMAND_TIMEOUT 100 // ms; four physical thrusts at 40 Hz
+
 #define MOTOR_TEST 0
 
 enum AXIS {
@@ -106,6 +118,14 @@ public:
   float getForce(uint8_t index) {return target_thrust_[index];}
 
   bool activated();
+  bool isDirectThrustMode() const
+  {
+#if NMPC_DIRECT_THRUST_SUPPORTED
+    return !att_control_flag_;
+#else
+    return false;
+#endif
+  }
 
 private:
 
@@ -154,7 +174,11 @@ private:
 
   void setAttitudeControlCallback(const std_srvs::SetBool::Request& req, std_srvs::SetBool::Response& res)
   {
+#if NMPC_DIRECT_THRUST_SUPPORTED
+    setDirectThrustMode(req, res);
+#else
     att_control_flag_ = req.data;
+#endif
   }
 
   BatteryStatus* bat_;
@@ -174,6 +198,13 @@ private:
   bool integrate_flag_;
   bool force_landing_flag_;
   bool att_control_flag_;
+
+#if NMPC_DIRECT_THRUST_SUPPORTED
+  bool direct_fault_ = false;
+  void setDirectThrustMode(const std_srvs::SetBool::Request& req, std_srvs::SetBool::Response& res);
+  void directStop();
+  void directIdle();
+#endif
 
 
   float target_angle_[3];

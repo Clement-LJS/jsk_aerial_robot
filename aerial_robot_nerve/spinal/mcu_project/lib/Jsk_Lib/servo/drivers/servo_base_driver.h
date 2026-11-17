@@ -21,6 +21,11 @@ public:
 
 	uint8_t id_;
   	int32_t present_position_;
+#if NMPC_DIRECT_THRUST && STM32H7_V2 && !DSHOT && DYNAMIXEL && !KONDO
+        uint32_t position_sequence_ = 0;
+        uint32_t position_timestamp_ = 0;
+        uint32_t reported_position_sequence_ = 0;
+#endif
 	int32_t goal_position_;
         int32_t calib_value_;
 	int32_t homing_offset_;

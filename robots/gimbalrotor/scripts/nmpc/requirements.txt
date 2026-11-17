@@ -1,0 +1,5 @@
+# Match Li's MPC_tilt_mt requirements, generation only (native Python 3.10).
+casadi==3.7.0
+numpy==1.26.4
+PyYAML>=6,<7
+# Also install interfaces/acados_template from the SAME acados v0.5.0 source.

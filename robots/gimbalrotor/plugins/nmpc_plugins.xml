@@ -1,0 +1,8 @@
+<library path="lib/libgimbalrotor_nmpc_controller">
+  <class name="aerial_robot_control/gimbalrotor_nmpc" type="gimbalrotor_nmpc::Controller" base_class_type="aerial_robot_control::ControlBase">
+    <description>Opt-in 17-state four-tilt servo NMPC; requires calibrated direct-thrust firmware.</description>
+  </class>
+  <class name="aerial_robot_navigation/gimbalrotor_nmpc" type="gimbalrotor_nmpc::Navigator" base_class_type="aerial_robot_navigation::BaseNavigator">
+    <description>Existing flight state machine with an NMPC pre-arm gate and fixed CoG axes.</description>
+  </class>
+</library>

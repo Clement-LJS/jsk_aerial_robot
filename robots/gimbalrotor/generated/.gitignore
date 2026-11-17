@@ -1,0 +1,3 @@
+# Deliberately empty until the user runs native generation; no binaries tracked.
+*
+!.gitignore

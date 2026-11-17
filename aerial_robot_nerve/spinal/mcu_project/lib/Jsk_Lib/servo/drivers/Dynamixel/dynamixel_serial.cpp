@@ -798,6 +798,11 @@ int8_t DynamixelSerial::readStatusPacket(uint8_t status_packet_instruction)
                       s->first_get_pos_flag_ = false;
                     }
                     s->setPresentPosition(present_position);
+#if NMPC_DIRECT_THRUST && STM32H7_V2 && !DSHOT && DYNAMIXEL && !KONDO
+                    // Only a CRC-checked, newly received position advances this.
+                    s->position_timestamp_ = HAL_GetTick();
+                    ++s->position_sequence_;
+#endif
                   }
 		}
                 return 0;

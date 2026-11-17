@@ -10,6 +10,7 @@
 #endif
 
 #include "flight_control/attitude/attitude_control.h"
+#include <limits>
 
 #ifdef SIMULATION
 #include <sensor_msgs/JointState.h>
@@ -277,6 +278,19 @@ void AttitudeController::update(void)
     }
 #endif
 
+#if NMPC_DIRECT_THRUST_SUPPORTED
+  if (isDirectThrustMode())
+    {
+      // The PID watchdog below is intentionally unchanged. Direct mode needs
+      // its own watchdog, including the interval before the first command.
+      if (start_control_flag_ &&
+          (force_landing_flag_ || (uint32_t)(HAL_GetTick() - flight_command_last_stamp_) > NMPC_COMMAND_TIMEOUT))
+        directStop();
+      pwmsControl();
+      return;
+    }
+#endif
+
   if(start_control_flag_ && att_control_flag_)
     {
       /* failsafe 1: check the timeout of the flight command receive process */
@@ -479,6 +493,26 @@ void AttitudeController::fourAxisCommandCallback( const spinal::FourAxisCommand 
 {
   if(!start_control_flag_) return; //do not receive command
 
+#if NMPC_DIRECT_THRUST_SUPPORTED
+  if (isDirectThrustMode())
+    {
+      if (direct_fault_ || force_landing_flag_ || motor_number_ != 4 ||
+          gimbal_dof_ != 0 || rotor_coef_ != 1 || cmd_msg.base_thrust_length != 4 ||
+          (uint32_t)(HAL_GetTick() - flight_command_last_stamp_) > NMPC_COMMAND_TIMEOUT)
+        { directStop(); return; }
+      for (int i = 0; i < 3; ++i)
+        if (!std::isfinite(cmd_msg.angles[i]) || cmd_msg.angles[i] != 0)
+          { directStop(); return; }
+      for (int i = 0; i < 4; ++i)
+        if (!std::isfinite(cmd_msg.base_thrust[i]) || cmd_msg.base_thrust[i] < 0)
+          { directStop(); return; }
+      if (mutex_ != NULL) osMutexWait(*mutex_, osWaitForever);
+      for (int i = 0; i < 4; ++i) base_thrust_term_[i] = cmd_msg.base_thrust[i];
+      flight_command_last_stamp_ = HAL_GetTick();
+      if (mutex_ != NULL) osMutexRelease(*mutex_);
+      return;
+    }
+#endif
 
   /* failsafe: if the pitch and roll angle is too big, start force landing */
   if(fabs(cmd_msg.angles[0]) > MAX_TILT_ANGLE || fabs(cmd_msg.angles[1]) > MAX_TILT_ANGLE )
@@ -546,6 +580,10 @@ void AttitudeController::fourAxisCommandCallback( const spinal::FourAxisCommand 
 
 void AttitudeController::pwmInfoCallback( const spinal::PwmInfo &info_msg)
 {
+#if NMPC_DIRECT_THRUST_SUPPORTED
+  // Mode-entry validates this configuration; do not replace it after entry.
+  if (isDirectThrustMode()) return;
+#endif
 #ifndef SIMULATION
   /* mutex to protect the completion of following update  */
   if(mutex_ != NULL) osMutexWait(*mutex_, osWaitForever);
@@ -713,6 +751,9 @@ void AttitudeController::maxYawGainIndex()
 
 void AttitudeController::pwmTestCallback(const spinal::PwmTest& pwm_msg)
 {
+#if NMPC_DIRECT_THRUST_SUPPORTED
+  if (isDirectThrustMode()) return;
+#endif
 #ifndef SIMULATION  
   if(pwm_msg.pwms_length && !pwm_test_flag_)
     {
@@ -769,6 +810,14 @@ void AttitudeController::pwmTestCallback(const spinal::PwmTest& pwm_msg)
 
 void AttitudeController::setStartControlFlag(bool start_control_flag)
 {
+#if NMPC_DIRECT_THRUST_SUPPORTED
+  if (isDirectThrustMode() && start_control_flag && !start_control_flag_)
+    {
+      // Never refresh this timer on repeated ARM_ON messages.
+      flight_command_last_stamp_ = HAL_GetTick();
+      directIdle();
+    }
+#endif
   start_control_flag_ = start_control_flag;
 
   if(!start_control_flag_) reset();
@@ -776,6 +825,13 @@ void AttitudeController::setStartControlFlag(bool start_control_flag)
 
 void AttitudeController::setMotorNumber(uint16_t motor_number)
 {
+#if NMPC_DIRECT_THRUST_SUPPORTED
+  if (isDirectThrustMode())
+    {
+      if (motor_number != 4) directStop();
+      return;
+    }
+#endif
   /* check the motor number which has spine system */
   if(motor_number_ > 0)
     {
@@ -813,6 +869,13 @@ void AttitudeController::setMotorNumber(uint16_t motor_number)
 
 void  AttitudeController::setUavModel(int8_t uav_model)
 {
+#if NMPC_DIRECT_THRUST_SUPPORTED
+  if (isDirectThrustMode())
+    {
+      if (uav_model != spinal::UavInfo::DRONE) directStop();
+      return;
+    }
+#endif
   /* check the uav model which has spine system */
   uav_model_ = uav_model;
 
@@ -867,8 +930,64 @@ void AttitudeController::offsetRotCallback(const spinal::DesireCoord& msg)
   offset_rot_.from_euler(msg.roll, msg.pitch, msg.yaw);
 }
 
+#if NMPC_DIRECT_THRUST_SUPPORTED
+void AttitudeController::directIdle()
+{
+  for (int i = 0; i < MAX_MOTOR_NUMBER; ++i)
+    {
+      target_thrust_[i] = 0;
+      target_pwm_[i] = IDLE_DUTY;
+      if (i < motor_number_) pwms_msg_.motor_value[i] = (uint16_t)(IDLE_DUTY * 2000);
+    }
+}
+
+void AttitudeController::directStop()
+{
+  direct_fault_ = true;
+  force_landing_flag_ = true; // existing FlightControl acknowledgement to host
+  for (int i = 0; i < MAX_MOTOR_NUMBER; ++i) base_thrust_term_[i] = 0;
+  directIdle(); // emergency motor stop, NOT a stabilized force landing
+}
+
+void AttitudeController::setDirectThrustMode(const std_srvs::SetBool::Request& req, std_srvs::SetBool::Response& res)
+{
+  res.success = false;
+  res.message = "disarm before changing attitude/direct mode";
+  if (start_control_flag_ || pwm_test_flag_) return;
+  if (!req.data)
+    {
+      res.message = "direct mode requires four physical DRONE motors, gimbal_dof=0, calibrated PWM and battery";
+      if (motor_number_ != 4 || uav_model_ != spinal::UavInfo::DRONE || rotor_devider_ != 1 ||
+          gimbal_dof_ != 0 || rotor_coef_ != 1 || motor_info_.empty() ||
+          !std::isfinite(min_duty_) || !std::isfinite(max_duty_) ||
+          min_duty_ < IDLE_DUTY || max_duty_ <= min_duty_ || max_duty_ > MAX_PWM ||
+          !std::isfinite(min_thrust_) || min_thrust_ < 0 ||
+          (pwm_conversion_mode_ != spinal::MotorInfo::SQRT_MODE && pwm_conversion_mode_ != spinal::MotorInfo::POLYNOMINAL_MODE) ||
+          !std::isfinite(bat_->getVoltage()) || bat_->getVoltage() <= 0) return;
+      for (const auto& info : motor_info_)
+        {
+          if (!std::isfinite(info.voltage) || info.voltage <= 0 ||
+              !std::isfinite(info.max_thrust) || info.max_thrust <= 0) return;
+          for (int j = 0; j < 5; ++j) if (!std::isfinite(info.polynominal[j])) return;
+          if (pwm_conversion_mode_ == spinal::MotorInfo::SQRT_MODE && info.polynominal[2] == 0) return;
+        }
+    }
+  reset();
+  direct_fault_ = false;
+  force_landing_flag_ = false;
+  att_control_flag_ = req.data;
+  // Force the first direct conversion to use measured battery voltage.
+  voltage_update_last_time_ = HAL_GetTick() - 501;
+  res.success = true;
+  res.message = req.data ? "attitude_control_v1" : "nmpc_direct_thrust_v1";
+}
+#endif
+
 bool AttitudeController::activated()
 {
+#if NMPC_DIRECT_THRUST_SUPPORTED
+  if (isDirectThrustMode() && (direct_fault_ || pwm_test_flag_ || motor_number_ != 4)) return false;
+#endif
   /* uav model check and motor property */
   if(motor_number_ > 0 && uav_model_ >= spinal::UavInfo::DRONE && max_duty_ > min_duty_) return true;
   else return false;
@@ -876,6 +995,18 @@ bool AttitudeController::activated()
 
 void AttitudeController::pwmConversion()
 {
+#if NMPC_DIRECT_THRUST_SUPPORTED
+  if (isDirectThrustMode())
+    {
+      // Also overrides any previously enabled PWM test. Faults remain latched
+      // until a disarmed mode handshake, even if commands later resume.
+      if (!start_control_flag_ || direct_fault_ || force_landing_flag_)
+        { directIdle(); return; }
+      if (motor_number_ != 4 || gimbal_dof_ != 0 || rotor_coef_ != 1 || rotor_devider_ != 1 ||
+          motor_info_.empty() || !std::isfinite(bat_->getVoltage()) || bat_->getVoltage() <= 0)
+        { directStop(); return; }
+    }
+#endif
   auto convert = [this](float target_thrust)
     {
       float scaled_thrust = v_factor_ * target_thrust / rotor_devider_;
@@ -888,6 +1019,11 @@ void AttitudeController::pwmConversion()
           {
             /* pwm = F_inv[(V_ref / V)^2 f] */
             float sqrt_tmp = motor_info_[motor_ref_index_].polynominal[1] * motor_info_[motor_ref_index_].polynominal[1] - 4 * 10 * motor_info_[motor_ref_index_].polynominal[2] * (motor_info_[motor_ref_index_].polynominal[0] - scaled_thrust); //special decimal order shift (x10)
+#if NMPC_DIRECT_THRUST_SUPPORTED
+            if (isDirectThrustMode() && (!std::isfinite(sqrt_tmp) || sqrt_tmp < 0 ||
+                motor_info_[motor_ref_index_].polynominal[2] == 0))
+              return std::numeric_limits<float>::quiet_NaN();
+#endif
             target_pwm = (-motor_info_[motor_ref_index_].polynominal[1] + sqrt_tmp * ap::inv_sqrt(sqrt_tmp)) / (2 * motor_info_[motor_ref_index_].polynominal[2]);
             break;
           }
@@ -910,7 +1046,7 @@ void AttitudeController::pwmConversion()
       return target_pwm / 100; // target_pwm is [%]
     };
 
-  if(pwm_test_flag_) /* motor pwm test */
+  if(pwm_test_flag_ && !isDirectThrustMode()) /* motor pwm test */
     {
       for(int i = 0; i < MAX_MOTOR_NUMBER; i++)
         {
@@ -966,6 +1102,32 @@ void AttitudeController::pwmConversion()
 
       voltage_update_last_time_ = HAL_GetTick();
     }
+
+#if NMPC_DIRECT_THRUST_SUPPORTED
+  if (isDirectThrustMode())
+    {
+      const float thrust_limit = motor_info_[motor_ref_index_].max_thrust / v_factor_;
+      if (!std::isfinite(v_factor_) || v_factor_ <= 0 || !std::isfinite(thrust_limit) || thrust_limit <= 0 ||
+          !std::isfinite(min_duty_) || !std::isfinite(max_duty_) || min_duty_ < IDLE_DUTY ||
+          min_duty_ >= max_duty_ || max_duty_ > MAX_PWM)
+        { directStop(); return; }
+      for (int i = 0; i < 4; ++i)
+        {
+          // No PID terms, yaw redistribution, virtual rotors or servo allocation.
+          const float thrust = base_thrust_term_[i];
+          if (!std::isfinite(thrust) || thrust < 0 || thrust > thrust_limit || (thrust > 0 && thrust < min_thrust_))
+            { directStop(); return; }
+          float pwm = thrust == 0 ? IDLE_DUTY : convert(thrust);
+          if (!std::isfinite(pwm)) { directStop(); return; }
+          if (thrust > 0 && pwm < min_duty_) pwm = min_duty_;
+          if (pwm > max_duty_) pwm = max_duty_;
+          target_thrust_[i] = thrust;
+          target_pwm_[i] = pwm;
+          pwms_msg_.motor_value[i] = (uint16_t)(pwm * 2000);
+        }
+      return;
+    }
+#endif
 
   /* pwm saturation avoidance */
   /* get the decreasing rate for the thrust to avoid the divergence because of the pwm saturation */

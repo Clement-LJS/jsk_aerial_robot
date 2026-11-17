@@ -78,8 +78,17 @@ void DirectServo::sendData(bool flag_send_asap)
   if (flag_send_asap && servo_handler_.getROSCommFlag() == true)  // This setting will ignore the setting of SERVO_PUB_INTERVAL and pub the information once the measurement is updated.
   {
 	  servo_state_msg_.stamp = nh_->now();
+#if NMPC_DIRECT_THRUST && STM32H7_V2 && !DSHOT && DYNAMIXEL && !KONDO
+      servo_state_msg_.servos_length = 0;
+#endif
       for (unsigned int i = 0; i < servo_handler_.getServoNum(); i++) {
+#if NMPC_DIRECT_THRUST && STM32H7_V2 && !DSHOT && DYNAMIXEL && !KONDO
+        ServoData& s = servo_handler_.getServo()[i];
+        if (s.position_sequence_ == s.reported_position_sequence_ ||
+            (uint32_t)(now_time - s.position_timestamp_) > 50) continue;
+#else
         const ServoData& s = servo_handler_.getServo()[i];
+#endif
         if (s.send_data_flag_ != 0) {
           spinal::ServoState servo;
           servo.index = i;
@@ -87,7 +96,12 @@ void DirectServo::sendData(bool flag_send_asap)
           servo.temp = s.present_temp_;
           servo.load = s.present_current_;
           servo.error = s.hardware_error_status_;
+#if NMPC_DIRECT_THRUST && STM32H7_V2 && !DSHOT && DYNAMIXEL && !KONDO
+          servo_state_msg_.servos[servo_state_msg_.servos_length++] = servo;
+          s.reported_position_sequence_ = s.position_sequence_;
+#else
           servo_state_msg_.servos[i] = servo;
+#endif
         }
       }
       servo_state_pub_.publish(&servo_state_msg_);
@@ -100,8 +114,17 @@ void DirectServo::sendData(bool flag_send_asap)
   if( now_time - servo_last_pub_time_ >= SERVO_PUB_INTERVAL)
     {
 	  servo_state_msg_.stamp = nh_->now();
+#if NMPC_DIRECT_THRUST && STM32H7_V2 && !DSHOT && DYNAMIXEL && !KONDO
+      servo_state_msg_.servos_length = 0;
+#endif
       for (unsigned int i = 0; i < servo_handler_.getServoNum(); i++) {
+#if NMPC_DIRECT_THRUST && STM32H7_V2 && !DSHOT && DYNAMIXEL && !KONDO
+        ServoData& s = servo_handler_.getServo()[i];
+        if (s.position_sequence_ == s.reported_position_sequence_ ||
+            (uint32_t)(now_time - s.position_timestamp_) > 50) continue;
+#else
         const ServoData& s = servo_handler_.getServo()[i];
+#endif
         if (s.send_data_flag_ != 0) {
           spinal::ServoState servo;
           servo.index = i;
@@ -109,7 +132,12 @@ void DirectServo::sendData(bool flag_send_asap)
           servo.temp = s.present_temp_;
           servo.load = s.present_current_;
           servo.error = s.hardware_error_status_;
+#if NMPC_DIRECT_THRUST && STM32H7_V2 && !DSHOT && DYNAMIXEL && !KONDO
+          servo_state_msg_.servos[servo_state_msg_.servos_length++] = servo;
+          s.reported_position_sequence_ = s.position_sequence_;
+#else
           servo_state_msg_.servos[i] = servo;
+#endif
         }
       }
       servo_state_pub_.publish(&servo_state_msg_);

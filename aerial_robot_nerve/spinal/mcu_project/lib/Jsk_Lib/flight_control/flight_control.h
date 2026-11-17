@@ -161,7 +161,7 @@ private:
   bool pwm_test_flag_;
   bool integrate_flag_;
   bool force_landing_flag_;
-  bool gimbal_set_flag_;
+  bool gimbal_set_flag_ = false;
 
   AttitudeController att_controller_;
 #ifndef SIMULATION
@@ -247,6 +247,9 @@ void uavInfoConfigCallback(const spinal::UavInfo& config_msg)
 /* get DoF of gimbal rotation */
 void gimbalDofCallback(const std_msgs::UInt8& gimbal_msg)
   {
+    // Direct physical-thrust mode is latched by the acknowledged service.
+    // A stray legacy publisher must not reactivate virtual-rotor allocation.
+    if(att_controller_.isDirectThrustMode()) return;
     if(gimbal_msg.data && !gimbal_set_flag_)
       {
         att_controller_.setGimbalDof(gimbal_msg.data);
