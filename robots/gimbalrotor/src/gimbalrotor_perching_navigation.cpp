@@ -3689,6 +3689,36 @@ struct RollYawDispatchScope
       : previous(roll_yaw_dispatch_owner) { roll_yaw_dispatch_owner = owner; }
   ~RollYawDispatchScope() { roll_yaw_dispatch_owner = previous; }
 };
+
+bool sameClaimIdentity(const gimbalrotor::RollYawMotion& a, const gimbalrotor::RollYawMotion& b)
+{
+  return a.session == b.session && a.epoch == b.epoch && a.source == b.source && a.sequence == b.sequence;
+}
+
+bool sameClaim(const gimbalrotor::RollYawMotion& a, const gimbalrotor::RollYawMotion& b)
+{
+  return sameClaimIdentity(a, b) && a.mode == b.mode && a.value == b.value && a.frame == b.frame &&
+      a.rate_limit == b.rate_limit && a.duration == b.duration;
+}
+
+std::string motionReplyIdentity(const gimbalrotor::RollYawMotion& motion)
+{
+  return "action=motion session=" + std::to_string(motion.session) + " epoch=" + std::to_string(motion.epoch) +
+      " source=" + motion.source + " sequence=" + std::to_string(motion.sequence) + " mode=" + std::to_string(motion.mode);
+}
+}
+
+bool GimbalrotorPerchingNavigator::replayMotionClaim(const gimbalrotor::RollYawMotion& motion, std_msgs::String& ack) const
+{
+  // The request carries the pre-grant epoch. This exception applies only to
+  // the exact current grant; revocation immediately makes the record stale.
+  if(!accepted_motion_claim_ || accepted_claim_epoch_ != input_motion_epoch_.load() ||
+     motion.session != input_session_.load() || input_motion_identity_.source != motion.source ||
+     !sameClaimIdentity(motion, *accepted_motion_claim_)) return false;
+  ack = accepted_claim_ack_;
+  if(!sameClaim(motion, *accepted_motion_claim_))
+    ack.data = motionReplyIdentity(motion) + " accepted=false reason=claim identity reused with changed payload";
+  return true;
 }
 
 bool GimbalrotorPerchingNavigator::deferRollYawCommand(
@@ -3710,9 +3740,23 @@ bool GimbalrotorPerchingNavigator::deferRollYawCommand(
         input_motion_identity_.epoch = epoch;
       }
       const bool claim = motion->mode == gimbalrotor::RollYawMotion::CLAIM;
+      if(claim && replayMotionClaim(*motion, ack))
+      {
+        ack_pub_.publish(ack);
+        return true;
+      }
       auto error = input_motion_identity_.rejection(motion->epoch, motion->source, motion->sequence, claim);
+      if(!claim && input_motion_identity_.source.empty()) error = "claim motion ownership first";
       if(!motion->session || motion->session != input_session_.load()) error = "old contact session";
       if(motion->mode > gimbalrotor::RollYawMotion::RELEASE || !std::isfinite(motion->value)) error = "invalid motion request";
+      if(claim && (!std::isfinite(motion->rate_limit) || !std::isfinite(motion->duration)))
+        error = "invalid claim payload";
+      if(claim && pending_motion_claim_ && error.empty())
+      {
+        if(sameClaim(*motion, *pending_motion_claim_)) return true; // One queued/in-flight acquisition.
+        error = sameClaimIdentity(*motion, *pending_motion_claim_)
+            ? "claim identity reused with changed payload" : "busy; ownership acquisition pending";
+      }
       if(motion->mode == gimbalrotor::RollYawMotion::BODY_PITCH &&
          (!motion->frame || motion->frame > motion->sequence || std::abs(motion->value) >= M_PI ||
           !std::isfinite(motion->rate_limit) || motion->rate_limit <= 0))
@@ -3751,6 +3795,7 @@ bool GimbalrotorPerchingNavigator::deferRollYawCommand(
       if(pending_commands_.size() >= 64)
       {
         const auto& displaced = pending_commands_.back();
+        if(displaced.key == "owner_claim") pending_motion_claim_.reset();
         std_msgs::String rejected;
         rejected.data = "action=" + displaced.key + " sequence=" + std::to_string(displaced.sequence) +
             " accepted=false phase=rejected reason=queue_capacity_reserved_for_urgent_request";
@@ -3759,10 +3804,13 @@ bool GimbalrotorPerchingNavigator::deferRollYawCommand(
       }
     }
     if(pending_commands_.size() >= 64)
-      ack.data = "action=" + action + " session=" + std::to_string(input_session_.load()) + " sequence=" + std::to_string(sequence) +
+      ack.data = (motion ? motionReplyIdentity(*motion) : "action=" + action +
+          " session=" + std::to_string(input_session_.load()) + " sequence=" + std::to_string(sequence)) +
           " accepted=false phase=rejected reason=command_queue_full";
     else
     {
+      if(motion && motion->mode == gimbalrotor::RollYawMotion::CLAIM)
+        pending_motion_claim_.reset(new gimbalrotor::RollYawMotion(*motion));
       PendingCommand command{sequence, key, input_session_.load(), urgent, std::move(apply)};
       if(urgent)
         pending_commands_.insert(std::find_if(pending_commands_.begin(), pending_commands_.end(),
@@ -3801,6 +3849,11 @@ void GimbalrotorPerchingNavigator::drainRollYawCommands()
   }
   if(!urgent_command && command.session != input_session_.load())
   {
+    if(command.key == "owner_claim")
+    {
+      std::lock_guard<std::mutex> lock(input_mutex_);
+      pending_motion_claim_.reset();
+    }
     std_msgs::String ack;
     ack.data = "action=" + command.key + " sequence=" + std::to_string(command.sequence) +
         " accepted=false phase=rejected reason=old_contact_session";
@@ -3820,7 +3873,10 @@ void GimbalrotorPerchingNavigator::cancelQueuedRollYawCommands(const std::string
     for(auto it = pending_commands_.begin(); it != pending_commands_.end();)
     {
       if(!it->urgent && (all || it->sequence < dispatch_sequence_))
-      { cancelled.push_back(std::move(*it)); it = pending_commands_.erase(it); }
+      {
+        if(it->key == "owner_claim") pending_motion_claim_.reset();
+        cancelled.push_back(std::move(*it)); it = pending_commands_.erase(it);
+      }
       else ++it;
     }
     if(all)
@@ -4201,7 +4257,15 @@ void GimbalrotorPerchingNavigator::stopMotion(const std::string& why)
   // Retire future destinations immediately, including untouched axes. A new
   // command during braking must not revive the cancelled nominal vector.
   nominal_ = final_target_.eta;
-  local_pitch_ = LocalPitch();
+  if(local_pitch_.valid && !planner_ && !manual_tracking_)
+  {
+    // Freeze the applied offset, transferring its velocity to the nominal
+    // brake. The total reference and its derivatives remain continuous.
+    local_pitch_.rate = final_target_.body_omega.y();
+    if(auto interaction = interaction_.lock()) interaction->holdReference(local_pitch_.offset);
+    if(!pitch_velocity_.active && final_target_.velocity.norm() > 1e-12)
+      pitch_velocity_.active = true;
+  }
   if(pitch_velocity_.active)
   {
     pitch_velocity_.requested = 0;
@@ -4250,10 +4314,14 @@ void GimbalrotorPerchingNavigator::completeStop(const std::string& why)
 {
   if(pitch_velocity_.active && !pitch_velocity_.pending)
     pitch_velocity_ = PitchVelocity();
-  // Preserve the actual applied positions and contact identity, never recapture
-  // from stale observations. All producers and compliance end before pending clears.
+  // Preserve the applied reference and completed calibration, never recapture
+  // measured pose or promote a cancelled future destination into the hold.
   if(!retarget_pending_)
     finishPitchJog("cancelled", why);
+  const auto interaction = interaction_.lock();
+  double offset = local_pitch_.valid ? local_pitch_.offset : 0;
+  if(planner_)
+    offset = (planner_->plan.goal.pitch_end < planner_->plan.goal.pitch_start ? -1 : 1) * planner_->applied_relief;
   invalidatePlanner();
   manual_tracking_ = false;
   manual_time_ = ros::Time::now().toSec();
@@ -4261,9 +4329,16 @@ void GimbalrotorPerchingNavigator::completeStop(const std::string& why)
     nominal_ = final_target_.eta;
   body_alignment_valid_ = false;
   roll_yaw::scaleReference(final_target_, 0, 0);
-  local_pitch_ = LocalPitch();
-  if(auto interaction = interaction_.lock())
+  if(interaction)
+  {
     interaction->stopped();
+    offset = interaction->holdReference(offset);
+  }
+  local_pitch_.valid = true;
+  local_pitch_.rate = 0;
+  local_pitch_.offset = offset;
+  local_pitch_.start = final_target_.body.linear() *
+      roll_yaw::expSO3(-Eigen::Vector3d::UnitY() * (local_pitch_.angle + offset));
   stop_pending_ = false;
   reason_ = why + "; stop complete, holding contact";
   if(pitch_velocity_.pending)
@@ -4275,6 +4350,7 @@ void GimbalrotorPerchingNavigator::completeStop(const std::string& why)
   }
   if(retarget_pending_)
   {
+    resetCompliance(); // Mechanism-mode admission has the same reset as a direct replacement.
     retarget_pending_ = false;
     manual_tracking_ = true;
     manual_time_ = ros::Time::now().toSec();
@@ -4439,29 +4515,49 @@ void GimbalrotorPerchingNavigator::motionCallback(const gimbalrotor::RollYawMoti
     CallbackTimer timing{manual_wall_, roll_yaw::steadySeconds()};
     const bool stop = msg->mode == Motion::STOP;
     const bool claim = msg->mode == Motion::CLAIM, release = msg->mode == Motion::RELEASE;
+    if(claim)
+    {
+      std::lock_guard<std::mutex> lock(input_mutex_);
+      std_msgs::String replay;
+      if(replayMotionClaim(*msg, replay))
+      {
+        ack_pub_.publish(replay);
+        return;
+      }
+    }
     bool accepted = false;
     std::string error = motion_identity_.rejection(msg->epoch, msg->source, msg->sequence, claim);
     if(!lock_valid_ || msg->session != roll_yaw_lock_stamp_.toNSec()) error = "old contact session";
     if(error.empty() && (!std::isfinite(msg->value) || msg->mode > Motion::RELEASE)) error = "invalid motion request";
+    if(error.empty() && claim && (!std::isfinite(msg->rate_limit) || !std::isfinite(msg->duration)))
+      error = "invalid claim payload";
     if(error.empty() && !claim && motion_identity_.source.empty()) error = "claim motion ownership first";
     if(error.empty())
     {
       motion_dispatch_ = true;
       if(claim)
       {
-        if(pitch_velocity_.active || manual_tracking_ || retarget_pending_ || jog_.active || jog_pending_ ||
+        const auto f = feedback();
+        if(faulted_ || !f.hover || feedback_waiting_ || !model_check_.available || !dynamics_snapshot_valid_ ||
+           roll_yaw_pitch_rezero_state_ != RollYawPitchRezeroState::IDLE || !contactRejection(f).empty())
+          reason_ = "claim rejected: require valid held contact/model feedback";
+        else if(pitch_velocity_.active || manual_tracking_ || retarget_pending_ || jog_.active || jog_pending_ ||
            stop_pending_ || prepare_pending_ || planner_ ||
            (local_pitch_.valid ? std::abs(local_pitch_.rate) > 1e-5 : final_target_.velocity.norm() > 1e-5))
           reason_ = "busy; claim rejected until nominal motion finishes";
         else
         {
+          std::lock_guard<std::mutex> lock(input_mutex_);
           revokeMotion();
           motion_identity_.accept(msg->source, msg->sequence);
           // Receipt-side admission must see the newly claimed owner too.
-          std::lock_guard<std::mutex> lock(input_mutex_);
           input_motion_identity_ = motion_identity_;
           accepted = true;
           reason_ = "idle motion ownership acquired; contact and admittance retained";
+          accepted_motion_claim_ = msg;
+          accepted_claim_epoch_ = motion_identity_.epoch;
+          accepted_claim_ack_.data = motionReplyIdentity(*msg) + " motion_epoch=" + std::to_string(accepted_claim_epoch_) +
+              " accepted=true reason=" + reason_;
         }
       }
       else if(release)
@@ -4515,6 +4611,12 @@ void GimbalrotorPerchingNavigator::motionCallback(const gimbalrotor::RollYawMoti
            << " accepted_value=" << (msg->mode <= Motion::YAW ? nominal_[msg->mode] : pitch_target_.angle)
            << " reason=" << error;
     ack.data = detail.str();
+    if(claim)
+    {
+      std::lock_guard<std::mutex> lock(input_mutex_);
+      if(pending_motion_claim_ && sameClaimIdentity(*msg, *pending_motion_claim_)) pending_motion_claim_.reset();
+      if(accepted) ack = accepted_claim_ack_;
+    }
     ack_pub_.publish(ack);
   };
   const std::string key = msg->mode == Motion::CLAIM ? "owner_claim" : msg->mode == Motion::RELEASE ? "owner_release"

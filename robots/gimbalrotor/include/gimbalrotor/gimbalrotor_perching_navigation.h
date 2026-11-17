@@ -489,6 +489,11 @@ private:
   void revokeMotion(bool retain_reference = false);
   roll_yaw::MotionIdentity motion_identity_;
   roll_yaw::MotionIdentity input_motion_identity_; // input_mutex_; receipt ordering before coalescing
+  // input_mutex_; only the pending acquisition and current grant are retained.
+  gimbalrotor::RollYawMotionConstPtr pending_motion_claim_, accepted_motion_claim_;
+  std::uint64_t accepted_claim_epoch_ = 0;
+  std_msgs::String accepted_claim_ack_;
+  bool replayMotionClaim(const gimbalrotor::RollYawMotion&, std_msgs::String&) const;
   std::atomic<std::uint64_t> input_motion_epoch_{1};
   bool motion_dispatch_ = false;
   ros::Publisher motion_epoch_pub_;

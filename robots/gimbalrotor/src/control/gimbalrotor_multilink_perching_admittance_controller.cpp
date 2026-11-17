@@ -308,8 +308,14 @@ void RollYawInteractionRuntime::captureModel(const Input& c)
 
 void RollYawInteractionRuntime::stopped()
 {
-  resetCompliance();
-  admittance_reason_ = "disabled: stopped; hold unloaded and tare again";
+  if(!admittance_.baseline_ready)
+  {
+    resetCompliance(); // An unfinished or invalidated tare cannot survive a stop.
+    return;
+  }
+  admittance_reason_ = admittance_.enabled
+      ? "enabled: nominal stopped; completed tare retained, freshness still required"
+      : "disabled/ready: nominal stopped; completed tare retained";
 }
 
 bool RollYawInteractionRuntime::motionAllowed(const Input& c) const

@@ -119,18 +119,17 @@ class AdmittanceStartup:
     duplicate tare requests that could later erase an accepted calibration.
     """
     def __init__(self):
-        self.started = self.generation = self.producer = None
+        self.started = self.generation = None
         self.pending = None
         self.retry_at = 0.
         self.baseline_seen = False
 
     def ready(self, now, values, tare, enable):
         generation = int(values['tare_generation'])
-        producer = int(values['producer_generation'])
         if self.started is None:
-            self.started, self.producer = now, producer
-        if producer != self.producer:
-            raise ValueError('Contact model changed during admittance startup')
+            self.started = now
+        # Planner retirement is not a physical model change. The navigator
+        # validates contact/model identity; this task pins session and tare.
         if values.get('admittance_configured') != '1':
             raise ValueError('Admittance configuration unavailable: ' + values.get('admittance_status', ''))
         if self.pending:
@@ -269,7 +268,9 @@ def main():
                     continue
                 if interrupted.is_set() or rospy.is_shutdown():
                     break
-                motion.claim(session)
+                if not motion.claim(session, timeout=min(2., timeout - (time.monotonic() - started)),
+                                    interrupted=interrupted):
+                    break
                 connection_deadline = None
                 continue  # Recheck cancellation and feedback after the acknowledgement wait.
             if sent_at is not None:
@@ -289,8 +290,7 @@ def main():
                      float(values.get('effective_body_tracking_error_rad', 'inf')) < float(values.get('effective_body_tracking_limit_rad', '.04')))
             if use_admittance and task.sequence and (values.get('admittance_enabled') != '1' or values.get('baseline_ready') != '1'):
                 raise ValueError('Admittance calibration or enable was lost; sequence stopped')
-            if use_admittance and startup.generation is not None and (
-                    int(values['tare_generation']) != startup.generation or int(values['producer_generation']) != startup.producer):
+            if use_admittance and startup.generation is not None and int(values['tare_generation']) != startup.generation:
                 raise ValueError('Admittance baseline or contact model changed; sequence stopped')
             if use_admittance and not task.sequence:
                 if not startup.ready(now, values, tare, enable):

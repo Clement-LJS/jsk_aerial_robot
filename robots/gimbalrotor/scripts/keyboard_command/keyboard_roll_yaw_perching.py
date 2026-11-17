@@ -418,7 +418,7 @@ class Keyboard:
     def key(self, key):
         if key in ('q', '\x03', ''):
             self.quit = True
-            self.manual()
+            self.cleanup()
         elif key in ('h', 'g'):
             self.enable_pending = None
             self.publish('halt' if key == 'h' else 'land', Empty())
@@ -489,6 +489,10 @@ class Keyboard:
             else:
                 raise RuntimeError('Command unavailable in current state; press s for reason.')
 
+    def cleanup(self):
+        if not self.motion.cleanup():
+            rospy.logwarn('Keyboard ownership cleanup unconfirmed; inspect navigator hold status.')
+
 
 def main():
     if not sys.stdin.isatty():
@@ -517,9 +521,9 @@ def main():
     finally:
         termios.tcsetattr(sys.stdin, termios.TCSADRAIN, settings)
         try:
-            ui.manual()
-        except (RuntimeError, rospy.ROSException):
-            pass
+            ui.cleanup()
+        except (RuntimeError, rospy.ROSException) as exc:
+            rospy.logwarn('Keyboard ownership cleanup unconfirmed: %s', exc)
 
 
 if __name__ == '__main__':
