@@ -41,8 +41,8 @@ def simulated_motion(clock, publisher, consume):
             epoch = message.epoch + (message.mode in (keyboard.RollYawMotion.CLAIM, keyboard.RollYawMotion.RELEASE,
                                                       keyboard.RollYawMotion.STOP))
             motion.ack_callback(keyboard.String(
-                'action=motion session={} epoch={} source={} sequence={} accepted=true motion_epoch={}'.format(
-                    message.session, message.epoch, message.source, message.sequence, epoch)))
+                'action=motion session={} epoch={} source={} sequence={} mode={} accepted=true motion_epoch={} accepted_value={}'.format(
+                    message.session, message.epoch, message.source, message.sequence, message.mode, epoch, message.value)))
             motion.epoch_callback(keyboard.UInt64(epoch))
             if message.mode == keyboard.RollYawMotion.STOP:
                 motion.epoch_callback(keyboard.UInt64(message.epoch + 1))
@@ -136,60 +136,97 @@ class VelocityExperiment(unittest.TestCase):
         self.step(task, 6, .1, 0)
         self.assertFalse(task.complete)
 
-    def run_pulses(self, interrupt_step=0, fault=False, blocked=False, admittance=False, yielding=False,
-                   refuse_tare=False, refuse_enable=False, baseline=False, vibrating=False):
+    def run_angles(self, interrupt_step=0, fault=False, blocked=False, admittance=False, yielding=False,
+                   refuse_tare=False, refuse_enable=False, baseline=False, vibrating=False, step=.3,
+                   interrupt_phase='movement', stale_status=False, stale_ack=False, stale_pose=False,
+                   not_ready_until=0., new_owner=False):
         from contextlib import ExitStack
-        clock, messages = [0.], []
-        plant = dict(angle=0., nominal=0., until=0., rate=0., sequence=0, pulses=0, sent_at=0., tare_at=None,
-                     enabled=False, tare_requests=0, enable_requests=0, released=False)
+        clock, messages, clients = [0.], [], []
+        plant = dict(angle=0., nominal=0., target=0., rate=0., sequence=0, steps=0, sent_at=0., tare_at=None,
+                     enabled=False, tare_requests=0, enable_requests=0, released=False, completed_at=[],
+                     first_sent=None, completed_angles=[])
         publisher, tare, enable = MagicMock(), MagicMock(), MagicMock()
         for pub in (publisher, tare, enable):
             pub.get_num_connections.return_value = 1
-        params = {'~angular_velocity_deg_s': .5, '~interval_sec': 8., '~num_steps': 8,
+        params = {'~step_deg': step, '~interval_sec': 8., '~num_steps': 3, '~timeout_sec': 65.,
                   '~use_admittance': admittance}
 
         def consume(message):
             if message.mode not in (keyboard.RollYawMotion.CLAIM, keyboard.RollYawMotion.RELEASE):
                 messages.append((clock[0], message))
-            if message.mode == keyboard.RollYawMotion.PULSE:
-                plant.update(until=clock[0] + message.duration, rate=message.value,
-                             sequence=message.sequence, sent_at=clock[0], pulses=plant['pulses'] + 1)
+            if message.mode == keyboard.RollYawMotion.BODY_PITCH:
+                if plant['first_sent'] is None:
+                    plant['first_sent'] = clock[0]
+                plant.update(target=math.degrees(message.value), rate=math.degrees(message.rate_limit),
+                             sequence=message.sequence, sent_at=clock[0], steps=plant['steps'] + 1)
+                if interrupt_phase == 'acknowledgement':
+                    signal.raise_signal(signal.SIGTERM)
             elif message.mode == keyboard.RollYawMotion.STOP:
-                plant['until'] = clock[0]
+                plant['target'] = plant['nominal']
             elif message.mode == keyboard.RollYawMotion.RELEASE:
                 plant['released'] = True
 
         def advance(dt):
+            before = plant['nominal']
             if not blocked:
-                plant['nominal'] += math.degrees(plant['rate']) * max(0., min(dt, plant['until'] - clock[0]))
-                plant['angle'] = plant['nominal'] - (1.5 * min(.5, plant['nominal']) if yielding else 0)
+                difference = plant['target'] - before
+                plant['nominal'] += max(-plant['rate'] * dt, min(plant['rate'] * dt, difference))
+                # Nominal +0.9 can complete while physical motion remains behind its start.
+                correction = (2.2 * min(1., (clock[0] - plant['first_sent']) / 2.)
+                              if yielding and plant['enabled'] and plant['first_sent'] is not None else 0)
+                plant['angle'] = plant['nominal'] - correction
             clock[0] += dt
-            if interrupt_step and plant['pulses'] == interrupt_step and clock[0] - plant['sent_at'] > .5:
-                signal.raise_signal(signal.SIGINT)
+            if before != plant['target'] and plant['nominal'] == plant['target']:
+                plant['completed_at'].append(clock[0])
+                plant['completed_angles'].append(plant['angle'])
+            if interrupt_step and plant['steps'] == interrupt_step:
+                moving = plant['nominal'] != plant['target']
+                if ((interrupt_phase == 'movement' and moving and clock[0] - plant['sent_at'] > .3) or
+                        (interrupt_phase == 'hold' and not moving)):
+                    signal.raise_signal(signal.SIGINT)
+            if interrupt_phase == 'startup' and clock[0] > .2:
+                signal.raise_signal(signal.SIGTERM)
 
         def snapshot():
-            active = clock[0] < plant['until']
+            client = clients[0]
+            active = plant['nominal'] != plant['target']
             collected = plant['tare_at'] is not None and clock[0] - plant['tare_at'] >= 1
             values = {'session_id': '123', 'feedback_waiting': '0', 'stopping': '0',
+                      'motion_source': client.source, 'motion_epoch': str(client.current_epoch),
+                      'motion_sequence': str(plant['sequence']), 'body_pitch_target_valid': '1',
+                      'body_pitch_target_frame': str(client.frame),
+                      'body_pitch_target_rad': str(math.radians(plant['target'])),
+                      'body_pitch_target_progress_rad': str(math.radians(plant['nominal'])),
+                      'body_pitch_target_reference_complete': str(int(not active)),
                       'accepted_destination_pending': '1' if clock[0] < .5 else '0',
                       'body_pitch_velocity_active': str(int(active)),
-                      'current_body_rate_rad_s': str(.08 if vibrating else abs(plant['rate']) if active else 0),
+                      'current_body_rate_rad_s': str(.08 if vibrating else math.radians(plant['rate']) if active else 0),
                       'current_joint_rate_rad_s': '.06' if vibrating else '0', 'effective_body_tracking_error_rad': '0',
-                      'pulse_sequence': str(plant['sequence']), 'pulse_complete': str(int(not active)),
                       'admittance_enabled': str(int(plant['enabled'])), 'baseline_ready': str(int(baseline or collected)),
                       'tare_generation': '0' if plant['tare_at'] is None else '1',
                       'producer_generation': '1', 'admittance_configured': '1',
                       'admittance_quiet': str(int(not vibrating and clock[0] >= .7 and not active)),
-                      'admittance_hold_eligible': str(int(clock[0] >= .5 and not active)),
+                      'admittance_hold_eligible': str(int(clock[0] >= .5 and not active and
+                                                        (not plant['steps'] or clock[0] >= not_ready_until))),
                       'tare_collecting': str(int(plant['tare_at'] is not None and not collected)),
                       'tare_request_sequence': str(plant['tare_requests']),
                       'enable_request_sequence': str(plant['enable_requests']),
                       'admittance_enable_requested': '1',
-                      'offset_rad': '-.02' if yielding and plant['enabled'] else '0',
+                      'offset_rad': str(math.radians(plant['angle'] - plant['nominal'])),
+                      'effective_offset_rad': str(math.radians(plant['angle'] - plant['nominal'])),
                       'offset_rate_rad_s': '-.01' if yielding and plant['enabled'] else '0',
-                      'offset_acceleration_rad_s2': '0',
-                      'task_torque_valid': '1', 'local_pitch_nominal_rad': str(math.radians(plant['nominal']))}
-            pose = (clock[0], 100 + clock[0], self.pitch(plant['angle']))
+                      'offset_acceleration_rad_s2': '0', 'task_torque_valid': '1',
+                      'hold_reason': '4' if blocked else '0',
+                      'body_pitch_velocity_limit': 'tracking feed scaled' if blocked else 'coordinated'}
+            if plant['steps']:
+                if stale_status:
+                    values['body_pitch_target_frame'] = '0'
+                if stale_ack:
+                    client.ack[1]['mode'] = str(keyboard.RollYawMotion.PULSE)
+                if new_owner:
+                    client.current_epoch += 1
+            pose = (0., 100., self.pitch(0)) if stale_pose and plant['steps'] else (
+                clock[0], 100 + clock[0], self.pitch(plant['angle']))
             state = 'FAULT_HOLD: test' if fault and plant['sequence'] else 'CONTACT_LOCKED: test'
             return (clock[0], 100 + clock[0], state, values), {'reference': pose, 'measured': pose}
 
@@ -205,17 +242,23 @@ class VelocityExperiment(unittest.TestCase):
             if not refuse_enable or plant['enable_requests'] > 1:
                 plant['enabled'] = msg.data
         enable.publish.side_effect = arm
+        factory = simulated_motion(clock, publisher, consume)
+        def create(prefix):
+            client = factory(prefix)
+            clients.append(client)
+            return client
         old_handler = signal.getsignal(signal.SIGINT)
         with ExitStack() as stack:
             patches = [
                 patch.object(experiment.rospy, 'init_node'),
                 patch.object(experiment.rospy, 'get_param', side_effect=lambda key, default=None: params.get(key, default)),
+                patch.object(experiment.rospy, 'has_param', side_effect=lambda key: key in params),
                 patch.object(experiment.rospy, 'get_time', side_effect=lambda: 100 + clock[0]),
                 patch.object(experiment.rospy, 'is_shutdown', return_value=False),
                 patch.object(experiment.rospy, 'Publisher', side_effect=lambda topic, *args, **kw:
                              tare if topic.endswith('/admittance_tare') else enable if topic.endswith('/admittance_enable') else publisher),
                 patch.object(experiment.rospy, 'Subscriber', return_value=MagicMock()),
-                patch.object(experiment, 'MotionClient', side_effect=simulated_motion(clock, publisher, consume)),
+                patch.object(experiment, 'MotionClient', wraps=keyboard.MotionClient, side_effect=create),
                 patch.object(experiment.rospy, 'loginfo'),
                 patch.object(experiment.time, 'monotonic', side_effect=lambda: clock[0]),
                 patch.object(experiment.time, 'sleep', side_effect=advance)]
@@ -223,82 +266,128 @@ class VelocityExperiment(unittest.TestCase):
                 stack.enter_context(context)
             feedback = stack.enter_context(patch.object(experiment, 'Feedback'))
             feedback.return_value.snapshot.side_effect = snapshot
-            if fault or blocked:
-                with self.assertRaisesRegex(ValueError, 'active contact' if fault else 'no measured forward progress'):
+            error = ('active contact' if fault else 'blocked/timed out.*remaining.*tracking feed scaled' if blocked else
+                     'identity/frame/target' if stale_status else 'acknowledgement missing' if stale_ack else
+                     'pose feedback lost' if stale_pose else 'cancelled' if new_owner else None)
+            if error:
+                with self.assertRaisesRegex(ValueError, error):
                     experiment.main()
             else:
                 experiment.main()
         self.assertEqual(signal.getsignal(signal.SIGINT), old_handler)
-        if not fault and not blocked:
+        if not error and not interrupt_step and interrupt_phase not in ('startup', 'acknowledgement'):
             self.assertTrue(plant['released'])
         return clock[0], messages, plant
 
-    def test_pulses_feed_one_second_and_hold_eight_without_refresh(self):
-        elapsed, messages, plant = self.run_pulses()
-        self.assertEqual(len(messages), 8)
-        for i, (stamp, msg) in enumerate(messages):
-            self.assertEqual(msg.mode, keyboard.RollYawMotion.PULSE)
-            self.assertEqual(msg.duration, 1.)
-            self.assertAlmostEqual(msg.value, math.radians(.5))
-            if i:
-                self.assertGreaterEqual(stamp - messages[i-1][0], 9.)
-        self.assertAlmostEqual(plant['angle'], 4., places=5)
-        self.assertGreaterEqual(elapsed - messages[-1][0], 9.)
+    def test_absolute_angles_share_frame_and_hold_after_each_completion(self):
+        for sign in (1, -1):
+            elapsed, messages, plant = self.run_angles(step=sign * .3)
+            self.assertEqual(len(messages), 3)
+            for i, (stamp, msg) in enumerate(messages):
+                self.assertEqual(msg.mode, keyboard.RollYawMotion.BODY_PITCH)
+                self.assertEqual(msg.duration, 0.)
+                self.assertEqual(msg.frame, messages[0][1].frame)
+                self.assertAlmostEqual(msg.value, math.radians(sign * .3 * (i + 1)))
+                self.assertAlmostEqual(msg.rate_limit, math.radians(.5))
+                if i:
+                    self.assertGreaterEqual(stamp - plant['completed_at'][i-1], 8.)
+            self.assertAlmostEqual(plant['angle'], sign * .9, places=5)
+            self.assertGreaterEqual(elapsed - plant['completed_at'][-1], 8.)
 
-    def test_ctrl_c_during_fifth_pulse_leaves_it_to_expire_without_sixth(self):
-        elapsed, messages, plant = self.run_pulses(interrupt_step=5)
-        self.assertEqual(len(messages), 5)
-        self.assertTrue(all(message.mode == keyboard.RollYawMotion.PULSE for _, message in messages))
-        self.assertLess(elapsed, plant['until'])
-        self.assertLess(plant['until'] - elapsed, .5)
+    def test_interruption_stops_destination_and_sends_no_successor(self):
+        for phase in ('movement', 'hold', 'acknowledgement'):
+            _, messages, _ = self.run_angles(interrupt_step=1, interrupt_phase=phase)
+            self.assertEqual([msg.mode for _, msg in messages], [keyboard.RollYawMotion.BODY_PITCH, keyboard.RollYawMotion.STOP])
+        _, messages, _ = self.run_angles(interrupt_phase='startup')
+        self.assertFalse(any(msg.mode == keyboard.RollYawMotion.BODY_PITCH for _, msg in messages))
 
-    def test_runtime_fault_sends_stop_and_no_successor(self):
-        _, messages, _ = self.run_pulses(fault=True)
-        self.assertEqual([msg.mode for _, msg in messages], [keyboard.RollYawMotion.PULSE, keyboard.RollYawMotion.STOP])
+    def test_fault_blockage_and_stale_feedback_stop_without_successor(self):
+        for problem in ('fault', 'blocked', 'stale_status', 'stale_ack', 'stale_pose'):
+            _, messages, _ = self.run_angles(**{problem: True})
+            self.assertEqual([msg.mode for _, msg in messages], [keyboard.RollYawMotion.BODY_PITCH, keyboard.RollYawMotion.STOP])
 
-    def test_blocked_pulse_does_not_claim_progress_or_send_another(self):
-        _, messages, _ = self.run_pulses(blocked=True)
-        self.assertEqual([msg.mode for _, msg in messages], [keyboard.RollYawMotion.PULSE, keyboard.RollYawMotion.STOP])
+    def test_epoch_change_does_not_stop_new_owner(self):
+        _, messages, _ = self.run_angles(new_owner=True)
+        self.assertEqual([msg.mode for _, msg in messages], [keyboard.RollYawMotion.BODY_PITCH])
+
+    def test_hold_waits_for_effective_tracking_readiness(self):
+        _, messages, _ = self.run_angles(not_ready_until=15.)
+        self.assertGreaterEqual(messages[1][0], 15.3)
 
     def test_admittance_waits_for_new_tare_generation_before_enable(self):
-        _, messages, plant = self.run_pulses(admittance=True)
+        _, messages, plant = self.run_angles(admittance=True)
         self.assertTrue(plant['enabled'])
         self.assertGreaterEqual(messages[0][0] - plant['tare_at'], 1.)
 
-    def test_admittance_retreat_is_not_misreported_as_a_failed_pulse(self):
-        elapsed, messages, plant = self.run_pulses(admittance=True, yielding=True, vibrating=True)
-        self.assertEqual(len(messages), 8)
-        self.assertAlmostEqual(plant['angle'], 3.25, places=5)
+    def test_admittance_retreat_and_vibration_allow_nominal_completion(self):
+        elapsed, messages, plant = self.run_angles(admittance=True, yielding=True, vibrating=True)
+        self.assertEqual(len(messages), 3)
+        self.assertLess(plant['completed_angles'][0], 0.)
+        self.assertAlmostEqual(plant['nominal'], .9, places=5)
+        self.assertAlmostEqual(plant['angle'], -1.3, places=5)
         self.assertEqual(plant['tare_requests'], 1)
         self.assertEqual(plant['enable_requests'], 1)
-        for previous, current in zip(messages, messages[1:]):
-            self.assertGreaterEqual(current[0] - previous[0], 9.)
-        self.assertGreaterEqual(elapsed - messages[-1][0], 9.)
+        for i in range(1, len(messages)):
+            self.assertGreaterEqual(messages[i][0] - plant['completed_at'][i-1], 8.)
+        self.assertGreaterEqual(elapsed - plant['completed_at'][-1], 8.)
 
     def test_admittance_retries_processed_tare_and_enable_refusals(self):
-        _, messages, plant = self.run_pulses(admittance=True, refuse_tare=True, refuse_enable=True)
-        self.assertEqual(len(messages), 8)
+        _, messages, plant = self.run_angles(admittance=True, refuse_tare=True, refuse_enable=True)
+        self.assertEqual(len(messages), 3)
         self.assertEqual(plant['tare_requests'], 2)
         self.assertEqual(plant['enable_requests'], 2)
 
     def test_admittance_reuses_valid_disarmed_baseline_like_nojoint(self):
-        _, _, plant = self.run_pulses(admittance=True, baseline=True)
+        _, _, plant = self.run_angles(admittance=True, baseline=True)
         self.assertIsNone(plant['tare_at'])
         self.assertEqual(plant['tare_requests'], 0)
         self.assertTrue(plant['enabled'])
 
-    def test_hold_and_settling_require_advancing_diagnostics(self):
-        task = experiment.PulseSequence(8, 8.)
-        task.submitted(5)
-        state = {'pulse_sequence': '5', 'pulse_complete': '0'}
+    def test_completion_needs_matching_identity_angle_and_bounded_brake(self):
+        task = experiment.AngleSequence(3, 8.)
+        message = keyboard.RollYawMotion(session=123, epoch=2, source='test', sequence=5,
+                                        frame=5, mode=keyboard.RollYawMotion.BODY_PITCH, value=math.radians(.3))
+        task.submitted(message, 0.)
+        ack = {key: str(getattr(message, key)) for key in ('session', 'epoch', 'source', 'sequence', 'mode')}
+        ack.update(accepted='true', accepted_value=str(message.value))
+        for key in ('session', 'epoch', 'source', 'sequence', 'mode'):
+            self.assertFalse(task.acknowledge((1., dict(ack, **{key: 'old'}), 'test')))
+        self.assertTrue(task.acknowledge((1., ack, 'test')))
+        state = dict(session_id='123', motion_source='test', motion_epoch='2', motion_sequence='5',
+                     body_pitch_target_valid='1', body_pitch_target_frame='5', body_pitch_target_rad=str(message.value),
+                     body_pitch_target_progress_rad='.000001', body_pitch_target_reference_complete='1',
+                     body_pitch_velocity_active='0', stopping='0')
+        self.assertFalse(task.ready(100., state, True))  # Tiny advancement is not arrival.
+        state['body_pitch_target_progress_rad'] = str(message.value)
+        task.accepted = False
         self.assertFalse(task.ready(100., state, True))
-        state['pulse_complete'] = '1'
+        self.assertIn('remaining +0.000000 deg', task.describe('waiting for acknowledgement', state))
+        self.assertIn('remaining', task.describe('invalid feedback', dict(state, body_pitch_target_rad='invalid')))
+        task.accepted = True
+        for key in ('session_id', 'motion_source', 'motion_epoch', 'motion_sequence', 'body_pitch_target_frame', 'body_pitch_target_rad'):
+            self.assertFalse(task.matches_status(dict(state, **{key: '0'})))
+        self.assertFalse(task.ready(100., dict(state, body_pitch_velocity_active='1'), True))
         self.assertFalse(task.ready(101., state, True))
         for _ in range(100):
             self.assertFalse(task.ready(101., state, True))
         self.assertFalse(task.ready(108., state, False))
         self.assertFalse(task.ready(109., state, True))
         self.assertTrue(task.ready(109.4, state, True))
+
+    def test_invalid_angle_parameters_are_rejected_before_dispatch(self):
+        for invalid in ({'~step_deg': 0}, {'~step_deg': float('nan')}, {'~step_deg': float('inf')},
+                        {'~step_deg': 3}, {'~step_deg': True}, {'~num_steps': 0}, {'~num_steps': 1.5},
+                        {'~num_steps': 10**400}, {'~body_pitch_rate_deg_s': 0}, {'~body_pitch_rate_deg_s': float('inf')},
+                        {'~interval_sec': -1}, {'~hold_duration_sec': 7, '~interval_sec': 8},
+                        {'~angular_velocity_deg_s': .5}, {'~feed_duration_sec': 1.}):
+            params = dict({'~step_deg': .3}, **invalid)
+            with patch.object(experiment.rospy, 'init_node'), \
+                 patch.object(experiment.rospy, 'has_param', side_effect=lambda key: key in params), \
+                 patch.object(experiment.rospy, 'get_param', side_effect=lambda key, default=None: params.get(key, default)), \
+                 patch.object(experiment, 'MotionClient') as client:
+                with self.assertRaises(ValueError):
+                    experiment.main()
+                client.assert_not_called()
 
     def test_old_client_does_not_refresh_or_stop_new_owner(self):
         with patch.object(keyboard.rospy, 'Publisher', return_value=MagicMock()), \
@@ -323,6 +412,7 @@ class VelocityExperiment(unittest.TestCase):
             client = keyboard.MotionClient('/test')
         client.epoch_callback(keyboard.UInt64(1))
         client.send(123, keyboard.RollYawMotion.VELOCITY, .01)
+        client.claimed = True  # Exercise STOP after an ownership grant.
         clock, stops = [0.], []
 
         def receive(message):
@@ -421,8 +511,8 @@ class AdmittanceAdmission(unittest.TestCase):
             self.tare.publish.assert_not_called()
             self.enable.publish.assert_not_called()
 
-    def test_baseline_or_model_change_aborts_without_automatic_retare(self):
-        for changes in (dict(tare_generation='6'), dict(producer_generation='8'), dict(baseline_ready='0')):
+    def test_baseline_change_aborts_without_automatic_retare(self):
+        for changes in (dict(tare_generation='6'), dict(baseline_ready='0')):
             self.setUp()
             self.values.update(baseline_ready='1', admittance_enabled='1')
             self.assertTrue(self.ready(0))
@@ -430,6 +520,13 @@ class AdmittanceAdmission(unittest.TestCase):
             with self.assertRaises(ValueError):
                 self.ready(1)
             self.tare.publish.assert_not_called()
+
+    def test_planner_retirement_preserves_completed_baseline(self):
+        self.values.update(baseline_ready='1', admittance_enabled='1')
+        self.assertTrue(self.ready(0))
+        self.values['producer_generation'] = '8'
+        self.assertTrue(self.ready(1))
+        self.tare.publish.assert_not_called()
 
     def test_operator_disable_is_not_retried_as_an_enable_refusal(self):
         self.values['baseline_ready'] = '1'
@@ -470,8 +567,9 @@ class MotionHandover(unittest.TestCase):
                 elif accepted and message.mode == keyboard.RollYawMotion.PULSE:
                     self.until = self.clock[0] + message.duration
             client.ack_callback(keyboard.String(
-                'action=motion source={} sequence={} accepted={} motion_epoch={} reason={}'.format(
-                    message.source, message.sequence, str(accepted).lower(), self.epoch, reason)))
+                'action=motion session={} epoch={} source={} sequence={} mode={} accepted={} motion_epoch={} reason={}'.format(
+                    message.session, message.epoch, message.source, message.sequence, message.mode,
+                    str(accepted).lower(), self.epoch, reason)))
             for peer in self.clients:
                 peer.epoch_callback(keyboard.UInt64(self.epoch))
         publisher.publish.side_effect = receive
@@ -573,8 +671,8 @@ class Interfaces(unittest.TestCase):
                 # queued receipt reaches the keyboard before the final reply.
                 k.ack_callback(keyboard.String('action=owner_claim session=123 received=true'))
                 reply = keyboard.String(
-                    'action=motion session=123 source={} sequence={} mode={} accepted=true motion_epoch=2'.format(
-                        message.source, message.sequence, message.mode))
+                    'action=motion session=123 epoch={} source={} sequence={} mode={} accepted=true motion_epoch=2'.format(
+                        message.epoch, message.source, message.sequence, message.mode))
                 k.motion.ack_callback(reply)
                 k.motion.epoch_callback(keyboard.UInt64(2))
                 k.ack_callback(reply)

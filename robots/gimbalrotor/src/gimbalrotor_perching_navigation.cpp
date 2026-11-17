@@ -4798,7 +4798,10 @@ bool GimbalrotorPerchingNavigator::advancePitchVelocity(roll_yaw::Reference& nex
   const auto limits = onlineLimits();
   std::string error;
   bool accepted = false;
-  const double requested = v.active && !v.stopping && !local_interaction_hold_ && !local_resisting_load_ ? v.requested : 0;
+  // Ordinary opposing contact drives the bounded correction, not a feed veto.
+  // Invalid interaction still brakes nominal motion; feasibility/tracking below
+  // must accept the coordinated nominal-plus-correction reference together.
+  const double requested = v.active && !v.stopping && !local_interaction_hold_ ? v.requested : 0;
   if(requested == 0 && std::abs(local.rate) < 1e-12 && final_target_.velocity.norm() < 1e-12 &&
      std::abs(compliance.offset - local.offset) < 1e-12 && std::abs(compliance.rate) < 1e-12)
   {
@@ -4855,7 +4858,9 @@ bool GimbalrotorPerchingNavigator::advancePitchVelocity(roll_yaw::Reference& nex
   }
   else
   {
-    v.limit = "coordinated nominal pitch plus contact correction";
+    v.limit = local_interaction_hold_ ? "interaction feed hold: " + interaction->diagnostics().admittance_reason_
+        : feed_scale_.minCoeff() < 1 ? "tracking feed scaled; accepted destination retained"
+                                    : "coordinated nominal pitch plus contact correction";
     if(hold_reason_ == HoldReason::FEASIBILITY) hold_reason_ = HoldReason::NONE;
   }
   if(!retarget_pending_) nominal_ = next.eta; // Preserve accepted replacement while the old velocity brakes.
@@ -5718,7 +5723,9 @@ aerial_robot_control::RollYawInteractionInput GimbalrotorPerchingNavigator::inte
           !pitch_velocity_.active && !manual_tracking_ && final_target_.velocity.norm() < 1e-5,
           preparation_ready_ && f.body_omega.norm() < feedback_config_.settle_body_rate &&
           f.joint_rate.tail<2>().norm() < feedback_config_.settle_joint_rate && tracking,
-          pitch_velocity_.active && !pitch_velocity_.stopping ? pitch_velocity_.requested : 0,
+          pitch_velocity_.active && !pitch_velocity_.stopping
+              ? (pitch_target_.valid ? roll_yaw::pitchTargetRate(pitch_target_.angle, pitch_target_.progress, pitch_target_.rate)
+                                     : pitch_velocity_.requested) : 0,
           manual_time_ > 0 ? std::clamp(f.now - manual_time_, 0.0, feedback_config_.max_execution_step) : 0,
           .5 * local_pitch_.rate_limit, .5 * local_pitch_.acceleration_limit,
           nominal_held, !faulted_ && !feedback_waiting_ && model_check_.available &&
@@ -6787,8 +6794,11 @@ void GimbalrotorPerchingNavigator::publishRollYawDiagnostics()
   field("nominal_phase_s", planner_ ? planner_->nominal_progress : nan);
   field("effective_phase_s", planner_ ? planner_->progress : nan);
   field("phase_speed", planner_ ? planner_->phaseSpeed() : nan);
-  field("resisting_load", planner_ && planner_->resisting_load);
-  field("relief_limit_saturated", planner_ && planner_->relief_limited);
+  field("resisting_load", planner_ ? planner_->resisting_load
+      : fresh_torque && pitch_velocity_.active && !pitch_velocity_.stopping && local_resisting_load_);
+  field("relief_limit_saturated", planner_ ? planner_->relief_limited
+      : local_pitch_.valid && interaction_diagnostic.admittance_.config.valid() &&
+        std::abs(local_pitch_.offset) >= interaction_diagnostic.admittance_.config.angle_limit - 1e-8);
   field("measured_task_valid", measured_task_valid);
   field("measured_pitch_rad", measured_task_valid ? planner_->task.raw : nan);
   field("filtered_pitch_rad", measured_task_valid ? planner_->task.filtered : nan);
@@ -6872,7 +6882,7 @@ void GimbalrotorPerchingNavigator::publishRollYawDiagnostics()
   field("torque_age_s", interaction_diagnostic.interaction_stamp_ > 0 ? f.now - interaction_diagnostic.interaction_stamp_ : nan);
   field("reference_torque_Nm", interaction_diagnostic.admittance_.config.reference_torque);
   field("filtered_contact_torque_Nm", interaction_diagnostic.admittance_.baseline_ready ? interaction_diagnostic.admittance_.filtered : nan);
-  double effective_offset = nan;
+  double effective_offset = !planner_ && local_pitch_.valid ? local_pitch_.offset : nan;
   if(goal_valid && !planner_->plan.goal.align_only && planner_->plan.ok)
   {
     effective_offset = planner_->applied_relief;
