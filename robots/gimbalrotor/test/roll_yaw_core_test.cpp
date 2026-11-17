@@ -913,8 +913,32 @@ TEST(Observer,InconsistentPoseMotionIsNotForcedIntoTheJointConstraint)
   for(int i=0; i<200; ++i)
     f.observe(Vec::Zero(),expSO3(Vec::UnitX()*.002*i),Vec(.1,0,0),Vec::Zero(),input,1+i*.02,.15);
   Mat j; ASSERT_TRUE(fixture.model.jacobian(Vec::Zero(),j));
-  Vec rate=f.rate; rate[0]=j.col(0).dot(f.omega)/j.col(0).squaredNorm();
-  EXPECT_GT((j*rate-f.omega).norm(),.01);
+  EXPECT_EQ(f.rate,Vec::Zero());
+  EXPECT_GT((j*f.rate-f.omega).norm(),.01); // Diagnostic, not a rejected coordinate derivative.
+}
+
+TEST(Observer,PassivePoseMotionKeepsMeasuredCoordinateSignAndDerivative)
+{
+  Fixture fixture;
+  const Eigen::Matrix<double,6,1> input=Eigen::Matrix<double,6,1>::Zero();
+  for(double sign : {-1.,1.})
+  {
+    perching_dynamics::ObservationFilter filter;
+    for(int i=0;i<200;++i)
+    {
+      const double t=i*.02;
+      const Vec actual(sign*.008*t,.1,-.2);
+      Pose body; ASSERT_TRUE(fixture.model.evaluateBody(actual,body));
+      Vec measured(0,actual[1],actual[2]);
+      Estimate estimate; ASSERT_TRUE(fixture.model.estimate(body,measured,estimate));
+      EXPECT_NEAR(estimate.alpha,actual[0],1e-12);
+      measured[0]=estimate.alpha;
+      filter.observe(measured,body.linear(),Vec::Zero(),Vec::Zero(),input,1+t,.15);
+    }
+    EXPECT_NEAR(filter.rate[0],sign*.008,1e-6);
+    EXPECT_LT(filter.rate.tail<2>().norm(),1e-12);
+    EXPECT_GT(sign*filter.q[0],0);
+  }
 }
 
 TEST(Control,ReferenceFeedforwardDoesNotDuplicateDampingOrYaw)
@@ -977,7 +1001,8 @@ TEST(Observer,RecordedQuietIntervalConditioning)
   if(const char* tau=std::getenv("ROLL_YAW_OBSERVER_TAU")) filter.time_constant=std::stod(tau);
   const Eigen::Matrix<double,6,1> wrench=Eigen::Matrix<double,6,1>::Zero();
   double t, x,y,z,qx,qy,qz,qw,wx,wy,wz,roll,yaw;
-  int raw_bad=0, ready=0, rejected=0, total=0, bad_run=0, max_bad_run=0;
+  int ready=0, diagnostic_exceedances=0, total=0;
+  double max_residual=0;
   bool locked=false;
   while(input>>t>>x>>y>>z>>qx>>qy>>qz>>qw>>wx>>wy>>wz>>roll>>yaw)
   {
@@ -990,18 +1015,17 @@ TEST(Observer,RecordedQuietIntervalConditioning)
     if(t<670 || t>692) continue;
     ++total;
     Mat j; ASSERT_TRUE(fixture.model.jacobian(filter.q,j));
-    Vec rate=filter.rate;
-    rate[0]=j.col(0).dot(omega-j.rightCols<2>()*rate.tail<2>())/j.col(0).squaredNorm();
-    if((j*rate-omega).norm()>.01) ++raw_bad;
     if(!valid) continue;
-    rate[0]=j.col(0).dot(filter.omega-j.rightCols<2>()*rate.tail<2>())/j.col(0).squaredNorm();
-    if((j*rate-filter.omega).norm()>.01) { ++rejected; ++bad_run; max_bad_run=std::max(max_bad_run,bad_run); }
-    else { ++ready; bad_run=0; }
+    const double residual=(j*filter.rate-filter.omega).norm();
+    ASSERT_TRUE(std::isfinite(residual));
+    ASSERT_TRUE(filter.q.allFinite() && filter.rate.allFinite());
+    ++ready;
+    if(residual>.01) ++diagnostic_exceedances;
+    max_residual=std::max(max_residual,residual);
   }
   ASSERT_GT(total,500);
-  std::cout<<"Run-five quiet aligned samples: "<<total<<", raw gyro rejections: "<<raw_bad
-           <<", conditioned consistency passes: "<<ready<<", rejected: "<<rejected<<", longest rejection: "<<max_bad_run*.02<<" s"
+  std::cout<<"Run-five aligned samples: "<<total<<", conditioned coordinate samples: "<<ready
+           <<", diagnostic rate exceedances: "<<diagnostic_exceedances<<", max residual: "<<max_residual<<" rad/s"
            <<", filtered gyro/pose-rate disagreement: "<<(filter.gyro-filter.omega).transpose()<<" rad/s\n";
   EXPECT_GT(ready,.8*total);
-  EXPECT_LT(rejected,raw_bad);
 }

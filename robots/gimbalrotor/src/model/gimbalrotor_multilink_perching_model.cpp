@@ -202,9 +202,10 @@ bool ObservationFilter::observe(const Eigen::Vector3d& position, const Eigen::Ma
   const double weight = -std::expm1(-dt / time_constant);
   rate += weight * ((position - previous_) / dt - rate);
   q += weight * (position - q);
-  // Differentiate the same synchronized pose stream used by the contact model,
-  // just as active-joint rates differentiate joint positions. Do not mix those
-  // rates with the unconditioned roll/pitch gyro used by fast attitude feedback.
+  // Independent body-rate diagnostic from measured pose history. Generalized
+  // momentum uses only q/rate above, including the measured passive derivative.
+  // Transport pose/gyro rates to the current measured body axes; neither replaces
+  // generalized rates nor the unconditioned gyro used by flight feedback.
   const Eigen::Matrix3d transport = rotation.transpose() * previous_rotation_;
   const Eigen::Vector3d measured_rate = transport *
       roll_yaw::logSO3(previous_rotation_.transpose() * rotation) / dt;

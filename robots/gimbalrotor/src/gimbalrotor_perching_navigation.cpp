@@ -5478,7 +5478,7 @@ void GimbalrotorPerchingNavigator::requestRollYaw(const std::string& action, std
   reason_ = planner_->reason;
   publishRollYawDiagnostics();
 }
-std::string GimbalrotorPerchingNavigator::preparationRejection(const roll_yaw::Feedback& f, const roll_yaw::Reference& held) const
+std::string GimbalrotorPerchingNavigator::preparationTrackingRejection(const roll_yaw::Feedback& f, const roll_yaw::Reference& held) const
 {
   auto why = contactRejection(f);
   if(!why.empty())
@@ -5491,6 +5491,14 @@ std::string GimbalrotorPerchingNavigator::preparationRejection(const roll_yaw::F
   if((q - held.eta).cwiseAbs().maxCoeff() > feedback_config_.preparation_tolerance ||
      roll_yaw::logSO3(f.body.linear().transpose() * held.body.linear()).norm() > feedback_config_.preparation_tolerance)
     return "current measured-to-applied preparation tracking allowance";
+  return "";
+}
+
+std::string GimbalrotorPerchingNavigator::preparationRejection(const roll_yaw::Feedback& f, const roll_yaw::Reference& held) const
+{
+  const auto why = preparationTrackingRejection(f, held);
+  if(!why.empty())
+    return why;
   const auto& c = feedback_config_;
   const auto& w = preparation_stats_;
   if(f.body_omega.norm() >= c.settle_body_rate || f.joint_rate.tail<2>().norm() >= c.settle_joint_rate)
@@ -5588,6 +5596,15 @@ bool GimbalrotorPerchingNavigator::rollYawReferenceActive() const
 aerial_robot_control::RollYawInteractionInput GimbalrotorPerchingNavigator::interactionInput(
     const roll_yaw::Feedback& f) const
 {
+  const bool tracking =
+      roll_yaw::logSO3(f.body.linear().transpose() * final_target_.body.linear()).norm() < feedback_config_.orientation_tolerance &&
+      (f.eta.tail<2>() - final_target_.eta.tail<2>()).cwiseAbs().maxCoeff() < feedback_config_.tracking_tolerance;
+  // Completion refers to the nominal producer, including its brake. Enabled
+  // compliance may still move the effective reference while nominal pitch holds.
+  const bool nominal_held = !pitch_velocity_.active && !manual_tracking_ && !retarget_pending_ &&
+      !jog_.active && !jog_pending_ && !prepare_pending_ && !connection_pending_ &&
+      roll_yaw_pitch_rezero_state_ == RollYawPitchRezeroState::IDLE &&
+      (local_pitch_.valid ? std::abs(local_pitch_.rate) < 1e-5 : final_target_.velocity.norm() < 1e-5);
   return {model_, feedback_config_, planning_config_, f, planner_ ? &planner_->plan : nullptr,
           planner_ ? planner_->stage : roll_yaw::Stage::FREE_FLIGHT, stop_pending_ || (planner_ && planner_->stopping()), lock_valid_,
           planner_ ? planner_->nominal_progress : 0, planner_ ? planner_->relief_available : 0,
@@ -5598,12 +5615,13 @@ aerial_robot_control::RollYawInteractionInput GimbalrotorPerchingNavigator::inte
           [this](const roll_yaw::Feedback& sample) { return preparationRejection(sample, final_target_); },
           !pitch_velocity_.active && !manual_tracking_ && final_target_.velocity.norm() < 1e-5,
           preparation_ready_ && f.body_omega.norm() < feedback_config_.settle_body_rate &&
-          f.joint_rate.tail<2>().norm() < feedback_config_.settle_joint_rate &&
-          roll_yaw::logSO3(f.body.linear().transpose() * final_target_.body.linear()).norm() < feedback_config_.orientation_tolerance &&
-          (f.eta.tail<2>() - final_target_.eta.tail<2>()).cwiseAbs().maxCoeff() < feedback_config_.tracking_tolerance,
+          f.joint_rate.tail<2>().norm() < feedback_config_.settle_joint_rate && tracking,
           pitch_velocity_.active && !pitch_velocity_.stopping ? pitch_velocity_.requested : 0,
           manual_time_ > 0 ? std::clamp(f.now - manual_time_, 0.0, feedback_config_.max_execution_step) : 0,
-          .5 * local_pitch_.rate_limit, .5 * local_pitch_.acceleration_limit};
+          .5 * local_pitch_.rate_limit, .5 * local_pitch_.acceleration_limit,
+          nominal_held, !faulted_ && !feedback_waiting_ && model_check_.available &&
+          last_body_message_stamp_ == f.body_stamp && last_joint_message_stamp_ == f.joint_stamp &&
+          (planner_ ? preparationTrackingRejection(f, final_target_).empty() : tracking)};
 }
 
 void GimbalrotorPerchingNavigator::resetCompliance()
@@ -6700,6 +6718,7 @@ void GimbalrotorPerchingNavigator::publishRollYawDiagnostics()
   field("admittance_enabled", interaction_diagnostic.admittance_.enabled);
   field("admittance_configured", interaction_diagnostic.interaction_configured_ && interaction_diagnostic.admittance_.config.valid());
   field("admittance_quiet", interaction->quietContact(interactionInput(f)));
+  field("admittance_hold_eligible", interaction->heldContact(interactionInput(f)));
   field("tare_collecting", interaction_diagnostic.tare_requested_);
   field("tare_request_sequence", interaction_diagnostic.tare_request_sequence_);
   field("enable_request_sequence", interaction_diagnostic.enable_request_sequence_);

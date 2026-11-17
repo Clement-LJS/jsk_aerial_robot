@@ -137,7 +137,7 @@ class VelocityExperiment(unittest.TestCase):
         self.assertFalse(task.complete)
 
     def run_pulses(self, interrupt_step=0, fault=False, blocked=False, admittance=False, yielding=False,
-                   refuse_tare=False, refuse_enable=False, baseline=False):
+                   refuse_tare=False, refuse_enable=False, baseline=False, vibrating=False):
         from contextlib import ExitStack
         clock, messages = [0.], []
         plant = dict(angle=0., nominal=0., until=0., rate=0., sequence=0, pulses=0, sent_at=0., tare_at=None,
@@ -173,18 +173,22 @@ class VelocityExperiment(unittest.TestCase):
             values = {'session_id': '123', 'feedback_waiting': '0', 'stopping': '0',
                       'accepted_destination_pending': '1' if clock[0] < .5 else '0',
                       'body_pitch_velocity_active': str(int(active)),
-                      'current_body_rate_rad_s': str(abs(plant['rate']) if active else 0),
-                      'current_joint_rate_rad_s': '0', 'effective_body_tracking_error_rad': '0',
+                      'current_body_rate_rad_s': str(.08 if vibrating else abs(plant['rate']) if active else 0),
+                      'current_joint_rate_rad_s': '.06' if vibrating else '0', 'effective_body_tracking_error_rad': '0',
                       'pulse_sequence': str(plant['sequence']), 'pulse_complete': str(int(not active)),
                       'admittance_enabled': str(int(plant['enabled'])), 'baseline_ready': str(int(baseline or collected)),
                       'tare_generation': '0' if plant['tare_at'] is None else '1',
                       'producer_generation': '1', 'admittance_configured': '1',
-                      'admittance_quiet': str(int(clock[0] >= .7 and not active)),
+                      'admittance_quiet': str(int(not vibrating and clock[0] >= .7 and not active)),
+                      'admittance_hold_eligible': str(int(clock[0] >= .5 and not active)),
                       'tare_collecting': str(int(plant['tare_at'] is not None and not collected)),
                       'tare_request_sequence': str(plant['tare_requests']),
                       'enable_request_sequence': str(plant['enable_requests']),
                       'admittance_enable_requested': '1',
-                      'offset_rad': '0', 'task_torque_valid': '1', 'local_pitch_nominal_rad': str(math.radians(plant['nominal']))}
+                      'offset_rad': '-.02' if yielding and plant['enabled'] else '0',
+                      'offset_rate_rad_s': '-.01' if yielding and plant['enabled'] else '0',
+                      'offset_acceleration_rad_s2': '0',
+                      'task_torque_valid': '1', 'local_pitch_nominal_rad': str(math.radians(plant['nominal']))}
             pose = (clock[0], 100 + clock[0], self.pitch(plant['angle']))
             state = 'FAULT_HOLD: test' if fault and plant['sequence'] else 'CONTACT_LOCKED: test'
             return (clock[0], 100 + clock[0], state, values), {'reference': pose, 'measured': pose}
@@ -262,9 +266,14 @@ class VelocityExperiment(unittest.TestCase):
         self.assertGreaterEqual(messages[0][0] - plant['tare_at'], 1.)
 
     def test_admittance_retreat_is_not_misreported_as_a_failed_pulse(self):
-        _, messages, plant = self.run_pulses(admittance=True, yielding=True)
+        elapsed, messages, plant = self.run_pulses(admittance=True, yielding=True, vibrating=True)
         self.assertEqual(len(messages), 8)
         self.assertAlmostEqual(plant['angle'], 3.25, places=5)
+        self.assertEqual(plant['tare_requests'], 1)
+        self.assertEqual(plant['enable_requests'], 1)
+        for previous, current in zip(messages, messages[1:]):
+            self.assertGreaterEqual(current[0] - previous[0], 9.)
+        self.assertGreaterEqual(elapsed - messages[-1][0], 9.)
 
     def test_admittance_retries_processed_tare_and_enable_refusals(self):
         _, messages, plant = self.run_pulses(admittance=True, refuse_tare=True, refuse_enable=True)
@@ -356,20 +365,22 @@ class AdmittanceAdmission(unittest.TestCase):
         self.startup = experiment.AdmittanceStartup()
         self.values = dict(tare_generation='4', producer_generation='7', admittance_configured='1',
                            admittance_enabled='0', baseline_ready='0', tare_collecting='0', offset_rad='0',
-                           admittance_quiet='1', task_torque_valid='1', tare_request_sequence='0',
+                           admittance_quiet='0', admittance_hold_eligible='1',
+                           offset_rate_rad_s='0', offset_acceleration_rad_s2='0',
+                           task_torque_valid='1', tare_request_sequence='0',
                            enable_request_sequence='0')
         self.values['admittance_enable_requested'] = '1'
         self.tare, self.enable = MagicMock(), MagicMock()
         self.tare.get_num_connections.return_value = self.enable.get_num_connections.return_value = 1
 
     def ready(self, now):
-        return self.startup.ready(now, self.values, True, self.tare, self.enable)
+        return self.startup.ready(now, self.values, self.tare, self.enable)
 
-    def test_full_quiet_window_required_and_missing_ack_does_not_repeat_tare(self):
-        self.values['admittance_quiet'] = '0'
+    def test_held_contact_required_without_quiet_and_missing_ack_does_not_repeat_tare(self):
+        self.values['admittance_hold_eligible'] = '0'
         self.assertFalse(self.ready(0))
         self.tare.publish.assert_not_called()
-        self.values['admittance_quiet'] = '1'
+        self.values['admittance_hold_eligible'] = '1'
         self.assertFalse(self.ready(1))
         self.assertFalse(self.ready(2))
         with self.assertRaisesRegex(ValueError, 'acknowledgement missing'):
@@ -390,6 +401,25 @@ class AdmittanceAdmission(unittest.TestCase):
         self.values.update(enable_request_sequence='1', admittance_enabled='1')
         self.assertTrue(self.ready(5.1))
         self.enable.publish.assert_called_once()
+
+    def test_enabled_readiness_requires_held_contact_and_load_but_allows_correction(self):
+        self.values.update(baseline_ready='1', admittance_enabled='1', offset_rad='-.02',
+                           offset_rate_rad_s='-.01', task_torque_valid='0')
+        self.assertFalse(self.ready(0))
+        self.values.update(task_torque_valid='1', admittance_hold_eligible='0')
+        self.assertFalse(self.ready(1))
+        self.values['admittance_hold_eligible'] = '1'
+        self.assertTrue(self.ready(2))
+        self.tare.publish.assert_not_called()
+        self.enable.publish.assert_not_called()
+
+    def test_disarmed_correction_must_finish_before_tare_or_enable(self):
+        for baseline in ('0', '1'):
+            self.setUp()
+            self.values.update(baseline_ready=baseline, offset_rate_rad_s='.001')
+            self.assertFalse(self.ready(0))
+            self.tare.publish.assert_not_called()
+            self.enable.publish.assert_not_called()
 
     def test_baseline_or_model_change_aborts_without_automatic_retare(self):
         for changes in (dict(tare_generation='6'), dict(producer_generation='8'), dict(baseline_ready='0')):

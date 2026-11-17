@@ -13,9 +13,9 @@ class ObservationFilter
 public:
   Eigen::Vector3d q = Eigen::Vector3d::Zero(), rate = q, omega = q, effort = q, gyro = q;
   Eigen::Matrix<double, 6, 1> wrench = Eigen::Matrix<double, 6, 1>::Zero();
-  // A 0.001534-rad roll encoder tick must not become a 0.077-rad/s
-  // impulse at 50 Hz. This observation bandwidth leaves margin below the
-  // unchanged 0.01-rad/s consistency bound; it does not filter flight feedback.
+  // Condition measured coordinates and their derivatives at one bandwidth:
+  // a 0.001534-rad roll encoder tick otherwise gives 0.077 rad/s at 50 Hz.
+  // Body-rate disagreement is diagnostic only; flight feedback is unchanged.
   double time_constant = .4;
   bool observe(const Eigen::Vector3d& position, const Eigen::Matrix3d& rotation,
                const Eigen::Vector3d& measured_gyro, const Eigen::Vector3d& torque,

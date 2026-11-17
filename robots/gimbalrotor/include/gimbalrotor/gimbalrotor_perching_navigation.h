@@ -517,6 +517,7 @@ private:
   double body_pitch_velocity_command_duration_ = 8.0;
   bool admitPitchJog(double);
   void finishPitchJog(const std::string& phase, const std::string& why);
+  std::string preparationTrackingRejection(const roll_yaw::Feedback&, const roll_yaw::Reference&) const;
   std::string preparationRejection(const roll_yaw::Feedback&, const roll_yaw::Reference&) const;
   void advancePreparedConnection();
   struct PitchJog

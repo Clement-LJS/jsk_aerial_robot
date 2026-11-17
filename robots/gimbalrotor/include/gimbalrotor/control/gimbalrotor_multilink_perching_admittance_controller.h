@@ -37,6 +37,9 @@ struct RollYawInteractionInput
   std::function<std::string(const roll_yaw::Feedback&)> contact_rejection, preparation_rejection;
   bool reference_held = false, quiet_contact = false;
   double pitch_rate = 0, local_dt = 0, local_rate_limit = 0, local_acceleration_limit = 0;
+  // Nominal command completion and measured tracking, independent of quietness
+  // and of the enabled compliant correction's position/rate.
+  bool nominal_held = false, tracking_held = false;
 };
 struct RollYawInteractionOutput
 {
@@ -111,6 +114,7 @@ public:
   virtual void stopped() = 0;
   virtual bool motionAllowed(const Input&) const = 0;
   virtual bool quietContact(const Input&) const = 0;
+  virtual bool heldContact(const Input&) const = 0;
   virtual Output updateInteraction(const Input&, const roll_yaw::Feedback&) = 0;
   virtual double reconcileReference(bool accepted, bool paused, double applied_relief) = 0;
   virtual double holdReference(double applied_relief) = 0;

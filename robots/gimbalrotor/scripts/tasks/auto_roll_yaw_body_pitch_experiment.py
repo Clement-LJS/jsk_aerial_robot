@@ -89,26 +89,26 @@ class PulseSequence:
     def __init__(self, count, hold, settle=.3):
         self.count, self.hold, self.settle = count, hold, settle
         self.sent = self.sequence = 0
-        self.hold_since = self.quiet_since = None
+        self.hold_since = self.ready_since = None
 
     def submitted(self, sequence):
         self.sent += 1
         self.sequence = sequence
-        self.hold_since = self.quiet_since = None
+        self.hold_since = self.ready_since = None
 
-    def ready(self, stamp, values, quiet):
+    def ready(self, stamp, values, held):
         if self.sequence:
             if (int(values.get('pulse_sequence', '0')) != self.sequence or
                     values.get('pulse_complete') != '1'):
                 return False
             if self.hold_since is None:
                 self.hold_since = stamp
-        if quiet:
-            if self.quiet_since is None:
-                self.quiet_since = stamp
+        if held:
+            if self.ready_since is None:
+                self.ready_since = stamp
         else:
-            self.quiet_since = None
-        return (self.quiet_since is not None and stamp - self.quiet_since >= self.settle and
+            self.ready_since = None
+        return (self.ready_since is not None and stamp - self.ready_since >= self.settle and
                 (self.hold_since is None or stamp - self.hold_since >= self.hold))
 
 
@@ -124,7 +124,7 @@ class AdmittanceStartup:
         self.retry_at = 0.
         self.baseline_seen = False
 
-    def ready(self, now, values, quiet, tare, enable):
+    def ready(self, now, values, tare, enable):
         generation = int(values['tare_generation'])
         producer = int(values['producer_generation'])
         if self.started is None:
@@ -158,21 +158,25 @@ class AdmittanceStartup:
             if not baseline:
                 raise ValueError('Armed admittance has no baseline; disarm and tare unloaded')
             self.generation = generation
-            return True
+            return values.get('admittance_hold_eligible') == '1' and values.get('task_torque_valid') == '1'
         if now - self.started > 30.:
             raise ValueError('No verified admittance baseline/enable within 30 seconds: ' + values.get('admittance_status', ''))
         collecting = values.get('tare_collecting') == '1'
         if baseline or collecting:
             self.generation = generation
-        # Use the controller's complete quiet window, not just instantaneous rates.
-        if not quiet or values.get('admittance_quiet') != '1' or now < self.retry_at:
+        # Controller admission uses nominal hold/contact/tracking, independent of
+        # preparation quietness. Fresh diagnostics are required by the caller.
+        if values.get('admittance_hold_eligible') != '1' or now < self.retry_at:
+            return False
+        if not all(abs(float(values.get(field, 'inf'))) <= 1e-8
+                   for field in ('offset_rad', 'offset_rate_rad_s', 'offset_acceleration_rad_s2')):
             return False
         if baseline:
             if values.get('task_torque_valid') != '1' or not enable.get_num_connections():
                 return False
             action, publisher, message = 'enable', enable, Bool(data=True)
         else:
-            if self.generation is not None or collecting or abs(float(values.get('offset_rad', 'inf'))) > 1e-8:
+            if self.generation is not None or collecting:
                 return False  # An accepted collection must never be restarted by retry.
             if not tare.get_num_connections():
                 return False
@@ -289,13 +293,17 @@ def main():
                     int(values['tare_generation']) != startup.generation or int(values['producer_generation']) != startup.producer):
                 raise ValueError('Admittance baseline or contact model changed; sequence stopped')
             if use_admittance and not task.sequence:
-                if not startup.ready(now, values, quiet, tare, enable):
+                if not startup.ready(now, values, tare, enable):
                     time.sleep(.02)
                     continue
             pose = poses.get('measured')
             measured_fresh = pose and 0 <= now - pose[0] <= feedback_timeout and -.02 <= ros_now - pose[1] <= feedback_timeout
             load_ready = values.get('admittance_enabled') != '1' or values.get('task_torque_valid') == '1'
-            ready = task.ready(stamp, values, quiet and bool(measured_fresh) and load_ready)
+            # Later pulses allow legitimate compliant retreat. The controller
+            # checks nominal completion/braking and effective tracking; the
+            # sequence still enforces pulse identity and the entire hold time.
+            held = values.get('admittance_hold_eligible') == '1' if use_admittance else quiet
+            ready = task.ready(stamp, values, held and bool(measured_fresh) and load_ready)
             if ready and task.sequence and measured_start is not None:
                 progress = math.degrees(local_pitch(measured_start, pose[2]))
                 rospy.loginfo('Pulse %d measured pitch change: %+.4f deg (requested ideal %+.4f deg).',
