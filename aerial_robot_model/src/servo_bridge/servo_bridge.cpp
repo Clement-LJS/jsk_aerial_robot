@@ -72,6 +72,7 @@ void ServoBridge::reportServoErrorState(int servo_index, uint8_t error, const st
   auto prev_it = servo_error_states_.find(key);
   if(prev_it != servo_error_states_.end() && prev_it->second == error) return;
 
+  const bool had_error = prev_it != servo_error_states_.end() && prev_it->second != 0;
   servo_error_states_[key] = error;
 
   std::string servo_name = "unknown";
@@ -85,7 +86,7 @@ void ServoBridge::reportServoErrorState(int servo_index, uint8_t error, const st
 
   if(error == 0)
     {
-      if(prev_it != servo_error_states_.end() && prev_it->second != 0)
+      if(had_error)
         ROS_INFO("[servo bridge] servo %d (%s, group: %s) error cleared",
                  servo_index, servo_name.c_str(), servo_group_name.c_str());
       return;
@@ -381,6 +382,40 @@ void ServoBridge::publishServoStates(const ros::Time& stamp)
 
 void ServoBridge::servoStatesCallback(const spinal::ServoStatesConstPtr& state_msg, const string& servo_group_name)
 {
+  // Validate the whole sample before changing any feedback, filter, or error
+  // history. This also protects alternate ROS publishers bypassing rosserial.
+  if(state_msg->stamp.nsec >= 1000000000u || state_msg->servos.size() > 256)
+    {
+      ROS_WARN_THROTTLE(1.0, "[servo bridge] dropping invalid servo timestamp/count");
+      return;
+    }
+  bool seen[256] = {};
+  const auto group = servos_handler_.find(servo_group_name);
+  if(servo_group_name != "common" && group == servos_handler_.end())
+    {
+      ROS_WARN_THROTTLE(1.0, "[servo bridge] dropping state for unknown group %s", servo_group_name.c_str());
+      return;
+    }
+  for(const auto& state : state_msg->servos)
+    {
+      if(seen[state.index])
+        {
+          ROS_WARN_THROTTLE(1.0, "[servo bridge] dropping duplicate servo index %u", state.index);
+          return;
+        }
+      seen[state.index] = true;
+      if(servo_group_name != "common" &&
+         std::none_of(group->second.begin(), group->second.end(),
+                      [&](const SingleServoHandlePtr& servo) { return state.index == servo->getId(); }))
+        {
+          ROS_WARN_THROTTLE(1.0, "[servo bridge] dropping unknown servo index %u in group %s",
+                            state.index, servo_group_name.c_str());
+          return;
+        }
+    }
+  // A common packet can legitimately include unconfigured servos (e.g. 4/5 on
+  // the beetle). Continue ignoring those, after packet-wide validation above.
+
   /* independent group servo process without state publish */
   if(servo_group_name != std::string("common"))
     {
