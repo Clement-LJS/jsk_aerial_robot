@@ -215,14 +215,19 @@ void DynamixelSerial::reboot(uint8_t servo_index)
 
 void DynamixelSerial::setTorque(uint8_t servo_index)
 {
+  // Share the worker's queue lock, including while a mode change discards old polling work.
+  if (mutex_ != NULL && osMutexWait(*mutex_, osWaitForever) != osOK) return;
   instruction_buffer_.push(std::make_pair(INST_SET_TORQUE, servo_index));
+  if (mutex_ != NULL) osMutexRelease(*mutex_);
 }
 
 void DynamixelSerial::setTorqueFromPresetnPos(uint8_t servo_index)
 {
+  if (mutex_ != NULL && osMutexWait(*mutex_, osWaitForever) != osOK) return;
   ServoData& s = servo_[servo_index];
   if(s.torque_enable_) s.goal_position_ = s.present_position_;
   instruction_buffer_.push(std::make_pair(INST_SET_TORQUE, servo_index));
+  if (mutex_ != NULL) osMutexRelease(*mutex_);
 }
 
 void DynamixelSerial::setRoundOffset(uint8_t servo_index, int32_t ref_value)
@@ -325,6 +330,57 @@ uint8_t DynamixelSerial::getServoIndex(uint8_t id)
   return 0;
 }
 
+bool DynamixelSerial::setTTLRS485Mixed(uint16_t flag)
+{
+  if (flag > 1) return false;
+  if (mutex_ != NULL && osMutexWait(*mutex_, osWaitForever) != osOK) return false;
+  if (ttl_rs485_mixed_ != flag)
+  {
+    ttl_rs485_mixed_ = flag;
+    mode_reset_pending_ = true;
+  }
+  if (mutex_ != NULL) osMutexRelease(*mutex_);
+  return true;
+}
+
+void DynamixelSerial::resetPolling()
+{
+  // Discard work scheduled for the previous mode, preserving explicit control writes.
+  const uint16_t queued = instruction_buffer_.length();
+  std::pair<uint8_t, uint8_t> instruction;
+  for (uint16_t i = 0; i < queued; ++i)
+  {
+    if (!instruction_buffer_.pop(instruction)) break;
+    switch (instruction.first)
+    {
+    case INST_SET_TORQUE:
+    case INST_SET_HOMING_OFFSET:
+    case INST_SET_POSITION_GAINS:
+    case INST_SET_CURRENT_LIMIT:
+    case INST_SET_PROFILE_VELOCITY:
+      instruction_buffer_.push(instruction);
+      break;
+    default:
+      break;
+    }
+  }
+  memset(queued_periodic_, 0, sizeof(queued_periodic_));
+  read_status_packet_flag_ = false;
+  fast_read_pending_ = false;
+  requested_count_ = response_index_ = 0;
+  requested_size_ = 0;
+  instruction_last_ = std::make_pair(255, 255);
+  set_pos_tick_ = get_pos_tick_ = get_load_tick_ = 0;
+  get_temp_tick_ = get_move_tick_ = get_error_tick_ = 0;
+  schedule_initialized_ = false;
+  for (auto& s : servo_) s.feedback_fresh_ = false;
+  setROSCommFlag(false);
+  discardRx();
+  rx_recovering_ = true;
+  rx_quiet_tick_ = HAL_GetTick();
+  mode_reset_pending_ = false;
+}
+
 void DynamixelSerial::queuePeriodic(uint8_t instruction, uint8_t index)
 {
   const uint16_t bit = uint16_t(1) << index;
@@ -362,23 +418,30 @@ void DynamixelSerial::update()
   /* skip if no servo is detected */
   if (servo_num_ == 0) return;
 
-  // Each UART transaction (including its reply) holds the existing driver mutex.
-  // Configuration callbacks cannot overwrite a pending read's IDs/length/instruction.
+  // Serialize scheduling, mode changes and the complete UART transaction with callbacks.
+  if (mutex_ != NULL && osMutexWait(*mutex_, osWaitForever) != osOK) return;
+  if (mode_reset_pending_) resetPolling();
   if (rx_recovering_)
   {
     const uint32_t wr = (RX_BUFFER_SIZE - __HAL_DMA_GET_COUNTER(huart_->hdmarx)) % RX_BUFFER_SIZE;
     if (wr != rd_ptr_) rx_quiet_tick_ = HAL_GetTick();
     rd_ptr_ = wr;
     // After a failed/truncated reply, require two quiet worker ticks before reusing the bus.
-    if (HAL_GetTick() - rx_quiet_tick_ < 2) return;
+    if (HAL_GetTick() - rx_quiet_tick_ < 2)
+    {
+      if (mutex_ != NULL) osMutexRelease(*mutex_);
+      return;
+    }
     rx_recovering_ = false;
   }
   uint32_t current_time = HAL_GetTick();
 #if STM32H7_V2
+  const uint32_t set_pos_interval = ttl_rs485_mixed_ != 0 ? MIXED_SET_POS_DU : SET_POS_DU;
+  const uint32_t get_pos_interval = ttl_rs485_mixed_ != 0 ? MIXED_GET_POS_DU : GET_POS_DU;
   if (!schedule_initialized_)
   {
     set_pos_tick_ = current_time + SET_POS_OFFSET;
-    get_pos_tick_ = current_time + GET_POS_OFFSET;
+    get_pos_tick_ = current_time + (ttl_rs485_mixed_ != 0 ? MIXED_GET_POS_OFFSET : GET_POS_OFFSET);
     schedule_initialized_ = true;
   }
 #endif
@@ -387,7 +450,7 @@ void DynamixelSerial::update()
 #if STM32H7_V2
   if ((int32_t)(current_time - set_pos_tick_) >= 0) {
     // Skip missed slots instead of accumulating duplicate commands after a long operation.
-    set_pos_tick_ += ((current_time - set_pos_tick_) / SET_POS_DU + 1) * SET_POS_DU;
+    set_pos_tick_ += ((current_time - set_pos_tick_) / set_pos_interval + 1) * set_pos_interval;
 #else
   if(current_time >= set_pos_tick_ + SET_POS_DU && SET_POS_DU > 0) {
     if (set_pos_tick_ == 0) set_pos_tick_ = current_time + SET_POS_OFFSET; // init
@@ -406,7 +469,7 @@ void DynamixelSerial::update()
 #if STM32H7_V2
   if ((int32_t)(current_time - get_pos_tick_) >= 0) {
     // Skip missed slots instead of accumulating duplicate commands after a long operation.
-    get_pos_tick_ += ((current_time - get_pos_tick_) / GET_POS_DU + 1) * GET_POS_DU;
+    get_pos_tick_ += ((current_time - get_pos_tick_) / get_pos_interval + 1) * get_pos_interval;
 #else
   if(current_time >= get_pos_tick_ + GET_POS_DU && GET_POS_DU > 0) {
     if (get_pos_tick_ == 0) get_pos_tick_ = current_time + GET_POS_OFFSET; // init
@@ -492,8 +555,6 @@ void DynamixelSerial::update()
       if (instruction.first < 17)
         queued_periodic_[instruction.first] &= ~(uint16_t(1) << servo_index);
 
-      if (mutex_ != NULL)  osMutexWait(*mutex_, osWaitForever);
-
       /* set command */
       switch (instruction.first) {
       case INST_SET_GOAL_POS: /* send angle command to servo */
@@ -524,57 +585,48 @@ void DynamixelSerial::update()
         case INST_GET_CUR_VEL_POS:
           if(!servo_[servo_index].send_data_flag_ && !servo_[servo_index].first_get_pos_flag_) break;
           cmdReadPresentCurVelPos(servo_index);
-          if (readStatusPacket(instruction.first) == 0) setROSCommFlag(true);
-          else { discardRx(); rx_recovering_ = true; rx_quiet_tick_ = HAL_GetTick(); }
+          read_status_packet_flag_ = true;
           break;
         case INST_GET_PRESENT_POS: /* read servo position(angle) */
           if(!servo_[servo_index].send_data_flag_ && !servo_[servo_index].first_get_pos_flag_) break;
           cmdReadPresentPosition(servo_index);
-          readStatusPacket(instruction.first);
+          read_status_packet_flag_ = true;
           break;
         case INST_GET_PRESENT_CURRENT: /* read servo load */
           if(!servo_[servo_index].send_data_flag_) break;
           cmdReadPresentCurrent(servo_index);
-          readStatusPacket(instruction.first);
+          read_status_packet_flag_ = true;
           break;
         case INST_GET_PRESENT_TEMPERATURE: /* read servo temp */
           if(!servo_[servo_index].send_data_flag_) break;
           cmdReadPresentTemperature(servo_index);
-          readStatusPacket(instruction.first);
+          read_status_packet_flag_ = true;
           break;
         case INST_GET_PRESENT_MOVING: /* read servo movement */
           if(!servo_[servo_index].send_data_flag_) break;
           cmdReadMoving(servo_index);
-          readStatusPacket(instruction.first);
+          read_status_packet_flag_ = true;
           break;
         case INST_GET_HARDWARE_ERROR_STATUS:
           if(!servo_[servo_index].send_data_flag_) break;
           cmdReadHardwareErrorStatus(servo_index);
-          readStatusPacket(instruction.first);
+          read_status_packet_flag_ = true;
           break;
         case INST_GET_HOMING_OFFSET:
-          for (unsigned int i = 0; i < servo_num_; ++i) {
-            cmdReadHomingOffset(i);
-            readStatusPacket(instruction.first);
-          }
+          cmdReadHomingOffset(servo_index);
+          read_status_packet_flag_ = true;
           break;
         case INST_GET_POSITION_GAINS:
-          for (unsigned int i = 0; i < servo_num_; ++i) {
-            cmdReadPositionGains(i);
-            readStatusPacket(instruction.first);
-          }
+          cmdReadPositionGains(servo_index);
+          read_status_packet_flag_ = true;
           break;
         case INST_GET_PROFILE_VELOCITY:
-          for (unsigned int i = 0; i < servo_num_; ++i) {
-            cmdReadProfileVelocity(i);
-            readStatusPacket(instruction.first);
-          }
+          cmdReadProfileVelocity(servo_index);
+          read_status_packet_flag_ = true;
           break;
         case INST_GET_CURRENT_LIMIT:
-          for (unsigned int i = 0; i < servo_num_; ++i) {
-            cmdReadCurrentLimit(i);
-            readStatusPacket(instruction.first);
-          }
+          cmdReadCurrentLimit(servo_index);
+          read_status_packet_flag_ = true;
           break;
         default:
           break;
@@ -625,18 +677,16 @@ void DynamixelSerial::update()
           break;
         }
 
-        if (read_status_packet_flag_) {
-          instruction_last_ = instruction;
-        }
       }
 
+      if (read_status_packet_flag_) instruction_last_ = instruction;
       const bool read_sent = read_status_packet_flag_;
       finishPendingRead();
-      if (mutex_ != NULL) osMutexRelease(*mutex_);
       // Service at most one read transaction per worker iteration. Slow buses coalesce
       // cyclic work instead of overwriting unread replies or growing a command backlog.
       if (read_sent || rx_recovering_) break;
     }
+  if (mutex_ != NULL) osMutexRelease(*mutex_);
 }
 
 /* Transmit instruction packet to Dynamixel */

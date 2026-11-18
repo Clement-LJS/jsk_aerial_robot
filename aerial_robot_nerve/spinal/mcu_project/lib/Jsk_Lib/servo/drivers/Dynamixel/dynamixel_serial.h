@@ -205,7 +205,7 @@
 #endif
 #define COMMAND_FAST_SYNC_READ 0x8A
 #define INST_GET_CUR_VEL_POS 16
-#define PRESENT_CUR_VEL_POS_BYTE_LEN 10 // XC330 registers 126..135: current, velocity, position
+#define PRESENT_CUR_VEL_POS_BYTE_LEN 10 // XC330/XH430 registers 126..135: current, velocity, position
 
 //instruction frequency: 0 means no process
 #if STM32H7_V2
@@ -214,6 +214,10 @@
 #define SET_POS_OFFSET 0
 #define GET_POS_DU 5
 #define GET_POS_OFFSET 2
+// Individual reads need one worker iteration per servo: nominal 50 Hz in mixed mode.
+#define MIXED_SET_POS_DU 20
+#define MIXED_GET_POS_DU 20
+#define MIXED_GET_POS_OFFSET 10
 #else
 #define SET_POS_DU 20 //[msec], 20ms => 50Hz
 #define SET_POS_OFFSET 0 // offset from SET_POS
@@ -313,7 +317,7 @@ public:
   void update() override;
   
   uint16_t getTTLRS485Mixed() const {return ttl_rs485_mixed_;}
-  void setTTLRS485Mixed(uint16_t flag) {ttl_rs485_mixed_ = flag;}
+  bool setTTLRS485Mixed(uint16_t flag);
   ServoData& getOneServo(uint8_t id);
   uint8_t getServoIndex(uint8_t id);
 
@@ -325,6 +329,7 @@ private:
   uint16_t requested_size_ = 0;
   bool fast_read_pending_ = false;
   bool schedule_initialized_ = false;
+  bool mode_reset_pending_ = false;
   bool rx_recovering_ = false;
   uint32_t rx_quiet_tick_ = 0;
   // Largest Fast Sync reply: 8 + MAX_SERVO_NUM * (10 data + error + ID + CRC16).
@@ -332,6 +337,7 @@ private:
   uint8_t status_frame_[8 + MAX_SERVO_NUM * 14];
   uint16_t queued_periodic_[17] = {}; // per-instruction, per-index coalescing under a slow bus
   void queuePeriodic(uint8_t instruction, uint8_t index);
+  void resetPolling(); // called by the worker while holding the UART mutex
   bool finishPendingRead(); // called while holding the UART mutex
   void discardRx();
   int receiveStatusFrame(bool fast);

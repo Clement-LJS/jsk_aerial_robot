@@ -221,10 +221,14 @@ void DirectServo::servoConfigCallback(const spinal::SetDirectServoConfig::Reques
   /* special case : data[0] is flag value */
   if(command == spinal::SetDirectServoConfig::Request::SET_DYNAMIXEL_TTL_RS485_MIXED)
     {
-      // servo_handler_.setTTLRS485Mixed(req.data[0]);
+      res.success = false;
+      if (req.data_length != 1 || (req.data[0] != 0 && req.data[0] != 1)) return;
+#if DYNAMIXEL
+      if (!servo_handler_.setTTLRS485Mixed(req.data[0])) return;
       FlashMemory::erase();
       FlashMemory::write();
       res.success = true;
+#endif
       return;
     }
 
