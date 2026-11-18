@@ -48,10 +48,10 @@ bool DirectServo::init(UART_HandleTypeDef* huart,  ros::NodeHandle* nh, osMutexI
   nh_->advertiseService(servo_config_srv_);
   nh_->advertiseService(board_info_srv_);
 
-  servo_state_msg_.servos_length = actual_servo_num;
+  servo_state_msg_.servos_length = 0; // capacity is actual_servo_num; publish only initialized entries
   servo_state_msg_.servos = new spinal::ServoState[actual_servo_num];
   servo_torque_state_msg_.torque_enable_length = actual_servo_num;
-  servo_torque_state_msg_.torque_enable = new uint8_t[actual_servo_num];
+  servo_torque_state_msg_.torque_enable = new uint8_t[actual_servo_num]();
 
   servo_last_pub_time_ = 0;
   servo_torque_last_pub_time_ = 0;
@@ -75,46 +75,41 @@ void DirectServo::sendData(bool flag_send_asap)
 {
   uint32_t now_time = HAL_GetTick();
 
-  if (flag_send_asap && servo_handler_.getROSCommFlag() == true)  // This setting will ignore the setting of SERVO_PUB_INTERVAL and pub the information once the measurement is updated.
+  // Preserve immediate-on-feedback and periodic publish gating. Dynamixel's periodic
+  // fallback may only send fresh measurements; a timeout must not re-stamp old data.
+  if ((flag_send_asap && servo_handler_.getROSCommFlag()) ||
+      now_time - servo_last_pub_time_ >= SERVO_PUB_INTERVAL)
   {
-	  servo_state_msg_.stamp = nh_->now();
-      for (unsigned int i = 0; i < servo_handler_.getServoNum(); i++) {
-        const ServoData& s = servo_handler_.getServo()[i];
-        if (s.send_data_flag_ != 0) {
-          spinal::ServoState servo;
-          servo.index = i;
-          servo.angle = s.present_position_;
-          servo.temp = s.present_temp_;
-          servo.load = s.present_current_;
-          servo.error = s.hardware_error_status_;
-          servo_state_msg_.servos[i] = servo;
-        }
-      }
-      servo_state_pub_.publish(&servo_state_msg_);
-      servo_last_pub_time_ = now_time;
-
-      servo_handler_.setROSCommFlag(false);
-  }
-  else
-  {
-  if( now_time - servo_last_pub_time_ >= SERVO_PUB_INTERVAL)
+    servo_state_msg_.stamp = nh_->now();
+    unsigned int count = 0;
+    for (unsigned int i = 0; i < servo_handler_.getServoNum(); ++i)
     {
-	  servo_state_msg_.stamp = nh_->now();
-      for (unsigned int i = 0; i < servo_handler_.getServoNum(); i++) {
-        const ServoData& s = servo_handler_.getServo()[i];
-        if (s.send_data_flag_ != 0) {
-          spinal::ServoState servo;
-          servo.index = i;
-          servo.angle = s.present_position_;
-          servo.temp = s.present_temp_;
-          servo.load = s.present_current_;
-          servo.error = s.hardware_error_status_;
-          servo_state_msg_.servos[i] = servo;
-        }
-      }
+      ServoData& s = servo_handler_.getServo()[i];
+      if (!s.send_data_flag_) continue;
+#if DYNAMIXEL
+      if (!s.feedback_fresh_) continue;
+#endif
+      spinal::ServoState servo;
+      servo.index = i; // retain the driver index even when the outgoing array is compacted
+      servo.angle = s.present_position_;
+#if DYNAMIXEL
+      servo.velocity = s.present_velocity_;
+#else
+      servo.velocity = 0; // Kondo has no measured velocity feedback.
+#endif
+      servo.temp = s.present_temp_;
+      servo.load = s.present_current_;
+      servo.error = s.hardware_error_status_;
+      servo_state_msg_.servos[count++] = servo;
+      s.feedback_fresh_ = false;
+    }
+    servo_state_msg_.servos_length = count;
+    if (count > 0)
+    {
       servo_state_pub_.publish(&servo_state_msg_);
       servo_last_pub_time_ = now_time;
     }
+    servo_handler_.setROSCommFlag(false);
   }
 
   if( now_time - servo_torque_last_pub_time_ >= SERVO_TORQUE_PUB_INTERVAL)

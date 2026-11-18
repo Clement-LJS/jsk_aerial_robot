@@ -3,6 +3,7 @@
   <arg name="real_machine" default="false" />
   <arg name="simulation" default="false" />
   <arg name="robot_ns" default="gimbalrotor" />
+  <arg name="serial_baud" default="2000000" /> <!-- STM32H7_v2; override for legacy firmware -->
 
   <group ns="$(arg robot_ns)">
 
@@ -12,7 +13,7 @@
         <include file="$(find spinal)/launch/bridge.launch" >
           <arg name="mode" value="serial" />
           <arg name="serial_port" value="/dev/flight_controller" />
-          <arg name="serial_baud" value="921600" />
+          <arg name="serial_baud" value="$(arg serial_baud)" />
         </include>
       </group>
 

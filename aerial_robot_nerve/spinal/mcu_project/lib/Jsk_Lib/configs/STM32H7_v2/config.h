@@ -79,7 +79,8 @@
 
 //2.3 Flight Control
 #define FLIGHT_CONTROL_FLAG 1
-#define DSHOT 0
+#define DSHOT 1 // Set to 0 to restore legacy PWM. Verify ESC support before flashing.
+#define DSHOT_TELEMETRY 1 // Set to 0 when KISS telemetry is unavailable.
 //* Do not change following code!!!
 ///////////////////////////////////
 #if !ATTITUDE_ESTIMATE_FLAG

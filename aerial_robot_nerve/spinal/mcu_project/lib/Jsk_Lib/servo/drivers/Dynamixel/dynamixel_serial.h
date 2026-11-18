@@ -149,7 +149,7 @@
 #define HEADER3 				0x00
 #define EXCEPTION_ADDITIONAL_BYTE 0xFD
 
-#define INSTRUCTION_PACKET_SIZE 64
+#define INSTRUCTION_PACKET_SIZE 96 // includes worst-case stuffing for ten 4-byte goal positions
 #define STATUS_PACKET_SIZE 		64
 #define PING_TRIAL_NUM			100
 
@@ -200,11 +200,26 @@
 #define INST_SET_PROFILE_VELOCITY		14
 #define INST_SET_TORQUE					15
 
+#ifndef DYNAMIXEL_USE_FAST_SYNC_READ
+#define DYNAMIXEL_USE_FAST_SYNC_READ STM32H7_V2 // X330 firmware >= 46; set 0 for normal Sync Read
+#endif
+#define COMMAND_FAST_SYNC_READ 0x8A
+#define INST_GET_CUR_VEL_POS 16
+#define PRESENT_CUR_VEL_POS_BYTE_LEN 10 // XC330 registers 126..135: current, velocity, position
+
 //instruction frequency: 0 means no process
+#if STM32H7_V2
+// Nominal 200 Hz schedule, serviced by the existing 1 ms V2 worker; not a measured rate.
+#define SET_POS_DU 5
+#define SET_POS_OFFSET 0
+#define GET_POS_DU 5
+#define GET_POS_OFFSET 2
+#else
 #define SET_POS_DU 20 //[msec], 20ms => 50Hz
 #define SET_POS_OFFSET 0 // offset from SET_POS
 #define GET_POS_DU 20 //[msec], 20ms => 50Hz
 #define GET_POS_OFFSET 10 //offset from GET_POS
+#endif
 #define GET_LOAD_DU 200 //[msec], 200ms => 5Hz
 #define GET_LOAD_OFFSET 0 //offset from GET_LOAD
 #define GET_TEMP_DU 200 //[msec], 200ms => 5Hz
@@ -304,6 +319,26 @@ public:
 
 private:
   bool direct_ttl_mode_;
+  uint8_t requested_ids_[MAX_SERVO_NUM] = {};
+  uint8_t requested_count_ = 0;
+  uint8_t response_index_ = 0;
+  uint16_t requested_size_ = 0;
+  bool fast_read_pending_ = false;
+  bool schedule_initialized_ = false;
+  bool rx_recovering_ = false;
+  uint32_t rx_quiet_tick_ = 0;
+  // Largest Fast Sync reply: 8 + MAX_SERVO_NUM * (10 data + error + ID + CRC16).
+  // Keep this off the V2 worker's small stack.
+  uint8_t status_frame_[8 + MAX_SERVO_NUM * 14];
+  uint16_t queued_periodic_[17] = {}; // per-instruction, per-index coalescing under a slow bus
+  void queuePeriodic(uint8_t instruction, uint8_t index);
+  bool finishPendingRead(); // called while holding the UART mutex
+  void discardRx();
+  int receiveStatusFrame(bool fast);
+  int8_t readFastSyncStatusPacket();
+  int8_t applyStatusData(uint8_t instruction, uint8_t servo_id, const uint8_t* parameters);
+  void cmdReadPresentCurVelPos(uint8_t servo_index);
+  void cmdSyncReadPresentCurVelPos();
 
   RingBufferDx<std::pair<uint8_t, uint8_t>, 64> instruction_buffer_;
 

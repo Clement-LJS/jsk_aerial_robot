@@ -218,15 +218,12 @@ void AttitudeController::pwmsControl(void)
       uint16_t motor_value[4] = { 0, 0, 0, 0 };
       for (int i = 0; i < 4; i++)
         {
-          // target_pwm_: 0.5 ~ 1.0
-          uint16_t motor_v = (uint16_t)((target_pwm_[i] - 0.5) / 0.5 * DSHOT_RANGE + DSHOT_MIN_THROTTLE);
-
-          if (motor_v > DSHOT_MAX_THROTTLE)
-            motor_v = DSHOT_MAX_THROTTLE;
-          else if (motor_v < DSHOT_MIN_THROTTLE)
-            motor_v = DSHOT_MIN_THROTTLE;
-    
-          motor_value[i] = motor_v;
+          // IDLE_DUTY represents stopped/disarmed PWM. Keep DShot command 0;
+          // never cast a negative/NaN value to unsigned or clamp disarm to throttle 48.
+          const float duty = target_pwm_[i];
+          if (!std::isfinite(duty) || duty <= IDLE_DUTY || duty > MAX_PWM) continue;
+          const float throttle = (duty - IDLE_DUTY) / (MAX_PWM - IDLE_DUTY) * DSHOT_RANGE + DSHOT_MIN_THROTTLE;
+          motor_value[i] = (uint16_t)throttle;
         }
 
       dshot_->write(motor_value, dshot_->is_telemetry_);
@@ -244,7 +241,21 @@ void AttitudeController::pwmsControl(void)
 
               float voltage_ave = (float)(dshot_->esc_reader_.esc_msg_1_.voltage + dshot_->esc_reader_.esc_msg_2_.voltage +
                                           dshot_->esc_reader_.esc_msg_3_.voltage + dshot_->esc_reader_.esc_msg_4_.voltage) / 400.0;
-              bat_->update(voltage_ave);
+              // Only a complete round of fresh, CRC-valid, nonzero voltages is a battery sample.
+              if (dshot_->esc_reader_.esc_msg_1_.crc_error == 0 && dshot_->esc_reader_.esc_msg_1_.voltage > 0 &&
+                  dshot_->esc_reader_.esc_msg_2_.crc_error == 0 && dshot_->esc_reader_.esc_msg_2_.voltage > 0 &&
+                  dshot_->esc_reader_.esc_msg_3_.crc_error == 0 && dshot_->esc_reader_.esc_msg_3_.voltage > 0 &&
+                  dshot_->esc_reader_.esc_msg_4_.crc_error == 0 && dshot_->esc_reader_.esc_msg_4_.voltage > 0)
+                {
+                  bat_->update(voltage_ave);
+#if STM32H7_V2
+                  bat_->is_adc_measure_ = false;
+#endif
+                }
+#if STM32H7_V2
+              else
+                bat_->is_adc_measure_ = true; // fallback to the existing ADC on missing/bad telemetry
+#endif
 
               dshot_->esc_reader_.is_update_all_msg_ = false;
             }

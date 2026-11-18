@@ -21,14 +21,16 @@ public:
 
 	uint8_t id_;
   	int32_t present_position_;
+        int32_t present_velocity_ = 0; // signed raw velocity; backends without feedback retain zero
+        bool feedback_fresh_ = false; // consumed by DirectServo after publishing
 	int32_t goal_position_;
         int32_t calib_value_;
 	int32_t homing_offset_;
         int32_t internal_offset_;
-        uint8_t present_temp_;
-	int16_t present_current_;
+        uint8_t present_temp_ = 0;
+	int16_t present_current_ = 0;
 	uint8_t moving_;
-	uint8_t hardware_error_status_;
+	uint8_t hardware_error_status_ = 0;
 	uint16_t p_gain_, i_gain_, d_gain_;
 	uint16_t profile_velocity_;
 	uint16_t current_limit_;

@@ -141,8 +141,17 @@ ServoBridge::ServoBridge(ros::NodeHandle nh, ros::NodeHandle nhp): nh_(nh),nhp_(
               double angle_scale = servo_params.second.hasMember("angle_scale")?
                 servo_params.second["angle_scale"]:servo_group_params.second["angle_scale"];
 
-              double torque_scale = servo_group_params.second.hasMember("torque_scale")?
-                servo_group_params.second["torque_scale"]:(servo_params.second.hasMember("torque_scale")?servo_params.second["torque_scale"]: XmlRpc::XmlRpcValue(1.0));
+              double velocity_scale = 0.0;
+              if(servo_params.second.hasMember("velocity_scale"))
+                velocity_scale = servo_params.second["velocity_scale"];
+              else if(servo_group_params.second.hasMember("velocity_scale"))
+                velocity_scale = servo_group_params.second["velocity_scale"];
+              else
+                ROS_WARN("%s: velocity_scale is absent; joint_states.velocity will be zero.",
+                         string(servo_params.second["name"]).c_str());
+
+              double torque_scale = servo_params.second.hasMember("torque_scale")?
+                servo_params.second["torque_scale"]:(servo_group_params.second.hasMember("torque_scale")?servo_group_params.second["torque_scale"]: XmlRpc::XmlRpcValue(1.0));
 
               /* for low pass filtering */
               bool filter_flag = servo_group_params.second.hasMember("filter_flag")?
@@ -152,7 +161,7 @@ ServoBridge::ServoBridge(ros::NodeHandle nh, ros::NodeHandle nhp): nh_(nh),nhp_(
               double cutoff_freq = servo_group_params.second.hasMember("cutoff_freq")?
                 servo_group_params.second["cutoff_freq"]:(servo_params.second.hasMember("cutoff_freq")?servo_params.second["cutoff_freq"]: XmlRpc::XmlRpcValue(0.0));
 
-              servo_group_handler.push_back(SingleServoHandlePtr(new SingleServoHandle(servo_params.second["name"], servo_params.second["id"], angle_sgn, zero_point_offset, angle_scale, upper_limit, lower_limit, torque_scale, !no_real_state_flags_.at(group_name), filter_flag, sample_freq, cutoff_freq)));
+              servo_group_handler.push_back(SingleServoHandlePtr(new SingleServoHandle(servo_params.second["name"], servo_params.second["id"], angle_sgn, zero_point_offset, angle_scale, velocity_scale, upper_limit, lower_limit, torque_scale, !no_real_state_flags_.at(group_name), filter_flag, sample_freq, cutoff_freq)));
 
               /* rosparam and load controller for gazebo */
               if(simulation_mode_)
@@ -241,6 +250,7 @@ void ServoBridge::servoStatesCallback(const spinal::ServoStatesConstPtr& state_m
               return;
             }
           (*servo_handler)->setCurrAngleVal((double)it.angle, ValueType::BIT); // angle (position)
+          (*servo_handler)->setCurrVelocityVal((double)it.velocity); // rad/s, with mechanical sign
           (*servo_handler)->setCurrTorqueVal((double)it.load); // torque (effort)
         }
 
@@ -279,6 +289,7 @@ void ServoBridge::servoStatesCallback(const spinal::ServoStatesConstPtr& state_m
             }
 
           (*servo_handler)->setCurrAngleVal((double)it.angle, ValueType::BIT); // angle (position)
+          (*servo_handler)->setCurrVelocityVal((double)it.velocity); // rad/s, with mechanical sign
           (*servo_handler)->setCurrTorqueVal((double)it.load); // torque (effort)
 
           ROS_DEBUG("servo index: %d, find in group %s", it.index, servo_group.first.c_str());
@@ -297,6 +308,7 @@ void ServoBridge::servoStatesCallback(const spinal::ServoStatesConstPtr& state_m
         {
           servo_states_msg.name.push_back(servo_handler->getName());
           servo_states_msg.position.push_back(servo_handler->getCurrAngleVal(ValueType::RADIAN));
+          servo_states_msg.velocity.push_back(servo_handler->getCurrVelocityVal());
           servo_states_msg.effort.push_back(servo_handler->getCurrTorqueVal());
         }
     }

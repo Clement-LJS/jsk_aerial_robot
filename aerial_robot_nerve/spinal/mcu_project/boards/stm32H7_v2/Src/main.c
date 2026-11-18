@@ -106,6 +106,7 @@ osThreadId servoTaskHandle;
 osTimerId coreTaskTimerHandle;
 osMutexId rosPubMutexHandle;
 osMutexId flightControlMutexHandle;
+osMutexId servoUartMutexHandle;
 osSemaphoreId coreTaskSemHandle;
 osSemaphoreId uartTxSemHandle;
 /* USER CODE BEGIN PV */
@@ -264,10 +265,13 @@ int main(void)
 
   DShot* dshotptr = nullptr;
 #if DSHOT
-  battery_status_.init(&hadc1, &nh_, false);
+  // Keep the existing ADC available until valid ESC voltage arrives, and on telemetry loss.
+  battery_status_.init(&hadc1, &nh_);
   estimator_.init(&imu_, &baro_, &gps_, &nh_);  // imu + baro + gps => att + alt + pos(xy)
   dshot_.init(DSHOT600, &htim1,TIM_CHANNEL_1, &htim1,TIM_CHANNEL_2, &htim1,TIM_CHANNEL_3, &htim1, TIM_CHANNEL_4);
+#if DSHOT_TELEMETRY
   dshot_.initTelemetry(&huart6);
+#endif
   dshotptr = &dshot_;
 #else
   battery_status_.init(&hadc1, &nh_);
@@ -277,7 +281,7 @@ int main(void)
   FlashMemory::read(); //IMU calib data (including IMU in neurons)
 
   DirectServo* servoptr = nullptr;
-  bool servo_connect = servo_.init(&huart2, &nh_, NULL);
+  bool servo_connect = servo_.init(&huart2, &nh_, &servoUartMutexHandle);
   if(servo_connect) servoptr = &servo_;
 
   controller_.init(&htim1, &htim4, &estimator_, dshotptr, servoptr, &battery_status_, &nh_, &flightControlMutexHandle);
@@ -295,6 +299,11 @@ int main(void)
   /* definition and creation of flightControlMutex */
   osMutexDef(flightControlMutex);
   flightControlMutexHandle = osMutexCreate(osMutex(flightControlMutex));
+
+  /* definition and creation of servoUartMutex (before starting the worker/callback tasks) */
+  osMutexDef(servoUartMutex);
+  servoUartMutexHandle = osMutexCreate(osMutex(servoUartMutex));
+  if (servoUartMutexHandle == NULL) Error_Handler();
 
   /* USER CODE BEGIN RTOS_MUTEX */
   /* add mutexes, ... */
@@ -903,13 +912,13 @@ static void MX_USART1_UART_Init(void)
 
   /* USER CODE END USART1_Init 1 */
   huart1.Instance = USART1;
-  huart1.Init.BaudRate = 921600;
+  huart1.Init.BaudRate = 2000000;
   huart1.Init.WordLength = UART_WORDLENGTH_8B;
   huart1.Init.StopBits = UART_STOPBITS_1;
   huart1.Init.Parity = UART_PARITY_NONE;
   huart1.Init.Mode = UART_MODE_TX_RX;
   huart1.Init.HwFlowCtl = UART_HWCONTROL_NONE;
-  huart1.Init.OverSampling = UART_OVERSAMPLING_16;
+  huart1.Init.OverSampling = UART_OVERSAMPLING_8;
   huart1.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
   huart1.Init.ClockPrescaler = UART_PRESCALER_DIV1;
   huart1.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
@@ -1047,7 +1056,7 @@ static void MX_USART6_UART_Init(void)
 
   /* USER CODE END USART6_Init 1 */
   huart6.Instance = USART6;
-  huart6.Init.BaudRate = 115200;
+  huart6.Init.BaudRate = 460800;
   huart6.Init.WordLength = UART_WORDLENGTH_8B;
   huart6.Init.StopBits = UART_STOPBITS_1;
   huart6.Init.Parity = UART_PARITY_NONE;
@@ -1408,14 +1417,14 @@ void MPU_Config(void)
   */
   MPU_InitStruct.Enable = MPU_REGION_ENABLE;
   MPU_InitStruct.Number = MPU_REGION_NUMBER1;
-  MPU_InitStruct.BaseAddress = 0x24040400;
+  MPU_InitStruct.BaseAddress = 0x24040000; // 16 KB aligned; UART RX and TX share this DMA window
   MPU_InitStruct.Size = MPU_REGION_SIZE_16KB;
   MPU_InitStruct.SubRegionDisable = 0x0;
-  MPU_InitStruct.TypeExtField = MPU_TEX_LEVEL0;
+  MPU_InitStruct.TypeExtField = MPU_TEX_LEVEL1;
   MPU_InitStruct.AccessPermission = MPU_REGION_FULL_ACCESS;
   MPU_InitStruct.DisableExec = MPU_INSTRUCTION_ACCESS_ENABLE;
   MPU_InitStruct.IsShareable = MPU_ACCESS_SHAREABLE;
-  MPU_InitStruct.IsCacheable = MPU_ACCESS_CACHEABLE;
+  MPU_InitStruct.IsCacheable = MPU_ACCESS_NOT_CACHEABLE;
   MPU_InitStruct.IsBufferable = MPU_ACCESS_NOT_BUFFERABLE;
 
   HAL_MPU_ConfigRegion(&MPU_InitStruct);
@@ -1423,7 +1432,7 @@ void MPU_Config(void)
   */
   MPU_InitStruct.Enable = MPU_REGION_ENABLE;
   MPU_InitStruct.Number = MPU_REGION_NUMBER2;
-  MPU_InitStruct.BaseAddress = 0x24044400;
+  MPU_InitStruct.BaseAddress = 0x24044000; // 16 KB aligned; GPS/servo/ESC/DShot DMA window
   MPU_InitStruct.Size = MPU_REGION_SIZE_16KB;
   MPU_InitStruct.SubRegionDisable = 0x0;
   MPU_InitStruct.TypeExtField = MPU_TEX_LEVEL1;

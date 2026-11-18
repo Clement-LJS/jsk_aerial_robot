@@ -21,16 +21,6 @@
 
 #define TELE_VOLTAGE_SCALE 1.022f
 
-namespace
-{
-#ifdef STM32H7
-  uint8_t esc_telem_rx_buf_[ESC_BUFFER_SIZE] __attribute__((section(".EscRxBufferSection")));
-#else
-  uint8_t esc_telem_rx_buf_[ESC_BUFFER_SIZE];
-#endif
-  uint32_t esc_telem_rd_ptr_ = 0;
-}
-
 class ESCReader
 {
 public:
@@ -46,8 +36,7 @@ public:
 
   void init(UART_HandleTypeDef* huart);
   void update(spinal::ESCTelemetry& esc_msg);
-  bool available();
-  int readOneByte();
+  void beginRequest(); // discard unassigned bytes before a request
 
   bool is_update_all_msg_ = false;
 

@@ -74,7 +74,7 @@ namespace ValueType
 class SingleServoHandle
 {
 public:
-  SingleServoHandle(string name, int id, int angle_sgn, double zero_point_offset, double angle_scale, double upper_limit, double lower_limit, double torque_scale, bool receive_real_state, bool filter_flag = false, double sample_freq = 0, double cutoff_freq = 0): name_(name), id_(id), curr_angle_val_(0), target_angle_val_(0), init_target_angle_val_(false), curr_torque_val_(0), angle_sgn_(angle_sgn), zero_point_offset_(zero_point_offset), angle_scale_(angle_scale), upper_limit_(upper_limit), lower_limit_(lower_limit), torque_scale_(torque_scale), receive_real_state_(receive_real_state), filter_flag_(filter_flag)
+  SingleServoHandle(string name, int id, int angle_sgn, double zero_point_offset, double angle_scale, double velocity_scale, double upper_limit, double lower_limit, double torque_scale, bool receive_real_state, bool filter_flag = false, double sample_freq = 0, double cutoff_freq = 0): name_(name), id_(id), curr_angle_val_(0), target_angle_val_(0), init_target_angle_val_(false), curr_torque_val_(0), curr_velocity_val_(0), angle_sgn_(angle_sgn), zero_point_offset_(zero_point_offset), angle_scale_(angle_scale), velocity_scale_(velocity_scale), upper_limit_(upper_limit), lower_limit_(lower_limit), torque_scale_(torque_scale), receive_real_state_(receive_real_state), filter_flag_(filter_flag)
   {
     /* for simulation */
     //joint_ctrl_pub_ = nh_.advertise<std_msgs::Float64>(std::string("/j") + std_  + std::string("_controller/command"), 1);
@@ -120,13 +120,24 @@ public:
     else
       ROS_ERROR("%s: wrong value type", name_.c_str());
 
-    if(!receive_real_state_) curr_angle_val_ = target_angle_val_;
+    if(!receive_real_state_)
+      {
+        curr_angle_val_ = target_angle_val_;
+        curr_velocity_val_ = 0;
+      }
   }
 
   inline void setCurrTorqueVal(const double& val)
   {
     curr_torque_val_ = torque_scale_ * angle_sgn_ * val;
   }
+
+  inline void setCurrVelocityVal(const double& val)
+  {
+    curr_velocity_val_ = velocity_scale_ * angle_sgn_ * val;
+  }
+
+  inline const double getCurrVelocityVal() const { return curr_velocity_val_; }
 
   inline void setTargetTorqueVal(const double& val)
   {
@@ -196,10 +207,12 @@ private:
   double curr_angle_val_; // radian
   double target_angle_val_; // radian
   double curr_torque_val_; // Nm
+  double curr_velocity_val_; // rad/s
   double target_torque_val_; // Nm
   int angle_sgn_;
   int zero_point_offset_;
   double angle_scale_;
+  double velocity_scale_;
   double lower_limit_, upper_limit_;
   double torque_scale_;
 

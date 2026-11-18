@@ -122,6 +122,8 @@ void DynamixelSerial::pinReconfig()
   __HAL_UART_DISABLE_IT(huart_, UART_IT_PE);
   __HAL_UART_DISABLE_IT(huart_, UART_IT_ERR);
   HAL_UART_Receive_DMA(huart_, rx_buf_, RX_BUFFER_SIZE);
+  __HAL_UART_DISABLE_IT(huart_, UART_IT_PE);
+  __HAL_UART_DISABLE_IT(huart_, UART_IT_ERR);
 
   HAL_Delay(500);
 
@@ -163,6 +165,8 @@ void DynamixelSerial::pinReconfig()
   __HAL_UART_DISABLE_IT(huart_, UART_IT_PE);
   __HAL_UART_DISABLE_IT(huart_, UART_IT_ERR);
   HAL_UART_Receive_DMA(huart_, rx_buf_, RX_BUFFER_SIZE);
+  __HAL_UART_DISABLE_IT(huart_, UART_IT_PE);
+  __HAL_UART_DISABLE_IT(huart_, UART_IT_ERR);
 
   HAL_Delay(500);
 
@@ -321,50 +325,104 @@ uint8_t DynamixelSerial::getServoIndex(uint8_t id)
   return 0;
 }
 
+void DynamixelSerial::queuePeriodic(uint8_t instruction, uint8_t index)
+{
+  const uint16_t bit = uint16_t(1) << index;
+  if (queued_periodic_[instruction] & bit) return;
+  if (instruction_buffer_.push(std::make_pair(instruction, index)))
+    queued_periodic_[instruction] |= bit;
+}
+
+bool DynamixelSerial::finishPendingRead()
+{
+  if (!read_status_packet_flag_) return true;
+  read_status_packet_flag_ = false;
+  bool success = requested_count_ > 0;
+  if (fast_read_pending_)
+    success = readFastSyncStatusPacket() == 0;
+  else
+    for (unsigned int i = 0; i < requested_count_; ++i)
+      if (readStatusPacket(instruction_last_.first) != 0) { success = false; break; }
+  if (success && (instruction_last_.first == INST_GET_PRESENT_POS ||
+                  instruction_last_.first == INST_GET_CUR_VEL_POS))
+    setROSCommFlag(true);
+  if (!success)
+  {
+    for (auto& s : servo_) s.feedback_fresh_ = false;
+    setROSCommFlag(false);
+    discardRx();
+    rx_recovering_ = true;
+    rx_quiet_tick_ = HAL_GetTick();
+  }
+  return success;
+}
+
 void DynamixelSerial::update()
 {
   /* skip if no servo is detected */
   if (servo_num_ == 0) return;
 
-  /* receive data process */
-  /* For one round, change from "send -> receive" to " receive -> send" */
-  /* This setting can accelerate the receiving process */
-  if(read_status_packet_flag_) {
-    for (unsigned int i = 0; i < servo_num_; i++) {
-      if(!servo_[i].send_data_flag_ && !servo_[i].first_get_pos_flag_) continue;
-      readStatusPacket(instruction_last_.first);
-    }
-    if (instruction_last_.first == INST_GET_PRESENT_POS)
-    {
-      setROSCommFlag(true);
-    }
+  // Each UART transaction (including its reply) holds the existing driver mutex.
+  // Configuration callbacks cannot overwrite a pending read's IDs/length/instruction.
+  if (rx_recovering_)
+  {
+    const uint32_t wr = (RX_BUFFER_SIZE - __HAL_DMA_GET_COUNTER(huart_->hdmarx)) % RX_BUFFER_SIZE;
+    if (wr != rd_ptr_) rx_quiet_tick_ = HAL_GetTick();
+    rd_ptr_ = wr;
+    // After a failed/truncated reply, require two quiet worker ticks before reusing the bus.
+    if (HAL_GetTick() - rx_quiet_tick_ < 2) return;
+    rx_recovering_ = false;
   }
-  read_status_packet_flag_ = false;
-
   uint32_t current_time = HAL_GetTick();
+#if STM32H7_V2
+  if (!schedule_initialized_)
+  {
+    set_pos_tick_ = current_time + SET_POS_OFFSET;
+    get_pos_tick_ = current_time + GET_POS_OFFSET;
+    schedule_initialized_ = true;
+  }
+#endif
 
   /* send position command to servo */
+#if STM32H7_V2
+  if ((int32_t)(current_time - set_pos_tick_) >= 0) {
+    // Skip missed slots instead of accumulating duplicate commands after a long operation.
+    set_pos_tick_ += ((current_time - set_pos_tick_) / SET_POS_DU + 1) * SET_POS_DU;
+#else
   if(current_time >= set_pos_tick_ + SET_POS_DU && SET_POS_DU > 0) {
     if (set_pos_tick_ == 0) set_pos_tick_ = current_time + SET_POS_OFFSET; // init
     else set_pos_tick_ = current_time;
+#endif
 
-    instruction_buffer_.push(std::make_pair(INST_SET_GOAL_POS, 0));
+    queuePeriodic(INST_SET_GOAL_POS, 0);
   }
 
   /* read servo position(angle) */
+#if STM32H7_V2
+  const uint8_t position_instruction = INST_GET_CUR_VEL_POS;
+#else
+  const uint8_t position_instruction = INST_GET_PRESENT_POS;
+#endif
+#if STM32H7_V2
+  if ((int32_t)(current_time - get_pos_tick_) >= 0) {
+    // Skip missed slots instead of accumulating duplicate commands after a long operation.
+    get_pos_tick_ += ((current_time - get_pos_tick_) / GET_POS_DU + 1) * GET_POS_DU;
+#else
   if(current_time >= get_pos_tick_ + GET_POS_DU && GET_POS_DU > 0) {
     if (get_pos_tick_ == 0) get_pos_tick_ = current_time + GET_POS_OFFSET; // init
     else get_pos_tick_ = current_time;
+#endif
 
     if (ttl_rs485_mixed_ != 0) {
       for (unsigned int i = 0; i < servo_num_; ++i) {
-        instruction_buffer_.push(std::make_pair(INST_GET_PRESENT_POS, i));
+        queuePeriodic(position_instruction, i);
       }
     } else {
-      instruction_buffer_.push(std::make_pair(INST_GET_PRESENT_POS, 0));
+      queuePeriodic(position_instruction, 0);
     }
   }
 
+#if !STM32H7_V2 // V2 current is included in the contiguous feedback read.
   /* read servo load */
 
   if(current_time >= get_load_tick_ + GET_LOAD_DU && GET_LOAD_DU > 0) {
@@ -373,12 +431,14 @@ void DynamixelSerial::update()
 
     if (ttl_rs485_mixed_ != 0) {
       for (unsigned int i = 0; i < servo_num_; ++i) {
-        instruction_buffer_.push(std::make_pair(INST_GET_PRESENT_CURRENT, i));
+        queuePeriodic(INST_GET_PRESENT_CURRENT, i);
       }
     } else {
-      instruction_buffer_.push(std::make_pair(INST_GET_PRESENT_CURRENT, 0));
+      queuePeriodic(INST_GET_PRESENT_CURRENT, 0);
     }
   }
+
+#endif
 
   /* read servo temperature */
 
@@ -388,10 +448,10 @@ void DynamixelSerial::update()
 
     if (ttl_rs485_mixed_ != 0) {
       for (unsigned int i = 0; i < servo_num_; ++i) {
-        instruction_buffer_.push(std::make_pair(INST_GET_PRESENT_TEMPERATURE, i));
+        queuePeriodic(INST_GET_PRESENT_TEMPERATURE, i);
       }
     } else {
-      instruction_buffer_.push(std::make_pair(INST_GET_PRESENT_TEMPERATURE, 0));
+      queuePeriodic(INST_GET_PRESENT_TEMPERATURE, 0);
     }
   }
 
@@ -402,10 +462,10 @@ void DynamixelSerial::update()
 
     if (ttl_rs485_mixed_ != 0) {
       for (unsigned int i = 0; i < servo_num_; ++i) {
-        instruction_buffer_.push(std::make_pair(INST_GET_PRESENT_MOVING, i));
+        queuePeriodic(INST_GET_PRESENT_MOVING, i);
       }
     } else {
-      instruction_buffer_.push(std::make_pair(INST_GET_PRESENT_MOVING, 0));
+      queuePeriodic(INST_GET_PRESENT_MOVING, 0);
     }
   }
 
@@ -416,10 +476,10 @@ void DynamixelSerial::update()
 
     if (ttl_rs485_mixed_ != 0) {
       for (unsigned int i = 0; i < servo_num_; ++i) {
-        instruction_buffer_.push(std::make_pair(INST_GET_HARDWARE_ERROR_STATUS, i));
+        queuePeriodic(INST_GET_HARDWARE_ERROR_STATUS, i);
       }
     } else {
-      instruction_buffer_.push(std::make_pair(INST_GET_HARDWARE_ERROR_STATUS, 0));
+      queuePeriodic(INST_GET_HARDWARE_ERROR_STATUS, 0);
     }
   }
 
@@ -429,6 +489,8 @@ void DynamixelSerial::update()
   while(instruction_buffer_.pop(instruction))
     {
       uint8_t servo_index = instruction.second;
+      if (instruction.first < 17)
+        queued_periodic_[instruction.first] &= ~(uint16_t(1) << servo_index);
 
       if (mutex_ != NULL)  osMutexWait(*mutex_, osWaitForever);
 
@@ -459,6 +521,12 @@ void DynamixelSerial::update()
       /* get command */
       if (ttl_rs485_mixed_ != 0) {
         switch (instruction.first) {
+        case INST_GET_CUR_VEL_POS:
+          if(!servo_[servo_index].send_data_flag_ && !servo_[servo_index].first_get_pos_flag_) break;
+          cmdReadPresentCurVelPos(servo_index);
+          if (readStatusPacket(instruction.first) == 0) setROSCommFlag(true);
+          else { discardRx(); rx_recovering_ = true; rx_quiet_tick_ = HAL_GetTick(); }
+          break;
         case INST_GET_PRESENT_POS: /* read servo position(angle) */
           if(!servo_[servo_index].send_data_flag_ && !servo_[servo_index].first_get_pos_flag_) break;
           cmdReadPresentPosition(servo_index);
@@ -513,6 +581,10 @@ void DynamixelSerial::update()
         }
       } else {
         switch (instruction.first) {
+        case INST_GET_CUR_VEL_POS:
+          cmdSyncReadPresentCurVelPos();
+          read_status_packet_flag_ = requested_count_ > 0;
+          break;
         case INST_GET_PRESENT_POS: /* read servo position(angle) */
           cmdSyncReadPresentPosition(false);
           read_status_packet_flag_ = true;
@@ -558,7 +630,12 @@ void DynamixelSerial::update()
         }
       }
 
+      const bool read_sent = read_status_packet_flag_;
+      finishPendingRead();
       if (mutex_ != NULL) osMutexRelease(*mutex_);
+      // Service at most one read transaction per worker iteration. Slow buses coalesce
+      // cyclic work instead of overwriting unread replies or growing a command backlog.
+      if (read_sent || rx_recovering_) break;
     }
 }
 
@@ -566,210 +643,139 @@ void DynamixelSerial::update()
 void DynamixelSerial::transmitInstructionPacket(uint8_t id, uint16_t len, uint8_t instruction, uint8_t* parameters)
 {
   uint8_t transmit_data[INSTRUCTION_PACKET_SIZE];
-  /* headers */
-  transmit_data[0] = HEADER0;
-  transmit_data[1] = HEADER1;
-  transmit_data[2] = HEADER2;
-  transmit_data[3] = HEADER3;
-  /* servo id */
+  transmit_data[0] = HEADER0; transmit_data[1] = HEADER1;
+  transmit_data[2] = HEADER2; transmit_data[3] = HEADER3;
   transmit_data[4] = id;
-  /* instruction len */
-  transmit_data[5] = len & 0xFF; //LEN_L
-  transmit_data[6] = (len >> 8) & 0xFF; //LEN_H
-  /* instruction */
   transmit_data[7] = instruction;
-  /* parameters */
-  //process for exception
-  int header_match_count = 0;
-  int transmit_data_index = 8;
-  for (int i = 0; i < len - 3; i++) {
-    uint8_t tx_data = parameters[i];
-    if (header_match_count == 0) {
-      if (tx_data == HEADER0) header_match_count++;
-      else header_match_count = 0;
-      transmit_data[transmit_data_index] = tx_data;
-      transmit_data_index++;
-    } else if (header_match_count == 1) {
-      if (tx_data == HEADER1) header_match_count++;
-      else header_match_count = 0;
-      transmit_data[transmit_data_index] = tx_data;
-      transmit_data_index++;
-    } else if (header_match_count == 2) {
-      if (tx_data == HEADER2) {
-        //exception
-        transmit_data[transmit_data_index] = tx_data;
-        transmit_data_index++;
-        transmit_data[transmit_data_index] = EXCEPTION_ADDITIONAL_BYTE;
-        transmit_data_index++;
-      } else {
-        header_match_count = 0;
-        transmit_data[transmit_data_index] = tx_data;
-        transmit_data_index++;
-      }
-    }
+  unsigned int next = 8;
+  for (unsigned int i = 0; i + 3 < len; ++i)
+  {
+    if (next + 3 >= sizeof(transmit_data)) return;
+    transmit_data[next++] = parameters[i];
+    if (next >= 10 && transmit_data[next - 3] == HEADER0 && transmit_data[next - 2] == HEADER1 &&
+        transmit_data[next - 1] == HEADER2)
+      transmit_data[next++] = EXCEPTION_ADDITIONAL_BYTE;
   }
-
-  /* checksum */
-  uint16_t chksum = calcCRC16(0, transmit_data, transmit_data_index);
-
-  transmit_data[transmit_data_index] = chksum & 0xFF; //CRC_L
-  transmit_data_index++;
-  transmit_data[transmit_data_index] = (chksum >> 8) & 0xFF; //CRC_H
-  transmit_data_index++;
-
-  /* send data */
-  if(direct_ttl_mode_)  HAL_HalfDuplex_EnableTransmitter(huart_);
-
-  HAL_UART_Transmit(huart_, transmit_data, transmit_data_index, 10); //timeout: 10 ms. Although we found 2 ms is enough OK for our case by oscilloscope. Large value is better for UART async task in RTOS.
+  // Protocol length includes stuffed bytes; CRC is calculated on the wire representation.
+  const uint16_t wire_len = next - 7 + 2;
+  transmit_data[5] = wire_len & 0xff;
+  transmit_data[6] = wire_len >> 8;
+  const uint16_t crc = calcCRC16(0, transmit_data, next);
+  transmit_data[next++] = crc & 0xff;
+  transmit_data[next++] = crc >> 8;
+  if(direct_ttl_mode_) HAL_HalfDuplex_EnableTransmitter(huart_);
+  HAL_UART_Transmit(huart_, transmit_data, next, 10);
+  // Blocking transmit waits for TC. Switch now, before a zero-delay servo reply can arrive.
+  if(direct_ttl_mode_) HAL_HalfDuplex_EnableReceiver(huart_);
 }
 /* Receive status packet to Dynamixel */
+void DynamixelSerial::discardRx()
+{
+  rd_ptr_ = (RX_BUFFER_SIZE - __HAL_DMA_GET_COUNTER(huart_->hdmarx)) % RX_BUFFER_SIZE;
+}
+
+int DynamixelSerial::receiveStatusFrame(bool fast)
+{
+  const uint32_t start = HAL_GetTick();
+  const uint8_t header[] = {HEADER0, HEADER1, HEADER2, HEADER3};
+  unsigned int size = 0;
+  unsigned int total = 7;
+  while (size < total)
+  {
+    if (HAL_GetTick() - start >= 10) return -1; // bounded even with a continuous malformed stream
+    uint8_t byte;
+    if (read(&byte, 1) != HAL_OK) return -1;
+    if (size < 4 && byte != header[size]) return -1;
+    status_frame_[size++] = byte;
+    if (size == 7)
+    {
+      total = 7 + (uint16_t)(status_frame_[5] | (uint16_t(status_frame_[6]) << 8));
+      if (total < 11 || total > sizeof(status_frame_)) return -1;
+      if (fast && (requested_count_ == 0 || total != 8 + requested_count_ * 14)) return -1;
+    }
+  }
+  const uint16_t crc = status_frame_[total-2] | (uint16_t(status_frame_[total-1]) << 8);
+  if (crc != calcCRC16(0, status_frame_, total-2)) return -1;
+  if (fast) return total; // Fast Sync status has NO byte stuffing (ROBOTIS Protocol 2.0).
+
+  unsigned int out = 7;
+  for (unsigned int in = 7; in < total-2; ++in)
+  {
+    status_frame_[out++] = status_frame_[in];
+    if (out >= 10 && status_frame_[out-3] == HEADER0 &&
+        status_frame_[out-2] == HEADER1 && status_frame_[out-1] == HEADER2)
+    {
+      if (++in >= total-2 || status_frame_[in] != EXCEPTION_ADDITIONAL_BYTE) return -1;
+    }
+  }
+  return out; // unstuffed header/instruction/error/parameters, excluding CRC
+}
+
 int8_t DynamixelSerial::readStatusPacket(uint8_t status_packet_instruction)
 {
-	int status_stage = READ_HEADER0;
-	uint8_t rx_data;
-	int header_match_count = 0;
-	uint16_t parameter_len = 0;
-	uint8_t parameters[STATUS_PACKET_SIZE];
-	int parameter_index = 0;
-	int parameter_loop_count = 0;
-	uint16_t checksum = 0;
-	uint8_t receive_data[STATUS_PACKET_SIZE];
-	bool read_end_flag = false;
-	int loop_count = 0;
-	uint8_t servo_id;
+  const int size = receiveStatusFrame(false);
+  if (size < 9 || status_frame_[7] != STATUS_PACKET_INSTRUCTION ||
+      (status_frame_[8] & 0x7f) != ERROR_NO_ERROR) return -1;
+  const uint8_t servo_id = status_frame_[4];
+  if (status_packet_instruction == INST_PING)
+  {
+    if (size != 12 || servo_id > 252 || servo_num_ >= MAX_SERVO_NUM) return -1;
+    if (std::find(servo_.begin(), servo_.end(), ServoData(servo_id)) != servo_.end()) return -1;
+  }
+  else
+  {
+    if (response_index_ >= requested_count_ || servo_id != requested_ids_[response_index_] ||
+        size != 9 + requested_size_) return -1;
+    ++response_index_;
+  }
+  return applyStatusData(status_packet_instruction, servo_id, status_frame_ + 9);
+}
 
-        if(direct_ttl_mode_) {
-          while (__HAL_UART_GET_FLAG(huart_, UART_FLAG_TC) == RESET) {}
-          // After transmitting, enable the receiver
-          HAL_HalfDuplex_EnableReceiver(huart_);
-        }
+int8_t DynamixelSerial::readFastSyncStatusPacket()
+{
+  const int size = receiveStatusFrame(true);
+  if (size < 0 || status_frame_[4] != DX_BROADCAST_ID ||
+      status_frame_[7] != STATUS_PACKET_INSTRUCTION) return -1;
+  // Validate the entire chain before modifying any servo. The final CRC covers the
+  // aggregate packet, including intermediate CRCs; no byte unstuffing is performed.
+  for (unsigned int i = 0; i < requested_count_; ++i)
+  {
+    const unsigned int offset = 8 + i * 14;
+    if ((status_frame_[offset] & 0x7f) != ERROR_NO_ERROR ||
+        status_frame_[offset+1] != requested_ids_[i]) return -1;
+  }
+  for (unsigned int i = 0; i < requested_count_; ++i)
+    if (applyStatusData(INST_GET_CUR_VEL_POS, requested_ids_[i], status_frame_ + 10 + i * 14) != 0)
+      return -1;
+  return 0;
+}
 
-	while(!read_end_flag) {
-		HAL_StatusTypeDef receive_status = read(&rx_data, 1);
-		if(receive_status == HAL_TIMEOUT)
-			{
-				return -1;
-			}
-
-		switch (status_stage) {
-		case READ_HEADER0:
-			if (rx_data == HEADER0) {
-				status_stage++;
-			}
-			break;
-		case READ_HEADER1:
-			if (rx_data == HEADER1) {
-				status_stage++;
-			} else {
-				return -1;
-			}
-			break;
-		case READ_HEADER2:
-			if (rx_data == HEADER2) {
-				status_stage++;
-			} else {
-				return -1;
-			}
-			break;
-		case READ_HEADER3:
-			if (rx_data == HEADER3) {
-				status_stage++;
-			} else {
-				return -1;
-			}
-			break;
-		case READ_SERVOID:
-			servo_id = rx_data;
-			status_stage++;
-			break;
-		case READ_LENL:
-			parameter_len = rx_data;
-			status_stage++;
-			break;
-		case READ_LENH:
-			parameter_len |= ((rx_data << 8) & 0xFF00);
-			status_stage++;
-			break;
-		case READ_INSTRUCTION:
-			if (rx_data == STATUS_PACKET_INSTRUCTION) {
-				status_stage++;
-			} else {
-				return -1;
-			}
-			break;
-		case READ_ERROR:
-			if ((rx_data & 0x7F) == ERROR_NO_ERROR) {
-				status_stage++;
-			} else {
-				return -1;
-			}
-			break;
-		case READ_PARAMETER:
-			//process for exception
-			if (header_match_count == 0) {
-				if (rx_data == HEADER0) header_match_count++;
-				else header_match_count = 0;
-				parameters[parameter_index] = rx_data;
-				parameter_index++;
-			} else if (header_match_count == 1) {
-				if (rx_data == HEADER1) header_match_count++;
-				else header_match_count = 0;
-				parameters[parameter_index] = rx_data;
-				parameter_index++;
-			} else if (header_match_count == 2) {
-				if (rx_data == HEADER2) header_match_count++;
-				else header_match_count = 0;
-				parameters[parameter_index] = rx_data;
-				parameter_index++;
-			} else if (header_match_count == 3) {
-				if (rx_data == EXCEPTION_ADDITIONAL_BYTE) {
-					header_match_count = 0;
-				} else {
-					return -1;
-				}
-			}
-			parameter_loop_count++;
-			if (parameter_loop_count == parameter_len - 4) {
-				status_stage++;
-			}
-			break;
-		case READ_CHECKSUML:
-			checksum = rx_data;
-			status_stage++;
-			break;
-		case READ_CHECKSUMH:
-			checksum |= ((rx_data << 8) & 0xFF00);
-			if (checksum == calcCRC16(0, receive_data, loop_count)) {
-				read_end_flag = true;
-			} else {
-				return -1;
-			}
-			break;
-		default:
-			return -1;
-		}
-		if (status_stage > READ_HEADER0 && status_stage != READ_CHECKSUMH) {
-			receive_data[loop_count] = rx_data;
-			loop_count++;
-		}
-	}
-
-	auto s = std::find(servo_.begin(), servo_.end(), ServoData(servo_id));
-
-        /* clear UART RX */
-        __HAL_UART_CLEAR_FLAG(huart_, UART_FLAG_RXNE);
-        __HAL_UART_CLEAR_PEFLAG(huart_);
-        __HAL_UART_CLEAR_OREFLAG(huart_);
-        __HAL_UART_CLEAR_FEFLAG(huart_);
-
-	/* read success */
+int8_t DynamixelSerial::applyStatusData(uint8_t status_packet_instruction, uint8_t servo_id, const uint8_t* parameters)
+{
+  auto s = std::find(servo_.begin(), servo_.begin() + servo_num_, ServoData(servo_id));
+  if (status_packet_instruction != INST_PING && s == servo_.begin() + servo_num_) return -1;
 	switch (status_packet_instruction) {
 	case INST_PING:
 		servo_[servo_num_++].id_ = servo_id;
 	    return 0;
+  case INST_GET_CUR_VEL_POS:
+  {
+    // Preserve the position path's internal/external encoder and offset handling.
+    if (applyStatusData(INST_GET_PRESENT_POS, servo_id, parameters + 6) != 0) return -1;
+    s->present_current_ = int16_t(uint16_t(parameters[0]) | (uint16_t(parameters[1]) << 8));
+    const uint32_t raw = uint32_t(parameters[2]) | (uint32_t(parameters[3]) << 8) |
+                         (uint32_t(parameters[4]) << 16) | (uint32_t(parameters[5]) << 24);
+    // Copy the signed two's-complement bits without signed-shift overflow.
+    memcpy(&s->present_velocity_, &raw, sizeof(raw));
+    s->feedback_fresh_ = true;
+    return 0;
+  }
 	case INST_GET_PRESENT_POS:
 	{
-		int32_t present_position = ((parameters[3] << 24) & 0xFF000000) | ((parameters[2] << 16) & 0xFF0000) | ((parameters[1] << 8) & 0xFF00) | (parameters[0] & 0xFF);
+		const uint32_t raw_position = uint32_t(parameters[0]) | (uint32_t(parameters[1]) << 8) |
+                                      (uint32_t(parameters[2]) << 16) | (uint32_t(parameters[3]) << 24);
+        int32_t present_position;
+        memcpy(&present_position, &raw_position, sizeof(raw_position));
 		if (s != servo_.end()) {
                   s->hardware_error_status_ &= ((1 << ENCODER_CONNECT_ERROR) - 1); // &= 0b01111111
                   if(s->external_encoder_flag_) {
@@ -787,9 +793,10 @@ int8_t DynamixelSerial::readStatusPacket(uint8_t status_packet_instruction)
                     }
                     else {
                       s->hardware_error_status_ |= 1 << ENCODER_CONNECT_ERROR; // |= 0b10000000:  encoder is not connected
+                      return -1;
                     }
 #else
-                    return 0;
+                    return -1; // no external encoder sample is available on Spinal
 #endif
                   }
                   else {
@@ -799,6 +806,11 @@ int8_t DynamixelSerial::readStatusPacket(uint8_t status_packet_instruction)
                     }
                     s->setPresentPosition(present_position);
                   }
+#if !STM32H7_V2
+                  s->feedback_fresh_ = true;
+#endif
+                  // V2 only marks the combined current/velocity/position sample fresh.
+                  // A position-only calibration read must not republish an old velocity.
 		}
                 return 0;
 	}
@@ -862,6 +874,12 @@ void DynamixelSerial::cmdReboot(uint8_t id)
 
 void DynamixelSerial::cmdRead(uint8_t id, uint16_t address, uint16_t byte_size)
 {
+  discardRx();
+  requested_ids_[0] = id;
+  requested_count_ = 1;
+  response_index_ = 0;
+  requested_size_ = byte_size;
+  fast_read_pending_ = false;
 	uint8_t parameters[INSTRUCTION_PACKET_SIZE];
 	parameters[0] = address & 0xFF;
 	parameters[1] = (address >> 8) & 0xFF;
@@ -883,6 +901,11 @@ void DynamixelSerial::cmdWrite(uint8_t id, uint16_t address, uint8_t* param, int
 
 void DynamixelSerial::cmdSyncRead(uint16_t address, uint16_t byte_size, bool send_all)
 {
+  discardRx();
+  requested_count_ = 0;
+  response_index_ = 0;
+  requested_size_ = byte_size;
+  fast_read_pending_ = false;
 	uint8_t parameters[INSTRUCTION_PACKET_SIZE];
 	parameters[0] = address & 0xFF;
 	parameters[1] = (address >> 8) & 0xFF;
@@ -892,8 +915,14 @@ void DynamixelSerial::cmdSyncRead(uint16_t address, uint16_t byte_size, bool sen
 	for (unsigned int i = 0; i < servo_num_; i++) {
           if(!send_all && !servo_[i].send_data_flag_ && !servo_[i].first_get_pos_flag_) continue;
           parameters[param_idx++] = servo_[i].id_;
+          requested_ids_[requested_count_++] = servo_[i].id_;
 	}
-	transmitInstructionPacket(DX_BROADCAST_ID, param_idx + 3, COMMAND_SYNC_READ, parameters);
+  if (!requested_count_) return;
+#if DYNAMIXEL_USE_FAST_SYNC_READ
+  fast_read_pending_ = address == CTRL_PRESENT_CURRENT && byte_size == PRESENT_CUR_VEL_POS_BYTE_LEN;
+#endif
+  transmitInstructionPacket(DX_BROADCAST_ID, param_idx + 3,
+                            fast_read_pending_ ? COMMAND_FAST_SYNC_READ : COMMAND_SYNC_READ, parameters);
 }
 
 void DynamixelSerial::cmdSyncWrite(uint16_t address, uint8_t* param, int param_len)
@@ -942,6 +971,16 @@ void DynamixelSerial::cmdReadPositionGains(uint8_t servo_index)
 void DynamixelSerial::cmdReadPresentCurrent(uint8_t servo_index)
 {
 	cmdRead(servo_[servo_index].id_, CTRL_PRESENT_CURRENT, PRESENT_CURRENT_BYTE_LEN);
+}
+
+void DynamixelSerial::cmdReadPresentCurVelPos(uint8_t servo_index)
+{
+  cmdRead(servo_[servo_index].id_, CTRL_PRESENT_CURRENT, PRESENT_CUR_VEL_POS_BYTE_LEN);
+}
+
+void DynamixelSerial::cmdSyncReadPresentCurVelPos()
+{
+  cmdSyncRead(CTRL_PRESENT_CURRENT, PRESENT_CUR_VEL_POS_BYTE_LEN, false);
 }
 
 void DynamixelSerial::cmdReadPresentPosition(uint8_t servo_index)
@@ -1253,12 +1292,13 @@ HAL_StatusTypeDef DynamixelSerial::read(uint8_t* data,  uint32_t timeout)
   /* handle RX Overrun Error */
   if ( __HAL_UART_GET_FLAG(huart_, UART_FLAG_ORE) )
     {
-      __HAL_UART_CLEAR_FLAG(huart_, UART_FLAG_RXNE);
-      __HAL_UART_CLEAR_PEFLAG(huart_);
-      __HAL_UART_CLEAR_OREFLAG(huart_);
-      __HAL_UART_CLEAR_FEFLAG(huart_);
-
+      HAL_UART_AbortReceive(huart_); // abort clears flags and flushes the UART receive register
+      rd_ptr_ = 0;
+      memset(rx_buf_, 0, RX_BUFFER_SIZE);
       HAL_UART_Receive_DMA(huart_, rx_buf_, RX_BUFFER_SIZE);
+      __HAL_UART_DISABLE_IT(huart_, UART_IT_PE);
+      __HAL_UART_DISABLE_IT(huart_, UART_IT_ERR);
+      return HAL_ERROR;
     }
 
   uint32_t tick_start = HAL_GetTick();

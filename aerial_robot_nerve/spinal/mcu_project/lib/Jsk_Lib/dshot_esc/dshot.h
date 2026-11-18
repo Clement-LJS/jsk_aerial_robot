@@ -17,7 +17,14 @@
 
 /* User Configuration */
 // Timer Clock
-#define TIMER_CLOCK 100000000  // 100MHz
+#if STM32H7_V2
+#define TIMER_CLOCK 200000000 // V2 TIM1: RCC.Tim1OutputFreq_Value in spinal.ioc
+#else
+#define TIMER_CLOCK 100000000 // Preserve the legacy board setting.
+#endif
+
+#define ESC_TELEM_REQUEST_DIVIDER 1
+#define ESC_TELEM_SLOT_COUNT 5 // slot 0 idle, slots 1-4 request ESC 1-4
 
 /* Definition */
 #define MHZ_TO_HZ(x) ((x) * 1000000)
@@ -39,21 +46,6 @@
 
 #define DSHOT_CMD_SPIN_DIRECTION_1 7
 #define DSHOT_CMD_SPIN_DIRECTION_2 8
-
-namespace
-{
-#ifdef STM32H7
-  uint32_t motor1_dmabuffer_[DSHOT_DMA_BUFFER_SIZE] __attribute__((section(".DShotBufferSection1")));
-  uint32_t motor2_dmabuffer_[DSHOT_DMA_BUFFER_SIZE] __attribute__((section(".DShotBufferSection2")));
-  uint32_t motor3_dmabuffer_[DSHOT_DMA_BUFFER_SIZE] __attribute__((section(".DShotBufferSection3")));
-  uint32_t motor4_dmabuffer_[DSHOT_DMA_BUFFER_SIZE] __attribute__((section(".DShotBufferSection4")));
-#else
-  uint32_t motor1_dmabuffer_[DSHOT_DMA_BUFFER_SIZE];
-  uint32_t motor2_dmabuffer_[DSHOT_DMA_BUFFER_SIZE];
-  uint32_t motor3_dmabuffer_[DSHOT_DMA_BUFFER_SIZE];
-  uint32_t motor4_dmabuffer_[DSHOT_DMA_BUFFER_SIZE];
-#endif
-}
 
 /* Enumeration */
 typedef enum
@@ -105,10 +97,12 @@ private:
   uint16_t dshot_prepare_packet(uint16_t value, bool dshot_telemetry);
   void dshot_prepare_dmabuffer(uint32_t* motor_dmabuffer, uint16_t value, bool is_telemetry);
   void dshot_prepare_dmabuffer_all(uint16_t* motor_value, bool* is_telemetry);
-  void dshot_dma_start();
+  bool dshot_dma_start();
   void dshot_enable_dma_request();
 
-  int num_freq_divide = 0;  // make sure that the freq for telemetry is < 150hz
+  uint32_t motor_bit_0_ = MOTOR_BIT_0;
+  uint32_t motor_bit_1_ = MOTOR_BIT_1;
+  int num_freq_divide = 0;
 };
 
 #endif  // DSHOT_H

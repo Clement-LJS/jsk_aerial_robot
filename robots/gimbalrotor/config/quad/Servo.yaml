@@ -2,6 +2,8 @@ servo_controller:
   gimbals:
     angle_sgn: -1
     angle_scale: 0.001534
+    velocity_scale: 0.02398082 # rad/s per raw XC330 velocity unit
+    torque_scale: 0.00064 # PR #122 reference per raw current unit (1 mA); Nm calibration unverified
     zero_point_offset: 2047
 
     controller1:
