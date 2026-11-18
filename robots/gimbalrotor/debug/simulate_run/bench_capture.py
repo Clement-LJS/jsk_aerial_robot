@@ -60,7 +60,6 @@ class Capture:
         self.start_time = time.monotonic()
         self.directory, self.run_lock = create_run(args.output)
         print('Capture directory: ' + str(self.directory), flush=True)
-        print('USB recorder: run capture_usb.py in another terminal from the same parent directory; no --output needed.', flush=True)
         self.log_file = (self.directory / 'events.jsonl').open('w', buffering=1)
         self.recorder_log = (self.directory / 'recorder.log').open('w')
         try:

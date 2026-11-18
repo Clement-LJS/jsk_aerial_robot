@@ -169,7 +169,23 @@ CHANGE_REPORT.txt
 
 The `fakes/STM32Hardware.h` file was a host test substitute, not the production STM32 hardware driver. The removed text report is replaced by this Markdown document. None of these removed files was referenced by the production build configuration checked during cleanup. The seven production source/configuration files and refreshed generated firmware headers were retained without further functional edits.
 
-Existing workspace build products, earlier bag-analysis artifacts and temporary validation/build records were left in place. They are generated outputs, not additional production source changes, and should not be included in source-code commits.
+In a subsequent local cleanup on 2026-11-18, the user requested removal of the other debug files that are not needed by `bench_capture.py`. The historical `debug/inspection/` and `debug/results/` directories, offline reproduction script and source manifest, old debug instructions, optional USB recorder and bench launch, remaining debug tests, and Python caches were removed. The obsolete `gimbalrotor/inspection` compatibility symlink was removed with its target. The `gimbalrotor/simulate_run` compatibility symlink was retained.
+
+This report was moved into `robots/gimbalrotor/debug/rosserial_fix/rosserial_fix_20261118.md`. The complete ROS recording and automatic-analysis workflow retains these seven files under `debug/simulate_run/`:
+
+```text
+bench_capture.py
+capture_paths.py
+passive_monitor.py
+payload_checks.py
+capture_context.py
+summarize_capture.py
+event_context.py
+```
+
+The recorder's startup message advertising the removed optional `capture_usb.py` was removed. Recording, monitoring, metadata collection and automatic analysis logic were not changed. The deleted material is no longer available at its former workspace paths; the validation results above describe the earlier implementation session.
+
+External recordings under `/home/clement/rosbag/`, existing workspace build products and temporary validation/build records under `/tmp/` were left in place. Generated build outputs should not be included in source-code commits. No commit, push, flashing or robot process restart was performed during this cleanup.
 
 ## Build and deployment handoff
 
