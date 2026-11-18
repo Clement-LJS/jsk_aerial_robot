@@ -51,6 +51,21 @@ const int SPIN_UNAVAILABLE = -3;
   {
     typedef NodeHandle_<STM32Hardware, MAX_SUBSCRIBERS, MAX_PUBLISHERS, INPUT_SIZE, OUTPUT_SIZE> parent;
 
+#if SUPPORT_RTOS
+    // Separate from STM32Hardware's TX queue mutex. initNode runs once in the
+    // core task; publication stays disabled until both transport and lock exist.
+    osMutexId publication_mutex_ = nullptr;
+
+    void initPublicationMutex()
+    {
+      if (publication_mutex_ == nullptr)
+      {
+        osMutexDef(rosSerialization);
+        publication_mutex_ = osRecursiveMutexCreate(osMutex(rosSerialization));
+      }
+    }
+#endif
+
   public:
 
     NodeHandleStm_(): parent::NodeHandle_()
@@ -64,6 +79,7 @@ const int SPIN_UNAVAILABLE = -3;
                   osSemaphoreId* semaphore){
       parent::initNode();
       parent::hardware_.init(port, mutex, semaphore);
+      initPublicationMutex();
     };
 #endif
 
@@ -73,8 +89,33 @@ const int SPIN_UNAVAILABLE = -3;
     {
       parent::initNode();
       parent::hardware_.init(dst_addr, src_port, dst_port);
+#if SUPPORT_RTOS
+      initPublicationMutex();
+#endif
     }
 #endif
+
+    // All Publisher::publish(), negotiation and log messages dispatch here.
+    // Lock the shared message_out before serialization, through the queue copy.
+    int publish(int id, const Msg* msg) override
+    {
+#if SUPPORT_RTOS
+      // Blocking mutex APIs cannot be used in an interrupt. Fail closed on early
+      // publication or allocation failure; logging here would recurse.
+      if (__get_IPSR() != 0 || publication_mutex_ == nullptr)
+        return -1;
+      if (osRecursiveMutexWait(publication_mutex_, osWaitForever) != osOK)
+        return -1;
+
+      // The parent's oversize-message error path publishes a log recursively.
+      // A recursive lock handles that without reusing the TX queue mutex.
+      const int result = parent::publish(id, msg);
+      osRecursiveMutexRelease(publication_mutex_);
+      return result;
+#else
+      return parent::publish(id, msg);
+#endif
+    }
 
     /* This function goes in your loop() function, it handles
      *  serial tx data and ouput for publishers.
