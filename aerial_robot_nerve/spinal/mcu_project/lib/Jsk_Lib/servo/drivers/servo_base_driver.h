@@ -16,10 +16,21 @@
 
 class ServoData {
 public:
-	ServoData(){}
-  ServoData(uint8_t id): id_(id), torque_enable_(false), first_get_pos_flag_(true), internal_offset_(0){}
+	ServoData(): ServoData(255) {}
+  explicit ServoData(uint8_t id): id_(id), present_position_(0), goal_position_(0),
+    calib_value_(0), homing_offset_(0), internal_offset_(0), present_temp_(0),
+    present_current_(0), moving_(0), hardware_error_status_(0), p_gain_(0), i_gain_(0),
+    d_gain_(0), profile_velocity_(0), current_limit_(0), send_data_flag_(0),
+    external_encoder_flag_(0), joint_offset_(0), joint_resolution_(1), servo_resolution_(1),
+    resolution_ratio_(1), led_(false), torque_enable_(false), first_get_pos_flag_(true),
+    angle_scale_(0), zero_point_offset_(2047) {}
 
 	uint8_t id_;
+        // Runtime-only validity; these fields are not registered in flash.
+        bool position_valid_ = false;
+        bool position_updated_ = false;
+        uint32_t position_tick_ = 0;
+        int32_t raw_position_ = 0;
   	int32_t present_position_;
 	int32_t goal_position_;
         int32_t calib_value_;
@@ -93,7 +104,7 @@ protected:
   uint32_t get_temp_tick_;
   uint32_t get_move_tick_;
   uint32_t get_error_tick_;
-  uint16_t ttl_rs485_mixed_;
+  uint16_t ttl_rs485_mixed_ = 1;
 
   /* uart rx */
   uint32_t rd_ptr_;

@@ -341,7 +341,7 @@ int main(void)
   coreTaskHandle = osThreadCreate(osThread(coreTask), NULL);
 
   /* definition and creation of rosSpinTask */
-  osThreadDef(rosSpinTask, rosSpinTaskFunc, osPriorityNormal, 0, 256);
+  osThreadDef(rosSpinTask, rosSpinTaskFunc, osPriorityNormal, 0, 512);
   rosSpinTaskHandle = osThreadCreate(osThread(rosSpinTask), NULL);
 
   /* definition and creation of idleTask */
@@ -361,7 +361,7 @@ int main(void)
   canRxHandle = osThreadCreate(osThread(canRx), NULL);
 
   /* definition and creation of servoTask */
-  osThreadDef(servoTask, ServoTaskCallback, osPriorityRealtime, 0, 256);
+  osThreadDef(servoTask, ServoTaskCallback, osPriorityRealtime, 0, 512);
   servoTaskHandle = osThreadCreate(osThread(servoTask), NULL);
 
   /* USER CODE BEGIN RTOS_THREADS */

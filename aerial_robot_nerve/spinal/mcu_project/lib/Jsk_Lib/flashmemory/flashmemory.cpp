@@ -59,13 +59,13 @@ namespace FlashMemory {
     return status;
   }
 
-  void erase(){
+  bool erase(){
     HAL_StatusTypeDef r;
 
     lock = true;
 
     r = HAL_FLASH_Unlock();
-    if( r != HAL_OK ) return;
+    if (r != HAL_OK) { lock = false; return false; }
 
     FLASH_EraseInitTypeDef EraseInitStruct;
     uint32_t SectorError = 0;
@@ -78,21 +78,25 @@ namespace FlashMemory {
     EraseInitStruct.VoltageRange = FLASH_VOLTAGE_RANGE_3;
 
     r = HAL_FLASHEx_Erase(&EraseInitStruct, &SectorError);
-    if ( r != HAL_OK ) return;
-    r = HAL_FLASH_Lock();
+    const bool erased = r == HAL_OK;
+    const bool locked = HAL_FLASH_Lock() == HAL_OK;
+    if (!erased || !locked) lock = false;
+    return erased && locked;
   }
 
-  void write(){
+  bool write(){
     HAL_StatusTypeDef r;
+    lock = true;
+    bool ok = true;
 
     r = HAL_FLASH_Unlock();
-    if( r != HAL_OK ) return;
+    if (r != HAL_OK) { lock = false; return false; }
 
     uint32_t data_address = m_data_address;
 #ifdef STM32F7
-    for (unsigned int i = 0; i != data.size(); i++){
-      for (unsigned int j = 0; j != data[i].size; j++) {
-        HAL_FLASH_Program(FLASH_TYPEPROGRAM_BYTE, data_address + j, *(static_cast<uint8_t*>(data[i].ptr) + j));
+    for (unsigned int i = 0; ok && i != data.size(); i++){
+      for (unsigned int j = 0; ok && j != data[i].size; j++) {
+        ok = HAL_FLASH_Program(FLASH_TYPEPROGRAM_BYTE, data_address + j, *(static_cast<uint8_t*>(data[i].ptr) + j)) == HAL_OK;
       }
       data_address += data[i].size;
     }
@@ -101,30 +105,45 @@ namespace FlashMemory {
 #ifdef STM32H7
 
     /* the minimum write size in STM32H7 is FLASH_TYPEPROGRAM_FLASHWORD, which is size of 256 bit = 32byte. So we have to carefully calcuate the required amount of FLASHWORD to write. */
-    uint8_t temp_data[FLASHWORD_SIZE];
-    memset(temp_data, 0, FLASHWORD_SIZE);
+    alignas(32) uint8_t temp_data[FLASHWORD_SIZE];
+    memset(temp_data, 0xff, FLASHWORD_SIZE);
     uint8_t byte_cnt = 0;
 
-    for (unsigned int i = 0; i != data.size(); i++){
-      for (unsigned int j = 0; j != data[i].size; j++) {
+    for (unsigned int i = 0; ok && i != data.size(); i++){
+      for (unsigned int j = 0; ok && j != data[i].size; j++) {
         memcpy(temp_data + byte_cnt, static_cast<uint8_t*>(data[i].ptr) + j, 1);
         byte_cnt++;
         if (byte_cnt == FLASHWORD_SIZE){
-          HAL_FLASH_Program(FLASH_TYPEPROGRAM_FLASHWORD, data_address, (uint32_t)temp_data);
+          ok = HAL_FLASH_Program(FLASH_TYPEPROGRAM_FLASHWORD, data_address, reinterpret_cast<uintptr_t>(temp_data)) == HAL_OK;
           data_address += 32;
           byte_cnt = 0;
+          memset(temp_data, 0xff, FLASHWORD_SIZE);
         }
       }
     }
-    if (byte_cnt > 0){
-      HAL_FLASH_Program(FLASH_TYPEPROGRAM_FLASHWORD, data_address, (uint32_t)temp_data); // residual data
+    if (ok && byte_cnt > 0){
+      ok = HAL_FLASH_Program(FLASH_TYPEPROGRAM_FLASHWORD, data_address, reinterpret_cast<uintptr_t>(temp_data)) == HAL_OK; // residual data
     }
 
 #endif
 
     r = HAL_FLASH_Lock();
-
+    ok = ok && r == HAL_OK;
+    // Verify persisted bytes, not merely the RAM copy used by get_board_info.
+    size_t bytes = 0;
+    for (const Data& value : data) bytes += value.size;
+#if defined(STM32H7) || defined(STM32F7)
+    const uint32_t aligned = m_data_address & ~31u;
+    SCB_InvalidateDCache_by_Addr(reinterpret_cast<uint32_t*>(aligned),
+                               (bytes + m_data_address - aligned + 31u) & ~31u);
+#endif
+    data_address = m_data_address;
+    for (const Data& value : data) {
+      if (ok && memcmp(value.ptr, reinterpret_cast<const void*>(data_address), value.size) != 0) ok = false;
+      data_address += value.size;
+    }
     lock = false;
+    return ok;
   }
 
   bool isLock() {

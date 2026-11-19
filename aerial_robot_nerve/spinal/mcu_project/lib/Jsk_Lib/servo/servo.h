@@ -64,6 +64,21 @@ public:
   }
 
 private:
+#if SUPPORT_RTOS
+  osMutexId transaction_mutex_ = nullptr;
+#endif
+  // Flight-control callers only stage targets; the servo task applies them.
+  struct PendingControl {
+    float goal = 0;
+    uint8_t type = 0;
+    bool goal_pending = false;
+    bool torque = false;
+    bool torque_pending = false;
+  };
+  PendingControl pending_control_[MAX_SERVO_NUM];
+  void applyPendingControl();
+  uint32_t feedback_warning_tick_ = 0;
+  uint32_t reported_read_failures_ = 0;
   /* ROS */
   ros::NodeHandle* nh_;
   ros::Subscriber<spinal::ServoControlCmd, DirectServo> servo_ctrl_sub_;

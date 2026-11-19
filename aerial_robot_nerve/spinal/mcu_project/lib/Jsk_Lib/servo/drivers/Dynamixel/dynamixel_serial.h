@@ -149,7 +149,7 @@
 #define HEADER3 				0x00
 #define EXCEPTION_ADDITIONAL_BYTE 0xFD
 
-#define INSTRUCTION_PACKET_SIZE 64
+#define INSTRUCTION_PACKET_SIZE 128
 #define STATUS_PACKET_SIZE 		64
 #define PING_TRIAL_NUM			100
 
@@ -198,6 +198,7 @@
 #define INST_SET_HOMING_OFFSET			12
 #define INST_SET_POSITION_GAINS			13
 #define INST_SET_PROFILE_VELOCITY		14
+#define INST_GET_REGISTER                16
 #define INST_SET_TORQUE					15
 
 //instruction frequency: 0 means no process
@@ -291,6 +292,8 @@ public:
   void setTorque(uint8_t servo_index) override;
   void setTorqueFromPresetnPos(uint8_t servo_index) override;
   void setHomingOffset(uint8_t servo_index) override;
+  bool calibrateHomingOffset(uint8_t servo_index, int32_t target);
+  uint32_t getReadFailures() const { return read_failures_; }
   void setRoundOffset(uint8_t servo_index, int32_t ref_value) override;
   void setPositionGains(uint8_t servo_index) override;
   void setProfileVelocity(uint8_t servo_index) override;
@@ -305,9 +308,13 @@ public:
 private:
   RingBufferDx<std::pair<uint8_t, uint8_t>, 64> instruction_buffer_;
 
-  // a new and quicker method to read servo data
-  bool read_status_packet_flag_ = false;
-  std::pair<uint8_t, uint8_t> instruction_last_ = std::make_pair(255, 255);
+  uint16_t expected_replies_ = 0;
+  uint16_t expected_size_ = 0;
+  uint32_t read_failures_ = 0;
+  bool recover_rx_ = false;
+  uint8_t register_data_[4] = {};
+  void prepareRead();
+  bool readRegister(uint8_t servo_index, uint16_t address, uint16_t size);
 
 
   void transmitInstructionPacket(uint8_t id, uint16_t len, uint8_t instruction, uint8_t* parameters);
@@ -356,7 +363,7 @@ private:
   inline void getPositionGains() override;
   inline void getProfileVelocity() override;
 
-  uint16_t calcCRC16(uint16_t crc_accum, uint8_t *data_blk_ptr, int data_blk_size);
+
 };
 
 
