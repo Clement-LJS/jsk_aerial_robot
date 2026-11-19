@@ -471,7 +471,7 @@ private:
   void taskCommandCallback(const std_msgs::UInt64ConstPtr&, const std::string& action);
   bool snapshotModel(roll_yaw::Kinematics&, std::string&);
   roll_yaw::Feedback feedback() const;
-  std::string contactRejection(const roll_yaw::Feedback&, bool* hard_fault = nullptr) const;
+  std::string contactSafetyRejection(const roll_yaw::Feedback&, bool* hard_fault = nullptr) const;
   mutable double contact_body_stamp_ = -1, contact_joint_stamp_ = -1;
   mutable std::uint64_t contact_session_ = 0;
   mutable bool contact_hard_fault_ = false;

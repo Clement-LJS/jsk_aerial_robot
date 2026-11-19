@@ -80,7 +80,7 @@ navigation:
       # Effort shares the angle/rate sample; header and steady receipt age <=
       # feedback_timeout, future <= future_tolerance, full sample span <=
       # feedback_sync_tolerance. Duplicate stamps cannot refresh an observation;
-      # backwards/gapped/invalid inputs clear tare and use the existing hold path.
+      # backwards/gapped/invalid inputs pause forcing and retain the session tare.
       # YAML selects supported joint names, sources/topics, gains and limits only.
       # Different serial order/contact/DOF/task/actuation maps need a code adapter.
       # Reduced model retains all masses/inertias at the captured internal gimbal
@@ -90,8 +90,9 @@ navigation:
       # at setup. Hand/lock servos and rotor gimbals are not feedback dependencies.
       # Missing/stale/invalid required inputs still invalidate the estimate.
       # Generalized N.m residual includes approximation error, not an exact Cartesian wrench.
-      # Rotor spin momentum is omitted. Data/model invalidity clears the compliance
-      # baseline; raw observation automatically rebases without tare or relock.
+      # Rotor spin momentum is omitted. Temporary data/computation failures rebase
+      # observation without erasing a completed tare. New lock/model/source
+      # identities require an explicitly requested unloaded tare.
     # Enable/capture once, then navigate. Optional intentional setup: z -> ready-HOLD -> b.
     # Rezero uses only the configured passive hinge, with measured active joints frozen.
     pitch_rezero_target_pitch: 0.0
@@ -145,6 +146,8 @@ navigation:
     feedback_timeout: 0.15
     future_tolerance: 0.02
     feedback_sync_tolerance: 0.05
+    # Model-quality warnings only; finite residuals do not veto observation/motion.
+    # Physical operating limits and essential feedback validity remain enforced.
     pivot_tolerance: 0.01
     hinge_residual_tolerance: 0.03
     # Prepared-path feed/preparation allowances; not fault thresholds for pushes.

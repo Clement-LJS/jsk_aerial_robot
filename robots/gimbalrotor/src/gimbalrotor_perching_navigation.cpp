@@ -4394,7 +4394,7 @@ void GimbalrotorPerchingNavigator::faultHold(const std::string& why)
   if(roll_yaw_pitch_rezero_state_ != RollYawPitchRezeroState::IDLE && !roll_yaw_pitch_rezero_failed_)
     failRollYawPitchRezero(why);
 }
-std::string GimbalrotorPerchingNavigator::contactRejection(const roll_yaw::Feedback& f, bool* hard_fault) const
+std::string GimbalrotorPerchingNavigator::contactSafetyRejection(const roll_yaw::Feedback& f, bool* hard_fault) const
 {
   if(hard_fault)
     *hard_fault = roll_yaw::feedbackStatus(f, feedback_config_, planning_config_) == roll_yaw::FeedbackStatus::FAULT;
@@ -4430,14 +4430,8 @@ std::string GimbalrotorPerchingNavigator::contactRejection(const roll_yaw::Feedb
       contact_hard_fault_ = true;
       return "measured mechanism/body outside operating limits";
     }
-    if(contact.pivot_error > feedback_config_.pivot_tolerance ||
-       contact.hinge_residual > feedback_config_.hinge_tolerance)
-    {
-      std::ostringstream why;
-      why << "pivot=" << contact.pivot_error << "/" << feedback_config_.pivot_tolerance
-          << " m; hinge=" << contact.hinge_residual << "/" << feedback_config_.hinge_tolerance << " rad";
-      return why.str();
-    }
+    // Finite pivot/hinge mismatch describes model quality, not lost feedback
+    // or detached contact. Physical limits remain enforced below.
     if(!roll_yaw::mechanismAllowed(model_, q, planning_config_, why))
     {
       contact_hard_fault_ = true;
@@ -4539,7 +4533,7 @@ void GimbalrotorPerchingNavigator::motionCallback(const gimbalrotor::RollYawMoti
       {
         const auto f = feedback();
         if(faulted_ || !f.hover || feedback_waiting_ || !model_check_.available || !dynamics_snapshot_valid_ ||
-           roll_yaw_pitch_rezero_state_ != RollYawPitchRezeroState::IDLE || !contactRejection(f).empty())
+           roll_yaw_pitch_rezero_state_ != RollYawPitchRezeroState::IDLE || !contactSafetyRejection(f).empty())
           reason_ = "claim rejected: require valid held contact/model feedback";
         else if(pitch_velocity_.active || manual_tracking_ || retarget_pending_ || jog_.active || jog_pending_ ||
            stop_pending_ || prepare_pending_ || planner_ ||
@@ -4736,7 +4730,7 @@ bool GimbalrotorPerchingNavigator::admitPitchVelocity(double rate, double receip
     return reject("require valid enabled HOVER contact/configuration");
   if(roll_yaw_pitch_rezero_state_ != RollYawPitchRezeroState::IDLE)
     return reject("pitch rezero owns reference");
-  const auto why = contactRejection(f);
+  const auto why = contactSafetyRejection(f);
   if(!why.empty())
     return reject(why);
   if(feedback_waiting_ && (f.body_stamp <= recovery_body_stamp_ || f.joint_stamp <= recovery_joint_stamp_))
@@ -4927,7 +4921,7 @@ bool GimbalrotorPerchingNavigator::admitPitchJog(double delta)
     return reject("require valid enabled HOVER contact/configuration");
   if(roll_yaw_pitch_rezero_state_ != RollYawPitchRezeroState::IDLE)
     return reject("pitch rezero owns reference");
-  std::string error = contactRejection(f);
+  std::string error = contactSafetyRejection(f);
   if(!error.empty())
     return reject(error);
   const auto from = final_target_;
@@ -4969,7 +4963,7 @@ void GimbalrotorPerchingNavigator::finishPitchJog(const std::string& phase, cons
   const auto f = feedback();
   double measured_pitch = std::numeric_limits<double>::quiet_NaN(), cross;
   double endpoint_error = std::numeric_limits<double>::quiet_NaN();
-  if(contactRejection(f).empty())
+  if(contactSafetyRejection(f).empty())
   {
     roll_yaw::taskPitch(jog_.start.linear(), f.body.linear(), jog_.progress, measured_pitch, cross);
     endpoint_error = roll_yaw::logSO3(f.body.linear().transpose() * jog_.endpoint).norm();
@@ -5040,7 +5034,7 @@ bool GimbalrotorPerchingNavigator::setNominalTarget(const Eigen::Vector3d& targe
   if(!target.allFinite())
     return reject("nonfinite mechanism target");
   const auto f = feedback();
-  const auto why = contactRejection(f);
+  const auto why = contactSafetyRejection(f);
   if(!why.empty())
     return reject(why);
   if(feedback_waiting_ && (f.body_stamp <= recovery_body_stamp_ || f.joint_stamp <= recovery_joint_stamp_))
@@ -5397,7 +5391,7 @@ void GimbalrotorPerchingNavigator::requestRollYaw(const std::string& action, std
     reason_ = "orientation request rejected during fault/setup";
     return;
   }
-  const auto rejection = contactRejection(feedback());
+  const auto rejection = contactSafetyRejection(feedback());
   if(!rejection.empty())
   {
     reason_ = rejection;
@@ -5587,7 +5581,7 @@ void GimbalrotorPerchingNavigator::requestRollYaw(const std::string& action, std
 }
 std::string GimbalrotorPerchingNavigator::preparationTrackingRejection(const roll_yaw::Feedback& f, const roll_yaw::Reference& held) const
 {
-  auto why = contactRejection(f);
+  auto why = contactSafetyRejection(f);
   if(!why.empty())
     return why;
   roll_yaw::Estimate e;
@@ -5718,7 +5712,7 @@ aerial_robot_control::RollYawInteractionInput GimbalrotorPerchingNavigator::inte
           synchronization_tolerance_, last_body_message_stamp_, last_joint_message_stamp_,
           roll_yaw_lock_stamp_.toNSec(), producer_generation_, roll_, yaw_, world_, body_frame_, roll_yaw_prefix_,
           dynamics_factory_, dynamics_snapshot_current_,
-          [this](const roll_yaw::Feedback& sample) { return contactRejection(sample); },
+          [this](const roll_yaw::Feedback& sample) { return contactSafetyRejection(sample); },
           [this](const roll_yaw::Feedback& sample) { return preparationRejection(sample, final_target_); },
           !pitch_velocity_.active && !manual_tracking_ && final_target_.velocity.norm() < 1e-5,
           preparation_ready_ && f.body_omega.norm() < feedback_config_.settle_body_rate &&
@@ -5730,7 +5724,8 @@ aerial_robot_control::RollYawInteractionInput GimbalrotorPerchingNavigator::inte
           .5 * local_pitch_.rate_limit, .5 * local_pitch_.acceleration_limit,
           nominal_held, !faulted_ && !feedback_waiting_ && model_check_.available &&
           last_body_message_stamp_ == f.body_stamp && last_joint_message_stamp_ == f.joint_stamp &&
-          (planner_ ? preparationTrackingRejection(f, final_target_).empty() : tracking)};
+          (planner_ ? preparationTrackingRejection(f, final_target_).empty() : tracking),
+          model_check_.available && !model_check_.valid};
 }
 
 void GimbalrotorPerchingNavigator::resetCompliance()
@@ -5823,7 +5818,7 @@ void GimbalrotorPerchingNavigator::rollYawPitchRezeroCallback(const std_msgs::Em
     publishRollYawDiagnostics();
     return;
   }
-  const auto why = contactRejection(f);
+  const auto why = contactSafetyRejection(f);
   if(!why.empty())
   {
     reason_ = "pitch rezero rejected: " + why;
@@ -6057,7 +6052,7 @@ void GimbalrotorPerchingNavigator::applyRollYawTarget()
     interaction->observeArticulatedSample(interactionInput(f), f);
   observer_wall_ = roll_yaw::steadySeconds() - observer_started;
   bool hard_fault = false;
-  const auto why = !model_check_.available ? "model unavailable: " + model_check_.describe() : contactRejection(f, &hard_fault);
+  const auto why = !model_check_.available ? "model unavailable: " + model_check_.describe() : contactSafetyRejection(f, &hard_fault);
   if(hard_fault)
     faultHold(why);
   const bool recovery_pending = feedback_waiting_ &&
@@ -6403,7 +6398,7 @@ void GimbalrotorPerchingNavigator::updateRollYaw()
     // Normal observation advancement and ordinary target refresh do not cancel
     // work. Only an urgent owner event or actual loss of eligibility does.
     bool commit_hard_fault = false;
-    const auto commit_rejection = lock_valid_ ? contactRejection(current, &commit_hard_fault) : std::string();
+    const auto commit_rejection = lock_valid_ ? contactSafetyRejection(current, &commit_hard_fault) : std::string();
     commit_feedback_valid_ = commit_rejection.empty();
     if(commit_hard_fault)
     {
@@ -6634,7 +6629,7 @@ void GimbalrotorPerchingNavigator::publishRollYawDiagnostics()
   diagnostic.hardware_id = "perching_lock_" + std::to_string(session.data);
   diagnostic.level = faulted_ ? diagnostic_msgs::DiagnosticStatus::ERROR
                      : (feedback_waiting_ || hold_reason_ != HoldReason::NONE ||
-                        (lock_valid_ && !contactRejection(f).empty()) || prepare_pending_ ||
+                        (lock_valid_ && !contactSafetyRejection(f).empty()) || prepare_pending_ ||
                         (planner_ && planner_->progress_lag))
                          ? diagnostic_msgs::DiagnosticStatus::WARN
                          : diagnostic_msgs::DiagnosticStatus::OK;
@@ -6682,7 +6677,7 @@ void GimbalrotorPerchingNavigator::publishRollYawDiagnostics()
   field("body_pitch_target_rad", pitch_target_.angle);
   field("body_pitch_target_progress_rad", pitch_target_.progress);
   field("body_pitch_target_reference_complete", pitch_target_.complete && !pitch_velocity_.active);
-  const double pitch_target_error = pitch_target_.valid && pitch_target_.frame_valid && contactRejection(f).empty()
+  const double pitch_target_error = pitch_target_.valid && pitch_target_.frame_valid && contactSafetyRejection(f).empty()
       ? roll_yaw::logSO3((pitch_target_.start * roll_yaw::expSO3(Eigen::Vector3d::UnitY() * pitch_target_.angle)).transpose() *
                         f.body.linear()).norm() : nan;
   field("body_pitch_target_measured_error_rad", pitch_target_error);
@@ -6692,7 +6687,7 @@ void GimbalrotorPerchingNavigator::publishRollYawDiagnostics()
   field("manual_callback_wall_s", manual_wall_);
   const bool jog_valid = lock_valid_ && jog_.session == roll_yaw_lock_stamp_.toNSec() && jog_.session != 0;
   double jog_measured = nan, jog_cross = nan, jog_error = nan;
-  if(jog_valid && contactRejection(f).empty())
+  if(jog_valid && contactSafetyRejection(f).empty())
   {
     if(!roll_yaw::taskPitch(jog_.start.linear(), f.body.linear(), jog_.progress, jog_measured, jog_cross))
       jog_measured = nan;
@@ -6721,7 +6716,7 @@ void GimbalrotorPerchingNavigator::publishRollYawDiagnostics()
   field("body_pitch_jog_max_delta_rad", body_pitch_jog_max_delta_);
   field("prepared_connection_pending", connection_pending_);
   double alignment_error = nan;
-  if(planner_ && planner_->plan.ok && planner_->plan.goal.align_only && contactRejection(f).empty())
+  if(planner_ && planner_->plan.ok && planner_->plan.goal.align_only && contactSafetyRejection(f).empty())
     alignment_error =
         roll_yaw::logSO3(f.body.linear().transpose() * planner_->plan.align.desired(planner_->plan.align.duration()).rotation)
             .norm();
@@ -6773,6 +6768,9 @@ void GimbalrotorPerchingNavigator::publishRollYawDiagnostics()
   field("pivot_limit_m", feedback_config_.pivot_tolerance);
   field("hinge_residual_rad", lock_valid_ ? measured_contact_.hinge_residual : nan);
   field("hinge_limit_rad", feedback_config_.hinge_tolerance);
+  field("contact_model_warning", lock_valid_ &&
+        (measured_contact_.pivot_error > feedback_config_.pivot_tolerance ||
+         measured_contact_.hinge_residual > feedback_config_.hinge_tolerance));
   field("effective_body_tracking_error_rad",
         lock_valid_ ? roll_yaw::logSO3(f.body.linear().transpose() * final_target_.body.linear()).norm() : nan);
   field("effective_body_tracking_limit_rad", feedback_config_.orientation_tolerance);
@@ -6782,7 +6780,7 @@ void GimbalrotorPerchingNavigator::publishRollYawDiagnostics()
   const bool goal_valid = planner_ && planner_->plan.goal.valid() && !planner_->plan.goal.align_only;
   const bool measured_task_valid = goal_valid && planner_->task.valid && !faulted_ &&
                                    f.now - planner_->task.stamp <= feedback_config_.timeout &&
-                                   contactRejection(f).empty();
+                                   contactSafetyRejection(f).empty();
   const bool raw_load_valid = articulatedLoadValid(f);
   const bool fresh_torque = interaction_diagnostic.interaction_valid_ && interaction_diagnostic.interaction_stamp_ > 0 && !faulted_ &&
                             f.now - interaction_diagnostic.interaction_stamp_ <= feedback_config_.timeout &&

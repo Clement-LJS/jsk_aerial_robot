@@ -34,12 +34,15 @@ struct RollYawInteractionInput
   const std::string& prefix;
   const std::function<bool(const roll_yaw::Kinematics&, perching_dynamics::MultilinkModel&, std::string&)>& dynamics_factory;
   const std::function<bool()>& dynamics_snapshot_current;
-  std::function<std::string(const roll_yaw::Feedback&)> contact_rejection, preparation_rejection;
+  // Essential feedback, finite geometry and physical limits; excludes model residual tolerances.
+  std::function<std::string(const roll_yaw::Feedback&)> contact_safety_rejection, preparation_rejection;
   bool reference_held = false, quiet_contact = false;
   double pitch_rate = 0, local_dt = 0, local_rate_limit = 0, local_acceleration_limit = 0;
   // Nominal command completion and measured tracking, independent of quietness
   // and of the enabled compliant correction's position/rate.
   bool nominal_held = false, tracking_held = false;
+  // A verified identity mismatch, distinct from a temporarily unavailable model.
+  bool model_identity_changed = false;
 };
 struct RollYawInteractionOutput
 {

@@ -221,7 +221,8 @@ TEST(Execution,ObservationWaitCancelAlignmentAndRealFaults)
     if(cause==0) bad.body.translation().x()+=.1;
     if(cause==1) bad.eta[1]=2;
     if(cause==2) bad.now=time-1;
-    x.tick(bad); EXPECT_EQ(x.stage,cause==1?Stage::FAULT_HOLD:Stage::PAUSED)<<cause;
+    // Finite pivot mismatch is model quality; joint limits and clock loss still stop.
+    x.tick(bad); EXPECT_EQ(x.stage,cause==1?Stage::FAULT_HOLD: cause==2?Stage::PAUSED:Stage::EXECUTING)<<cause;
     x.tick(feedback(x.target,time+.02));
     EXPECT_EQ(x.stage,cause==1?Stage::FAULT_HOLD:Stage::EXECUTING)<<cause;
   }
@@ -512,10 +513,15 @@ TEST(Regression,RecordedFeedbackOutagesAndHingeExcursionsRetainSessionAndGoal)
     if(scenario==2) bad.joint_stamp-=.06; // timestamp skew above 50 ms
     if(scenario==3) bad.body.linear()*=expSO3(Vec(.0309128,0,0)); // older manual cut
     e.tick(bad);
-    EXPECT_EQ(e.stage,Stage::PAUSED)<<scenario<<": "<<e.reason;
+    EXPECT_EQ(e.stage,scenario==3?Stage::EXECUTING:Stage::PAUSED)<<scenario<<": "<<e.reason;
     EXPECT_EQ(e.session,session); EXPECT_TRUE(e.plan.ok);
     EXPECT_NEAR((e.target.body.matrix()-applied.body.matrix()).norm(),0,1e-12);
     time+=1.6; e.tick(feedback(e.target,time));
+    if(scenario==3) {
+      // The finite hinge residual did not pause. This actual clock gap still must.
+      EXPECT_EQ(e.stage,Stage::PAUSED);
+      time+=.025; e.tick(feedback(e.target,time));
+    }
     EXPECT_EQ(e.stage,Stage::EXECUTING)<<scenario<<": "<<e.reason;
     EXPECT_EQ(e.session,session); EXPECT_EQ(e.plan.goal.pitch_end,goal);
     for(int i=0;i<30000&&e.stage==Stage::EXECUTING;++i)

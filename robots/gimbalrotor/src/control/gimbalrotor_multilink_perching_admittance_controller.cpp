@@ -32,6 +32,7 @@ public:
   void captureModel(const Input&) override;
   void clearModel() override
   {
+    resetCalibration();
     articulated_model_valid_ = false;
     ++observation_epoch_;
     observation_worker_.cancel();
@@ -60,11 +61,13 @@ private:
     double gain = 10;
   };
   SourceSettings readInteractionSource() const;
+  bool effortSettingsValid(const SourceSettings&) const;
   bool loadInteractionSource(const Input&, ros::Subscriber& retired, const SourceSettings&);
   bool interactionConfigurationValid() const;
   void commandWrenchCallback(const Input&, const geometry_msgs::WrenchStampedConstPtr&,
                             const Eigen::Vector3d& offset, double receipt);
-  void invalidateInteraction();
+  void invalidateInteraction(); // Current task sample/filter only; never owns calibration.
+  void resetCalibration(); // Explicit lock/model/source change or admitted operator tare.
   void rejectSample(const Input&, const std::string&);
   bool quietContact(const Input&) const override;
   bool heldContact(const Input&) const override;
@@ -96,16 +99,17 @@ private:
   ros::Publisher generalized_load_pub_, generalized_load_valid_pub_;
   double observer_gain_ = 10;
   perching_dynamics::ObservationFilter observation_filter_;
-  double rejection_since_ = 0, observer_settling_until_ = 0;
+  double observer_settling_until_ = 0;
   struct BodySample { roll_yaw::Feedback feedback; };
   struct JointSample { double stamp; Eigen::Vector3d q, effort; };
   struct CommandSample { double stamp, receipt; Eigen::Matrix<double, 6, 1> wrench; Eigen::Vector3d offset; };
   std::deque<BodySample> body_history_;
   std::deque<JointSample> joint_history_;
   std::deque<CommandSample> command_history_;
-  double filtered_stamp_ = 0;
+  double filtered_stamp_ = 0, observation_start_stamp_ = 0;
   Eigen::VectorXd baseline_, baseline_sum_;
   double baseline_stamp_ = 0;
+  std::uint64_t baseline_session_ = 0;
   perching_dynamics::MultilinkModel articulated_model_;
   std::shared_ptr<const perching_dynamics::MultilinkModel> observation_model_;
   struct Observation
@@ -120,7 +124,7 @@ private:
   };
   roll_yaw::Worker<Observation> observation_worker_;
   bool observation_pending_ = false;
-  std::uint64_t observation_epoch_ = 0;
+  std::uint64_t observation_epoch_ = 0, articulated_session_ = 0;
   perching_dynamics::MomentumObserver momentum_observer_;
   bool articulated_model_valid_ = false, articulated_valid_ = false;
   double articulated_receipt_ = 0, articulated_body_stamp_ = 0, articulated_published_stamp_ = 0;
@@ -295,6 +299,7 @@ void RollYawInteractionRuntime::requestTare()
 void RollYawInteractionRuntime::captureModel(const Input& c)
 {
   updateIdentity(c);
+  resetCalibration(); // Recapturing geometry changes the generalized-coordinate reference.
   articulated_model_valid_ = false;
   if(articulated() && c.dynamics_factory)
     articulated_model_valid_ = c.dynamics_factory(c.model, articulated_model_, articulated_reason_);
@@ -379,6 +384,18 @@ RollYawInteractionRuntime::SourceSettings RollYawInteractionRuntime::readInterac
   return source;
 }
 
+bool RollYawInteractionRuntime::effortSettingsValid(const SourceSettings& settings) const
+{
+  const bool matching_topic = !settings.topic.empty() &&
+      nh_.resolveName(settings.topic) == nh_.resolveName(settings.joint_topic);
+  if(settings.effort_source == "servo_bridge_joint_states") return matching_topic;
+  return settings.effort_source == "gazebo_ode_joint_states" && ros::Time::isSimTime() &&
+      settings.contract == "joint_side_actuation_nm" && settings.units == "Nm" && settings.sign == "urdf" &&
+      matching_topic && !settings.producer.empty() && settings.producer.front() == '/' &&
+      settings.controller == "joint_state_controller/JointStateController" &&
+      settings.description.find("gazebo_ros_control/AerialRobotHWSim") != std::string::npos;
+}
+
 bool RollYawInteractionRuntime::loadInteractionSource(const Input& c, ros::Subscriber& retired,
                                                        const SourceSettings& settings)
 {
@@ -390,7 +407,10 @@ bool RollYawInteractionRuntime::loadInteractionSource(const Input& c, ros::Subsc
     const bool changed = previous != std::make_tuple(interaction_source_name_, observer_gain_, effort_contract_,
                                                     effort_source_, effort_topic_, effort_producer_, effort_source_valid_);
     if(changed)
+    {
+      resetCalibration();
       resetArticulatedSession(c, "interaction source/configuration changed; awaiting coherent dynamics sample");
+    }
     else
       articulated_reason_ = previous_reason;
     return changed;
@@ -414,8 +434,6 @@ bool RollYawInteractionRuntime::loadInteractionSource(const Input& c, ros::Subsc
   effort_source_ = settings.effort_source;
   effort_topic_ = settings.topic;
   effort_producer_ = settings.producer;
-  const bool matching_topic = !effort_topic_.empty() &&
-      nh_.resolveName(effort_topic_) == nh_.resolveName(settings.joint_topic);
   if(effort_source_ == "servo_bridge_joint_states")
   {
     // ServoBridge already applies torque_scale * angle_sgn to the raw load.
@@ -423,7 +441,7 @@ bool RollYawInteractionRuntime::loadInteractionSource(const Input& c, ros::Subsc
     // torque calibration is neither assumed nor required by this adapter.
     effort_producer_ = nh_.resolveName("servo_bridge");
     effort_contract_ = "servo_bridge_nominal_joint_effort";
-    effort_source_valid_ = matching_topic;
+    effort_source_valid_ = effortSettingsValid(settings);
     articulated_reason_ = effort_source_valid_ ? "waiting for synchronized ServoBridge joint effort" :
         "ServoBridge effort topic must match the configured joint-state topic";
     return finish();
@@ -434,12 +452,7 @@ bool RollYawInteractionRuntime::loadInteractionSource(const Input& c, ros::Subsc
   // ODE saves the limited SetForce torque, NOT contact reaction/GetForceTorque
   // or the position PID target. The installed ODE implementation was inspected.
   // No motor constant, gearbox conversion or second URDF sign is applied here.
-  effort_source_valid_ = effort_source_ == "gazebo_ode_joint_states" && ros::Time::isSimTime() &&
-      effort_contract_ == "joint_side_actuation_nm" && settings.units == "Nm" && settings.sign == "urdf" &&
-      matching_topic &&
-      !effort_producer_.empty() && effort_producer_.front() == '/' &&
-      settings.controller == "joint_state_controller/JointStateController" &&
-      settings.description.find("gazebo_ros_control/AerialRobotHWSim") != std::string::npos;
+  effort_source_valid_ = effortSettingsValid(settings);
   articulated_reason_ = effort_source_valid_ ? "waiting for synchronized Gazebo ODE joint-side torque" :
       "unsupported effort source or invalid Gazebo ODE producer/topic/units/sign configuration";
   return finish();
@@ -591,12 +604,7 @@ void RollYawInteractionRuntime::rejectSample(const Input& c, const std::string& 
   articulated_valid_ = false;
   interaction_valid_ = false;
   articulated_reason_ = reason;
-  const double now = roll_yaw::steadySeconds();
-  if(rejection_since_ == 0) rejection_since_ = now;
-  // A brief dropped sample is not a changed contact calibration. Persistent
-  // inconsistency cannot silently retain an armed baseline indefinitely.
-  if(now - rejection_since_ > 2.0 && (admittance_.baseline_ready || tare_requested_))
-    invalidateInteraction();
+  invalidateInteraction(); // Even a prolonged outage retains the same-session tare.
   publishArticulatedLoad(c);
 }
 
@@ -611,6 +619,7 @@ void RollYawInteractionRuntime::invalidateArticulated(const Input& c, const std:
   articulated_reason_ = reason;
   articulated_valid_ = false;
   articulated_receipt_ = 0;
+  articulated_session_ = 0;
   articulated_jacobian_.setZero();
   invalidateInteraction();
   publishArticulatedLoad(c); // Promptly retire a bad sample, including callback-time faults/relocks.
@@ -619,12 +628,14 @@ void RollYawInteractionRuntime::invalidateArticulated(const Input& c, const std:
 void RollYawInteractionRuntime::resetArticulatedSession(const Input& c, const std::string& reason)
 {
   updateIdentity(c);
+  if(!c.lock_valid || (baseline_session_ != 0 && baseline_session_ != c.session))
+    resetCalibration();
+  observation_start_stamp_ = c.feedback.now; // Clock epoch, independent of immutable lock identity.
   articulated_worker_wall_ = 0;
   articulated_worker_tree_calls_ = 0;
   dynamics_joints_.clear();
   body_history_.clear(); joint_history_.clear(); command_history_.clear(); observation_filter_.reset();
   filtered_stamp_ = 0; observer_rates_ready_ = false; observer_gyro_disagreement_.setZero();
-  rejection_since_ = 0;
   articulated_body_stamp_ = articulated_joint_stamp_ = articulated_command_stamp_ = 0;
   articulated_published_stamp_ = 0;
   command_wrench_ = geometry_msgs::WrenchStamped();
@@ -637,16 +648,28 @@ void RollYawInteractionRuntime::invalidateInteraction()
 {
   interaction_valid_ = false;
   interaction_stamp_ = interaction_receipt_ = 0;
-  tare_requested_ = false; // Recovery cannot silently restore a fault-invalidated baseline.
-  baseline_.resize(0); baseline_sum_.resize(0); baseline_stamp_ = 0;
-  // Invalidate all tare/filter/contact history, retaining only the state needed
-  // by the existing bounded braking route. An armed fault NEVER falls back.
+  // Discard stale scalar forcing/dwell/history while preserving the measured
+  // calibration and the bounded correction state needed for hold/braking.
   const auto previous = admittance_;
   admittance_.reset();
+  admittance_.baseline_ready = previous.baseline_ready;
+  admittance_.samples = previous.samples;
+  admittance_.bias = previous.bias;
   admittance_.enabled = previous.enabled;
   admittance_.offset = previous.offset;
   admittance_.rate = previous.rate;
   admittance_.acceleration = previous.acceleration;
+}
+
+void RollYawInteractionRuntime::resetCalibration()
+{
+  tare_requested_ = false;
+  baseline_.resize(0); baseline_sum_.resize(0); baseline_stamp_ = 0;
+  baseline_session_ = 0;
+  admittance_.baseline_ready = false;
+  admittance_.samples = 0;
+  admittance_.bias = 0;
+  invalidateInteraction();
 }
 
 bool RollYawInteractionRuntime::articulatedLoadValid(const Input& c, const roll_yaw::Feedback& f) const
@@ -654,13 +677,14 @@ bool RollYawInteractionRuntime::articulatedLoadValid(const Input& c, const roll_
   const double stamp = momentum_observer_.stamp();
   const double wall_age = roll_yaw::steadySeconds() - articulated_receipt_;
   return interaction_source_ == InteractionSource::ARTICULATED_MOMENTUM && articulated_valid_ &&
-         c.lock_valid && f.hover && articulated_model_valid_ && momentum_observer_.ready() &&
+         c.lock_valid && c.session == articulated_session_ && f.hover &&
+         articulated_model_valid_ && momentum_observer_.ready() &&
          momentum_observer_.load().size() == 3 && momentum_observer_.load().allFinite() &&
          stamp > 0 && f.now - stamp >= -c.feedback_config.future_tolerance &&
          f.now - stamp <= c.feedback_config.timeout &&
          articulated_receipt_ > 0 && wall_age >= 0 && wall_age <= c.feedback_config.timeout &&
          c.last_body_message_stamp == f.body_stamp && c.last_joint_message_stamp == f.joint_stamp &&
-         c.contact_rejection(f).empty();
+         c.contact_safety_rejection(f).empty();
 }
 
 void RollYawInteractionRuntime::publishArticulatedLoad(const Input& c)
@@ -689,7 +713,13 @@ bool RollYawInteractionRuntime::observeArticulatedSample(const Input& c, const r
   auto invalid = [this, &c](const std::string& reason) { invalidateArticulated(c, reason); return false; };
   if(!c.lock_valid || !f.hover)
     return invalid("requires valid synchronized attached HOVER state");
-  const auto contact_error = c.contact_rejection(f);
+  if(c.model_identity_changed)
+  {
+    resetCalibration();
+    articulated_model_valid_ = false; // Remains unusable until an explicit model capture.
+    return invalid("robot topology/inertia/extra modules changed since lock; recapture required");
+  }
+  const auto contact_error = c.contact_safety_rejection(f);
   if(!contact_error.empty())
     return fail("invalid contact/feedback: " + contact_error);
   if(c.last_body_message_stamp != f.body_stamp || c.last_joint_message_stamp != f.joint_stamp)
@@ -697,7 +727,7 @@ bool RollYawInteractionRuntime::observeArticulatedSample(const Input& c, const r
   if(!articulated_model_valid_)
     return invalid("invalid locked dynamics snapshot; recapture with valid inertias and geometry");
   if(!c.dynamics_snapshot_current || !c.dynamics_snapshot_current())
-    return invalid("robot topology/inertia/extra modules changed since lock; recapture required");
+    return invalid("locked dynamics snapshot temporarily unavailable");
   if(!effort_source_valid_ || (effort_source_ == "gazebo_ode_joint_states" && !ros::Time::isSimTime()))
     return invalid("selected joint effort source is unavailable or incorrectly configured");
   const double wall = roll_yaw::steadySeconds();
@@ -721,7 +751,7 @@ bool RollYawInteractionRuntime::observeArticulatedSample(const Input& c, const r
     joint_load[i] = it->second.effort;
   }
   const double input_stamp = command_wrench_.header.stamp.toSec();
-  const double session_stamp = static_cast<double>(c.session) * 1e-9;
+  const double session_stamp = observation_start_stamp_;
   if(f.body_stamp < session_stamp || f.joint_stamp < session_stamp || input_stamp < session_stamp)
     return fail("awaiting body/joint/command samples from the current contact session");
   if(!coherent(input_stamp, command_wrench_receipt_))
@@ -745,6 +775,7 @@ bool RollYawInteractionRuntime::observeArticulatedSample(const Input& c, const r
     const bool ready = momentum_observer_.observe(result->value.momentum, result->value.predicted_rate,
         result->body_stamp, observer_gain_, c.feedback_config.observer_max_interval);
     articulated_reason_ = momentum_observer_.reason();
+    articulated_session_ = result->session;
     articulated_body_stamp_ = result->body_stamp;
     articulated_joint_stamp_ = result->joint_stamp;
     articulated_command_stamp_ = result->command_stamp;
@@ -823,9 +854,6 @@ bool RollYawInteractionRuntime::observeArticulatedSample(const Input& c, const r
   const Eigen::Vector3d rate = observation_filter_.rate;
   Eigen::Matrix3d j;
   if(!c.model.jacobian(q, j)) return invalid("body Jacobian unavailable");
-  Eigen::JacobiSVD<Eigen::Matrix3d> svd(j, Eigen::ComputeFullU | Eigen::ComputeFullV);
-  if(svd.singularValues().minCoeff() < c.planning_config.min_singular_value || j.col(0).squaredNorm() < 1e-10)
-    return fail("singular body Jacobian for generalized-load projection");
   // J(q) maps the filtered measured-coordinate derivative to body-frame rad/s.
   // omega independently differentiates synchronized measured body poses and is
   // filtered/transported into the aligned measured body's axes at sample_stamp.
@@ -833,7 +861,6 @@ bool RollYawInteractionRuntime::observeArticulatedSample(const Input& c, const r
   angular_rate_residual_ = (j * rate - observation_filter_.omega).norm();
   if(!q.allFinite() || !rate.allFinite() || !std::isfinite(angular_rate_residual_))
     return fail("nonfinite measured generalized state or body-rate diagnostic");
-  rejection_since_ = 0;
   joint_load = observation_filter_.effort;
   const Eigen::Vector3d force = observation_filter_.wrench.head<3>();
   const Eigen::Vector3d moment = observation_filter_.wrench.tail<3>();
@@ -841,10 +868,10 @@ bool RollYawInteractionRuntime::observeArticulatedSample(const Input& c, const r
   const auto model = observation_model_;
   const auto offset = command->offset;
   const auto session = c.session, epoch = observation_epoch_;
-  const double body_stamp = sample_stamp, joint_stamp = sample_stamp;
+  const double body_stamp = sample_stamp, joint_stamp = sample_stamp, command_stamp = command->stamp;
   const double receipt = std::min({command->receipt, dynamics_joints_.at(c.roll).receipt, dynamics_joints_.at(c.yaw).receipt});
   observation_pending_ = observation_worker_.submit(
-      [model, q, rate, joint_load, force, moment, offset, session, epoch, body_stamp, joint_stamp, input_stamp, receipt, j]
+      [model, q, rate, joint_load, force, moment, offset, session, epoch, body_stamp, joint_stamp, command_stamp, receipt, j]
       (const std::function<bool()>& cancelled)
       {
         Observation result;
@@ -852,7 +879,7 @@ bool RollYawInteractionRuntime::observeArticulatedSample(const Input& c, const r
         result.epoch = epoch;
         result.body_stamp = body_stamp;
         result.joint_stamp = joint_stamp;
-        result.command_stamp = input_stamp;
+        result.command_stamp = command_stamp;
         result.receipt = receipt;
         result.jacobian = j;
         const double started = roll_yaw::steadySeconds();
@@ -868,21 +895,30 @@ bool RollYawInteractionRuntime::observeArticulatedSample(const Input& c, const r
 
 void RollYawInteractionRuntime::resetCompliance()
 {
-  // Path ownership/tare changes do not own physical observer history or inputs.
+  // Motion ownership may reset correction dynamics, but does not own tare.
+  const auto previous = admittance_;
   admittance_.reset();
-  external_wrench_ = geometry_msgs::WrenchStamped();
+  if(previous.baseline_ready)
+  {
+    admittance_.baseline_ready = true;
+    admittance_.samples = previous.samples;
+    admittance_.bias = previous.bias;
+  }
+  else
+    resetCalibration(); // Cancel incomplete collection on a motion reset.
   tare_requested_ = false;
-  baseline_.resize(0); baseline_sum_.resize(0); baseline_stamp_ = 0;
-  interaction_valid_ = false;
-  interaction_stamp_ = 0;
-  interaction_receipt_ = 0;
+  external_wrench_ = geometry_msgs::WrenchStamped();
+  invalidateInteraction();
   compliance_time_ = 0;
-  admittance_reason_ = "disabled: hold contact, tare unloaded, then enable and send pitch commands";
+  admittance_reason_ = admittance_.baseline_ready
+      ? "disabled/ready: motion reset; completed session tare retained"
+      : "disabled: hold contact, tare unloaded, then enable and send pitch commands";
 }
+
 bool RollYawInteractionRuntime::quietContact(const Input& c) const
 {
   return c.lock_valid && c.feedback.hover && c.reference_held && !c.stopping &&
-      c.contact_rejection(c.feedback).empty() &&
+      c.contact_safety_rejection(c.feedback).empty() &&
       (c.plan ? c.plan->ok && !c.plan->goal.align_only && c.stage == roll_yaw::Stage::READY &&
                 c.preparation_rejection(c.feedback).empty() : c.quiet_contact);
 }
@@ -890,7 +926,7 @@ bool RollYawInteractionRuntime::quietContact(const Input& c) const
 bool RollYawInteractionRuntime::heldContact(const Input& c) const
 {
   return c.lock_valid && c.feedback.hover && c.nominal_held && !c.stopping && c.tracking_held &&
-      c.contact_rejection(c.feedback).empty() &&
+      c.contact_safety_rejection(c.feedback).empty() &&
       (!c.plan || (c.plan->ok && !c.plan->goal.align_only && c.stage == roll_yaw::Stage::READY));
 }
 
@@ -962,6 +998,17 @@ void RollYawInteractionRuntime::tareCallback(const Input& c, const TareRequest& 
         "tare rejected: disable, wait for released correction and held nominal contact; retry after state change";
     return;
   }
+  const bool requested_articulated = request.source.source == "articulated_momentum";
+  const bool valid_mapping = (sign == 1 || sign == -1) && std::isfinite(scale) && scale > 0 &&
+      (frame == "world" || frame == "body") && (point == "cog" || point == "body" || point == "world_origin");
+  if(!admittance_.config.valid() ||
+     (requested_articulated ? !std::isfinite(request.source.gain) || request.source.gain <= 0 ||
+                             !effortSettingsValid(request.source)
+                           : request.source.source != "legacy_wrench" || !valid_mapping))
+  {
+    admittance_reason_ = "tare rejected: invalid source, observer gain, admittance dynamics or legacy wrench mapping";
+    return; // Refused requests must leave the completed calibration untouched.
+  }
   const bool source_changed = loadInteractionSource(c, retired, request.source);
   if(source_changed && interaction_source_ == InteractionSource::ARTICULATED_MOMENTUM && c.dynamics_factory && c.lock_valid)
     articulated_model_valid_ = c.dynamics_factory(c.model, articulated_model_, articulated_reason_);
@@ -971,29 +1018,16 @@ void RollYawInteractionRuntime::tareCallback(const Input& c, const TareRequest& 
   observation_pending_ = false;
   observation_model_ = articulated_model_valid_ ?
       std::make_shared<const perching_dynamics::MultilinkModel>(articulated_model_) : nullptr;
-  admittance_.reset();
-  tare_requested_ = false;
-  interaction_valid_ = false;
   interaction_sign_ = sign;
   interaction_scale_ = scale;
   interaction_frame_ = frame;
   interaction_point_ = point;
   interaction_configured_ = interactionConfigurationValid();
-  if(!interaction_configured_)
-  {
-    admittance_reason_ =
-        "tare rejected: invalid source, observer gain, admittance dynamics or legacy wrench mapping";
-    return;
-  }
-  if(!heldContact(c) || admittance_.enabled || !correctionReleased())
-  {
-    admittance_reason_ = "tare rejected: require held nominal contact, disabled and released correction; remove cutting contact";
-    return;
-  }
+  resetCalibration();
   admittance_.reset();
+  baseline_session_ = c.session;
   tare_requested_ = true;
   ++tare_generation_;
-  baseline_.resize(0); baseline_sum_.resize(0); baseline_stamp_ = 0;
   interaction_stamp_ = interaction_source_ == InteractionSource::LEGACY_WRENCH ? external_wrench_.header.stamp.toSec()
                                                                             : momentum_observer_.stamp();
   interaction_receipt_ = 0;
@@ -1078,14 +1112,21 @@ bool RollYawInteractionRuntime::observeInteractionSample(const Input& c, const r
   }
   if(admittance_.baseline_ready)
   {
-    if(baseline_.size() != load.size()) return false;
+    if(baseline_session_ != c.session || baseline_.size() != load.size())
+    {
+      resetCalibration(); // Changed identity/dimension is not a measurement dropout.
+      return false;
+    }
     load -= baseline_;
   }
+  else
+    return false; // Raw loads remain available; task torque requires an applicable tare.
   if(articulated)
   {
     const auto& j = articulated_jacobian_;
     if(!j.allFinite()) return false;
     Eigen::JacobiSVD<Eigen::Matrix3d> svd(j, Eigen::ComputeFullU | Eigen::ComputeFullV);
+    if(svd.singularValues().minCoeff() < c.planning_config.min_singular_value) return false;
     const Eigen::Vector3d tangent = svd.solve(direction * Eigen::Vector3d::UnitY());
     interaction_torque_ = tangent.dot(load);
     fresh = tangent.allFinite() && (j * tangent - direction * Eigen::Vector3d::UnitY()).norm() <= 1e-8;
@@ -1108,6 +1149,8 @@ bool RollYawInteractionRuntime::observeInteractionSample(const Input& c, const r
 RollYawInteractionRuntime::Output RollYawInteractionRuntime::updateInteraction(const Input& c, const roll_yaw::Feedback& f)
 {
   updateIdentity(c);
+  if((baseline_session_ != 0 && baseline_session_ != c.session) || !c.lock_valid || c.model_identity_changed)
+    resetCalibration();
   previous_offset_ = admittance_.offset;
   previous_rate_ = admittance_.rate;
   previous_acceleration_ = admittance_.acceleration;
@@ -1117,18 +1160,18 @@ RollYawInteractionRuntime::Output RollYawInteractionRuntime::updateInteraction(c
   if(tare_requested_ && (!c.nominal_held || c.stopping ||
       (c.plan && (!c.plan->ok || c.plan->goal.align_only || c.stage != roll_yaw::Stage::READY))))
   {
-    invalidateInteraction();
+    resetCalibration();
     admittance_reason_ = "tare cancelled: nominal maneuver changed the calibration hold; tare unloaded again";
   }
   if(!c.lock_valid || (c.plan && (!c.plan->ok || c.plan->goal.align_only)))
   {
-    interaction_valid_ = false;
+    invalidateInteraction();
     return out;
   }
   const bool articulated = interaction_source_ == InteractionSource::ARTICULATED_MOMENTUM;
   const double stamp = articulated ? momentum_observer_.stamp() : external_wrench_.header.stamp.toSec();
   bool scalar_failed = false, projection_failed = false;
-  bool fresh = interaction_configured_ && c.contact_rejection(f).empty();
+  bool fresh = interaction_configured_ && c.contact_safety_rejection(f).empty();
   if(articulated)
     // Input synchronization was checked before worker submission. Consume the
     // load/Jacobian pair by its original stamp/receipt, not the newest pose.
@@ -1144,12 +1187,10 @@ RollYawInteractionRuntime::Output RollYawInteractionRuntime::updateInteraction(c
   if(fresh && (articulated || stamp > interaction_stamp_))
   {
     fresh = observeInteractionSample(c, f, stamp, held);
-    projection_failed = articulated && !fresh && articulatedLoadValid(c, f);
-    if(projection_failed)
-      invalidateInteraction(); // An attempted mapping failed on a usable source.
+    projection_failed = articulated && admittance_.baseline_ready && !fresh && articulatedLoadValid(c, f);
   }
   if(articulated && admittance_.enabled && !admittance_.baseline_ready)
-    fresh = false; // A fault requires explicit disarm and a new no-contact tare.
+    fresh = false; // Only an explicit calibration/session change requires a new tare.
   if(tare_requested_ && (!fresh || !held))
   {
     admittance_reason_ = "tare waiting for held tracking and a fresh synchronized unloaded source";
@@ -1163,11 +1204,13 @@ RollYawInteractionRuntime::Output RollYawInteractionRuntime::updateInteraction(c
     admittance_reason_ = "disabled/ready: unloaded contact baseline complete; enable explicitly";
   if(articulated && !fresh)
   {
-    admittance_reason_ = projection_failed ? "signed path projection failed; disarm and tare unloaded after recovery"
-        : admittance_.enabled && !admittance_.baseline_ready ? "unavailable: no completed baseline"
-        : articulated_valid_ && momentum_observer_.ready() ? "waiting for a fresh valid articulated result"
+    const bool raw_available = articulatedLoadValid(c, f);
+    admittance_reason_ = projection_failed ? "signed path projection unavailable; retrying with retained tare"
+        : raw_available && !admittance_.baseline_ready
+            ? (tare_requested_ ? "task torque unavailable: collecting unloaded tare"
+                               : "task torque unavailable: no completed baseline")
         : "articulated observer unavailable: " + articulated_reason_;
-    if(tare_requested_)
+    if(tare_requested_ && (!raw_available || !held))
       admittance_reason_ += "; tare collection paused";
     else if(admittance_.baseline_ready)
       admittance_reason_ += "; completed tare retained";
@@ -1176,6 +1219,7 @@ RollYawInteractionRuntime::Output RollYawInteractionRuntime::updateInteraction(c
     if(admittance_.enabled)
       admittance_reason_ += "; feed held with correction braking/held";
   }
+  if(!fresh) invalidateInteraction(); // Pause task forcing only; retain raw load and tare.
   // Observation/filtering continues at a hold; integration never advances an
   // invisible correction while explicitly PAUSED, aligning or READY.
   if(((c.plan && c.stage == roll_yaw::Stage::EXECUTING) || !c.plan) && !c.stopping &&

@@ -2572,14 +2572,8 @@ void Executor::tick(const Feedback& s)
     fault("measured mechanism/body outside configured operating range");
     return;
   }
-  if(measured.pivot_error > config.pivot_tolerance || measured.hinge_residual > config.hinge_tolerance)
-  {
-    std::ostringstream why;
-    why << "pivot=" << measured.pivot_error << "/" << config.pivot_tolerance << " m; hinge=" << measured.hinge_residual
-        << "/" << config.hinge_tolerance << " rad";
-    waitForFeedback(s.now, why.str());
-    return;
-  }
+  // measured.pivot_error/hinge_residual remain quality diagnostics. A finite
+  // mismatch alone must not enter feedback waiting or freeze the trajectory.
   const Reference& tracking = applied_valid ? applied : target;
   const double joint_error = (measured_q - tracking.eta).cwiseAbs().maxCoeff();
   const double body_error = logSO3(s.body.linear().transpose() * tracking.body.linear()).norm();
