@@ -743,7 +743,7 @@ public:
   void hold(const std::string&);
 
 private:
-  void advanceMotion(const Feedback&, double dt);
+  void advanceMotion(const Feedback&, double dt, bool release_only = false);
   void resetSettling();
   SettlingWindow settling_window_;
   double last_time_ = 0, stable_since_ = 0, ready_since_ = 0, speed_ = 1;
@@ -774,10 +774,15 @@ public:
   double bias = 0, filtered = 0, offset = 0, rate = 0, acceleration = 0;
   int samples = 0;
   void reset();
+  // Availability does not own the calibration, correction or consumed timestamp.
+  void inputUnavailable() { input_missing_ = true; }
+  void restartObservationClock() { stamp_ = 0; input_missing_ = true; }
+  bool filter_reacquiring = true;
   void observe(double torque, double stamp, bool no_cut, bool bidirectional = false);
   bool step(double dt, bool input_fresh, bool relief_only = false, double available_relief = -1);
 
 private:
+  bool input_missing_ = false;
   double sum_ = 0, stamp_ = 0, on_ = 0, off_ = 0;
 };
 // Local constrained reference synthesis; never edits a nominal Path or goal.

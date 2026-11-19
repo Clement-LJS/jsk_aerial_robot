@@ -71,7 +71,7 @@ struct RollYawInteractionDiagnostics
   std::uint64_t tare_generation_ = 0;
   std::uint64_t tare_request_sequence_ = 0, enable_request_sequence_ = 0;
   bool interaction_configured_ = false, tare_requested_ = false;
-  bool enable_requested_ = false;
+  bool enable_requested_ = false; // Accepted armed intent; refused enables are reported in the status.
   bool interaction_valid_ = false;
   std::string interaction_frame_, interaction_point_, interaction_topic_;
   double interaction_sign_ = 0, interaction_scale_ = 0, interaction_torque_ = 0, interaction_stamp_ = 0,
@@ -113,7 +113,11 @@ public:
   virtual void publishArticulatedLoad(const Input&) = 0;
   virtual void resetArticulatedSession(const Input&, const std::string&) = 0;
   virtual void invalidateArticulated(const Input&, const std::string&) = 0;
-  virtual void resetCompliance() = 0;
+  virtual void resetComplianceSession() = 0;
+  // New producer starts at the applied pose; absorb the old correction into
+  // that nominal reference, transferring total derivatives to its bounded brake.
+  virtual void rebaseReference(double direction = 1) = 0;
+  virtual void referenceDirection(double direction) = 0;
   virtual void stopped() = 0;
   virtual bool motionAllowed(const Input&) const = 0;
   virtual bool quietContact(const Input&) const = 0;

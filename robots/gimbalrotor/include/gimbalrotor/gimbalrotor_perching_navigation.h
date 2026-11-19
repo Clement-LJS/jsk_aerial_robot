@@ -517,6 +517,7 @@ private:
     Eigen::Matrix3d start = Eigen::Matrix3d::Identity();
     double angle = 0, rate = 0, offset = 0, rate_limit = 0, acceleration_limit = 0;
   } local_pitch_;
+  roll_yaw::Reference manual_reference_; // Nominal component, committed with the applied correction.
   bool local_interaction_hold_ = false, local_resisting_load_ = false;
   bool admitPitchPulse(double rate, double duration, std::uint64_t sequence);
   double body_pitch_velocity_command_duration_ = 8.0;
@@ -650,7 +651,8 @@ private:
   double body_receipt_ = 0, joint_receipt_ = 0;
   std::weak_ptr<aerial_robot_control::RollYawInteraction> interaction_;
   aerial_robot_control::RollYawInteractionInput interactionInput(const roll_yaw::Feedback&) const;
-  void resetCompliance();
+  void resetComplianceSession();
+  void transitionNominalReference(double direction = 1);
   void resetArticulatedSession(const std::string&);
   void updateInteraction(const roll_yaw::Feedback&);
   bool articulatedLoadValid(const roll_yaw::Feedback&) const;

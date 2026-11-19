@@ -2593,7 +2593,11 @@ void Executor::tick(const Feedback& s)
   recovery_joint_stamp_ = s.joint_stamp;
   const double dt = s.now - last_time_;
   last_time_ = s.now;
-  const bool moving = stage == Stage::PRE_ALIGN || stage == Stage::EXECUTING;
+  // Disabling compliance may release an applied correction along the same
+  // validated path while the operator's nominal pause remains in force.
+  const bool releasing = stage == Stage::PAUSED && !paused_align_ && plan.ok && !relief_enabled &&
+      (std::abs(applied_relief) > 1e-8 || std::abs(speed_) > 1e-10);
+  const bool moving = stage == Stage::PRE_ALIGN || stage == Stage::EXECUTING || releasing;
   if(dt < 0)
   {
     fault("execution clock moved backwards");
@@ -2643,7 +2647,7 @@ void Executor::tick(const Feedback& s)
     else if(reason == "prepared, waiting for live start tracking")
       reason = "READY: prepared start tracking restored; explicit start required";
   }
-  if(stage != Stage::PRE_ALIGN && stage != Stage::EXECUTING)
+  if(!moving)
     return;
   const int steps = config.integrationSteps(dt);
   if(steps <= 0)
@@ -2656,7 +2660,7 @@ void Executor::tick(const Feedback& s)
   const bool saved_end = path_end_commanded;
   for(int i = 0; i < steps; ++i)
   {
-    advanceMotion(s, dt / steps);
+    advanceMotion(s, dt / steps, releasing);
     if(stage == Stage::FAULT_HOLD)
     {
       progress = saved_progress;
@@ -2671,7 +2675,7 @@ void Executor::tick(const Feedback& s)
       reference_updated = false;
       return;
     }
-    if(stage != Stage::PRE_ALIGN && stage != Stage::EXECUTING)
+    if(stage != Stage::PRE_ALIGN && stage != Stage::EXECUTING && !releasing)
       break;
   }
 }
@@ -2704,20 +2708,20 @@ std::function<void()> Executor::referenceRollback()
   };
 }
 
-void Executor::advanceMotion(const Feedback& s, double dt)
+void Executor::advanceMotion(const Feedback& s, double dt, bool release_only)
 {
   Eigen::Vector3d measured_q = s.eta;
   measured_q[0] = measured.alpha;
   const Reference& tracking = target;
   const double joint_error = (measured_q - tracking.eta).cwiseAbs().maxCoeff();
   const double body_error = logSO3(s.body.linear().transpose() * tracking.body.linear()).norm();
-  const auto& path = stage == Stage::EXECUTING ? plan.cut : plan.align;
+  const bool cut = stage == Stage::EXECUTING || release_only;
+  const auto& path = cut ? plan.cut : plan.align;
   if(!plan.ok || plan.session != session)
   {
     fault("trajectory ownership/session mismatch");
     return;
   }
-  const bool cut = stage == Stage::EXECUTING;
   double speed_acc = std::min((planning.limits.acceleration.array() / planning.limits.velocity.array()).minCoeff(),
                               planning.cog_acceleration_limit / planning.cog_speed_limit) *
                      .5;
@@ -2845,7 +2849,7 @@ void Executor::advanceMotion(const Feedback& s, double dt)
   {
     // Freeze the nominal schedule during relief, tracking holds and recovery.
     // Release the correction before normal feeding; no wall-clock debt.
-    if(!stopping_ && !interaction_hold && !resisting_load && !governor_hold_ && std::abs(relief) < 1e-8)
+    if(!release_only && !stopping_ && !interaction_hold && !resisting_load && !governor_hold_ && std::abs(relief) < 1e-8)
       next_nominal = std::max(nominal_progress, std::min(upper, nominal_progress + dt));
     const double correction = correcting ? std::clamp(relief, -relief_angle_limit, 0.0) : 0;
     const double wanted = std::clamp(pitch(next_nominal) + correction, 0.0, length);
@@ -2964,6 +2968,11 @@ void Executor::advanceMotion(const Feedback& s, double dt)
     taskPitch(pre, next.desired.rotation, planned_pitch, planned_pitch, cross);
     applied_relief = pitch(progress) - pitch(nominal_progress);
     path_end_commanded = progress >= path.duration() - 1e-7;
+  }
+  if(release_only)
+  {
+    reason = "PAUSED: bounded correction release; nominal progress retained";
+    return;
   }
   // Reaching the path's zero-rate endpoint also completes a stop. Otherwise an
   // automatic alignment could enter READY before deceleration finished and leave
@@ -3152,8 +3161,13 @@ void PitchAdmittance::observe(double torque, double stamp, bool no_cut, bool bid
       baseline_ready = true;
     }
   }
-  if(!baseline_ready || dt <= 0 || dt > .15)
+  filter_reacquiring = input_missing_ || dt <= 0 || dt > .15;
+  input_missing_ = false;
+  if(!baseline_ready || filter_reacquiring)
   {
+    // Retain a short interruption's filter, but never count missing time as
+    // contact dwell. A long gap reacquires from zero on advancing samples.
+    if(dt <= 0 || dt > .15) filtered = 0;
     contact = false;
     on_ = off_ = 0;
     return;
@@ -3194,11 +3208,7 @@ bool PitchAdmittance::step(double dt, bool fresh, bool relief_only, double avail
       available_relief < 0 ? config.angle_limit : std::min(config.angle_limit, available_relief);
   if(!std::isfinite(negative_limit) || negative_limit < 0 || offset < -negative_limit - 1e-9)
     return false;
-  if(!fresh)
-  {
-    contact = false;
-    on_ = off_ = 0;
-  }
+  if(!fresh) inputUnavailable();
   const double torque = enabled && fresh && contact
                             ? std::clamp(filtered, -config.torque_limit, relief_only ? 0.0 : config.torque_limit)
                             : 0;
