@@ -64,7 +64,7 @@ private:
 } // namespace perching_dynamics
 
 #include <gimbalrotor/model/gimbalrotor_robot_model.h>
-#include <gimbalrotor/gimbalrotor_perching_navigation.h>
+#include <gimbalrotor/utils/perching_geometry.h>
 
 class GimbalrotorPerchingModel : public GimbalrotorRobotModel
 {
