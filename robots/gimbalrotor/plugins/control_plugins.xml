@@ -11,6 +11,6 @@
     <description>plugin for gimbalrotor perching-constrained admittance control </description>
   </class>
   <class name="aerial_robot_control/gimbalrotor_multilink_perching_admittance_controller" type="aerial_robot_control::GimbalrotorMultilinkPerchingAdmittanceController" base_class_type="aerial_robot_control::ControlBase">
-    <description>Roll-yaw articulated momentum observer and synchronous path admittance control</description>
+    <description>Compatibility ID for the shared model-driven perching admittance controller</description>
   </class>
 </library>

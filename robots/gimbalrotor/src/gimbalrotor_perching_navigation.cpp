@@ -1,4 +1,3 @@
-#include <gimbalrotor/model/gimbalrotor_roll_yaw_dynamics.h>
 #include <gimbalrotor/gimbalrotor_perching_navigation.h>
 #include <pluginlib/class_list_macros.h>
 #include <sstream>
@@ -69,60 +68,8 @@ GimbalrotorPerchingNavigator::GimbalrotorPerchingNavigator():
   has_perching_point_(false),
 
   active_pitch_delta_(0.0),
-  locked_radius_(0.0),
-
-  joint_command_topic_("joints_ctrl"),
-  joint_state_topic_("joint_states"),
-  secondary_joint_target_topic_(
-      "perching/multilink/secondary_joint_target"),
-  secondary_position_tolerance_(0.02),
-  secondary_velocity_tolerance_(0.05),
-  secondary_settle_duration_(0.30),
-  joint_state_timeout_(0.15),
-  joint_state_future_tolerance_(0.02),
-  multilink_pitch_axis_alignment_threshold_(0.90),
-  secondary_axis_alignment_threshold_(0.90),
-  multilink_pitch_command_sign_(1.0),
-  secondary_command_sign_(1.0),
-  configured_pitch_limits_valid_(false),
-  configured_secondary_limits_valid_(false),
-  configured_pitch_lower_(0.0),
-  configured_pitch_upper_(0.0),
-  configured_secondary_lower_(0.0),
-  configured_secondary_upper_(0.0),
-  pitch_joint_index_(0),
-  secondary_joint_index_(0),
-  pitch_joint_lower_(0.0),
-  pitch_joint_upper_(0.0),
-  secondary_joint_lower_(0.0),
-  secondary_joint_upper_(0.0),
-  pitch_axis_local_(Eigen::Vector3d::Zero()),
-  secondary_axis_local_(Eigen::Vector3d::Zero()),
-  secondary_axis_type_(SECONDARY_AXIS_INVALID),
-  multilink_model_resolution_attempted_(false),
-  multilink_model_valid_(false),
-  multilink_lock_valid_(false),
-  locked_contact_world_(KDL::Frame::Identity()),
-  locked_pitch_joint_(0.0),
-  locked_secondary_joint_(0.0),
-  pitch_joint_nominal_target_(0.0),
-  secondary_joint_nominal_target_(0.0),
-  pitch_joint_final_target_(0.0),
-  secondary_joint_final_target_(0.0),
-  joint_state_received_(false),
-  joint_state_measurement_stamp_(0),
-  joint_state_receive_stamp_(0),
-  measured_pitch_joint_(0.0),
-  measured_secondary_joint_(0.0),
-  measured_pitch_velocity_(0.0),
-  measured_secondary_velocity_(0.0),
-  previous_measured_pitch_joint_(0.0),
-  previous_measured_secondary_joint_(0.0),
-  secondary_settled_(false),
-  mechanism_target_generation_(0)
+  locked_radius_(0.0)
 {
-  resetMultilinkPitchRezeroState();
-
   branch_pos_world_.setValue(0.0, 0.0, 0.0);
   perching_point_world_.setValue(0.0, 0.0, 0.0);
 
@@ -141,41 +88,9 @@ void GimbalrotorPerchingNavigator::initialize(
     double loop_du)
 {
   std::lock_guard<std::recursive_mutex> lock(perchingStateMutex());
-  std::string configuration;
-  nh.param<std::string>("navigation/perching_configuration", configuration, "baseline");
-  if(configuration == "baseline")
-    perching_configuration_ = PerchingConfiguration::BASELINE;
-  else if(configuration == "pitch_only")
-    perching_configuration_ = PerchingConfiguration::PITCH_ONLY;
-  else if(configuration == "multilink")
-    perching_configuration_ = PerchingConfiguration::MULTILINK;
-  else if(configuration == "roll_yaw")
-    perching_configuration_ = PerchingConfiguration::ROLL_YAW;
-  else
-  {
-    ROS_FATAL_STREAM("Unknown navigation/perching_configuration: " << configuration
-                     << "; expected baseline, pitch_only, multilink or roll_yaw");
-    throw std::invalid_argument("Unknown navigation/perching_configuration: " + configuration);
-  }
-
   GimbalrotorNavigator::initialize(nh, nhp, robot_model, estimator, loop_du);
-
-  // The base assigns robot_model_ only after its virtual rosParamInit() returns.
-  // Initialize the selected mechanism before registering common contact callbacks.
-  switch(perching_configuration_)
-  {
-    case PerchingConfiguration::BASELINE:
-      break;
-    case PerchingConfiguration::PITCH_ONLY:
-      initializePitchOnly(nh, nhp);
-      break;
-    case PerchingConfiguration::MULTILINK:
-      initializeMultilink(nh, nhp);
-      break;
-    case PerchingConfiguration::ROLL_YAW:
-      initializeRollYaw(nh, nhp);
-      break;
-  }
+  readProfile();
+  initializeMechanism();
 
   perching_enable_sub_ = nh_.subscribe(perching_enable_topic_, 1, &GimbalrotorPerchingNavigator::perchingEnableCallback, this);
   perching_slanted_enable_sub_ = nh_.subscribe(perching_slanted_enable_topic_, 1, &GimbalrotorPerchingNavigator::perchingSlantedEnableCallback, this);
@@ -278,46 +193,31 @@ void GimbalrotorPerchingNavigator::rosParamInit()
   getParam<std::string>(navi_nh, "perching_locked_pivot_topic", locked_pivot_topic_, "perching/locked_pivot");
 }
 
-void GimbalrotorPerchingNavigator::updateCommonPerching()
+void GimbalrotorPerchingNavigator::update()
 {
   std::lock_guard<std::recursive_mutex> lock(perching_state_mutex_);
-  if(getNaviState() != HOVER_STATE && perching_mode_ != perching_geometry::Mode::DISABLED)
-  {
-    perching_mode_ = perching_geometry::Mode::DISABLED;
-    resetPerchingLock();
-
-    ROS_WARN(
-        "[GimbalrotorPerchingNavigator] "
-        "Perching navigation automatically deactivated because "
-        "the flight state is no longer HOVER_STATE. "
-        "Publish the desired perching mode enable=true after returning to "
-        "HOVER_STATE to create a fresh perching lock.");
-  }
-
   GimbalrotorNavigator::update();
-
-  if(getNaviState() != HOVER_STATE)
+  if(navi_state_ != HOVER_STATE)
   {
-    if(perching_mode_ != perching_geometry::Mode::DISABLED)
-    {
-      perching_mode_ = perching_geometry::Mode::DISABLED;
-      resetPerchingLock();
-
-      ROS_WARN(
-          "[GimbalrotorPerchingNavigator] "
-          "Perching navigation automatically deactivated after "
-          "leaving HOVER_STATE. "
-          "A fresh perching enable command is required before "
-          "perching control can be used again.");
-    }
-
+    servo_.zero_hold_armed = false;
+    if(perching_mode_ != perching_geometry::Mode::DISABLED) resetPerchingLock();
+    perching_mode_ = perching_geometry::Mode::DISABLED;
     return;
   }
-
-  if(perching_mode_ != perching_geometry::Mode::DISABLED && active_perching_hold_enable_)
+  if(articulated() && !model_valid_ && robot_model_->initialized()) model_valid_ = resolveMechanismModel();
+  const double now = ros::Time::now().toSec();
+  const double elapsed = last_update_ > 0 ? now - last_update_ : 0;
+  last_update_ = now;
+  if(elapsed < 0) { body_history_.clear(); joint_history_.clear(); applied_stamp_ = 0; }
+  cycle_dt_ = elapsed > 0 && elapsed <= max_gap_ ? std::min(elapsed, max_step_) : 0;
+  if(perching_mode_ == perching_geometry::Mode::DISABLED || !perching_locked_) return;
+  if(articulated())
   {
-    applyActivePerchingTarget();
+    proposal_valid_ = false;
+    if(observation(measured_)) model_.estimate(measured_.body, measured_.q, pivot_error_, hinge_error_);
+    if(motionFeedbackValid() && cycle_dt_ > 0) advanceNominal(cycle_dt_);
   }
+  else if(active_perching_hold_enable_) applyActivePerchingTarget();
 }
 
 void GimbalrotorPerchingNavigator::perchingEnableCallback(const std_msgs::BoolConstPtr& msg)
@@ -330,12 +230,12 @@ void GimbalrotorPerchingNavigator::perchingSlantedEnableCallback(const std_msgs:
   selectPerchingMode(perching_geometry::Mode::SLANTED, msg->data);
 }
 
-void GimbalrotorPerchingNavigator::selectCommonPerchingMode(perching_geometry::Mode mode, bool enable)
+void GimbalrotorPerchingNavigator::selectPerchingMode(perching_geometry::Mode mode, bool enable)
 {
   std::lock_guard<std::recursive_mutex> lock(perching_state_mutex_);
   if(enable && !supportsPerchingMode(mode))
   {
-    ROS_WARN_THROTTLE(1.0, "Multilink perching supports NORMAL mode only; slanted_enable was ignored.");
+    ROS_WARN_THROTTLE(1.0, "Articulated perching supports NORMAL mode only; slanted_enable was ignored.");
     return;
   }
   if(!enable && perching_mode_ != mode) return;
@@ -344,7 +244,7 @@ void GimbalrotorPerchingNavigator::selectCommonPerchingMode(perching_geometry::M
   perching_mode_ = perching_geometry::Mode::DISABLED;
   if(!enable) return;
 
-  if(getNaviState() != HOVER_STATE)
+  if(navi_state_ != HOVER_STATE)
   {
     ROS_WARN("[GimbalrotorPerchingNavigator] perching enable rejected outside HOVER_STATE");
     return;
@@ -362,7 +262,6 @@ void GimbalrotorPerchingNavigator::selectCommonPerchingMode(perching_geometry::M
 
 void GimbalrotorPerchingNavigator::branchPoseCallback(const geometry_msgs::PoseStampedConstPtr& msg)
 {
-  if(deferRollYawCommand("branch", [this, msg] { branchPoseCallback(msg); }, false)) return;
 
   std::lock_guard<std::recursive_mutex> lock(perching_state_mutex_);
   branch_pos_world_.setValue(msg->pose.position.x,
@@ -374,7 +273,6 @@ void GimbalrotorPerchingNavigator::branchPoseCallback(const geometry_msgs::PoseS
 
 void GimbalrotorPerchingNavigator::perchingPointCallback(const geometry_msgs::PointStampedConstPtr& msg)
 {
-  if(deferRollYawCommand("point", [this, msg] { perchingPointCallback(msg); }, false)) return;
 
   std::lock_guard<std::recursive_mutex> lock(perching_state_mutex_);
   perching_point_world_.setValue(msg->point.x,
@@ -384,10 +282,15 @@ void GimbalrotorPerchingNavigator::perchingPointCallback(const geometry_msgs::Po
   has_perching_point_ = true;
 }
 
-void GimbalrotorPerchingNavigator::relockCommonCallback(const std_msgs::EmptyConstPtr& msg)
+void GimbalrotorPerchingNavigator::relockCallback(const std_msgs::EmptyConstPtr& msg)
 {
   std::lock_guard<std::recursive_mutex> lock(perching_state_mutex_);
   (void)msg;
+  if(positioning_ && perching_locked_)
+  {
+    workflowCommand("relock");
+    return;
+  }
 
   if(perching_mode_ == perching_geometry::Mode::DISABLED)
   {
@@ -399,7 +302,7 @@ void GimbalrotorPerchingNavigator::relockCommonCallback(const std_msgs::EmptyCon
     return;
   }
 
-  if(getNaviState() != HOVER_STATE)
+  if(navi_state_ != HOVER_STATE)
   {
     ROS_WARN_THROTTLE(
         1.0,
@@ -425,15 +328,15 @@ void GimbalrotorPerchingNavigator::relockCommonCallback(const std_msgs::EmptyCon
 
 void GimbalrotorPerchingNavigator::resetCallback(const std_msgs::EmptyConstPtr& msg)
 {
-  if(deferRollYawCommand("reset", [this, msg] { resetCallback(msg); }, true)) return;
 
   std::lock_guard<std::recursive_mutex> lock(perching_state_mutex_);
   (void)msg;
   resetPerchingLock();
 }
 
-void GimbalrotorPerchingNavigator::resetCommonPerchingLock()
+void GimbalrotorPerchingNavigator::resetPerchingLock()
 {
+  resetMotion();
   perching_locked_ = false;
   locked_radius_ = 0.0;
   active_pitch_delta_ = 0.0;
@@ -447,8 +350,6 @@ void GimbalrotorPerchingNavigator::resetCommonPerchingLock()
 
 void GimbalrotorPerchingNavigator::manualPitchDeltaCallback(const std_msgs::Float64ConstPtr& msg)
 {
-  if(rejectUnscopedMotion("alpha_delta")) return;
-  if(deferRollYawCommand("alpha_delta", [this, msg] { manualPitchDeltaCallback(msg); }, false)) return;
 
   std::lock_guard<std::recursive_mutex> lock(perching_state_mutex_);
   if(perching_mode_ == perching_geometry::Mode::DISABLED)
@@ -459,7 +360,7 @@ void GimbalrotorPerchingNavigator::manualPitchDeltaCallback(const std_msgs::Floa
     return;
   }
 
-  if(getNaviState() != HOVER_STATE)
+  if(navi_state_ != HOVER_STATE)
   {
     ROS_WARN_THROTTLE(
         1.0,
@@ -485,8 +386,18 @@ void GimbalrotorPerchingNavigator::manualPitchDeltaCallback(const std_msgs::Floa
   applyManualPitchDelta(msg->data);
 }
 
-void GimbalrotorPerchingNavigator::applyBaselinePitchDelta(double delta)
+void GimbalrotorPerchingNavigator::applyManualPitchDelta(double delta)
 {
+  if(articulated())
+  {
+    if(positioning_) servo_.cut(delta, servoSample());
+    else
+    {
+      const auto it = coordinate_map_.find(manual_coordinate_);
+      if(it != coordinate_map_.end()) coordinateCommand(it->second, locked_q_[it->second] + command_pitch_sign_ * delta);
+    }
+    return;
+  }
   perching_geometry::Pose pose;
   if(!geometry_.target(command_pitch_sign_ * delta, max_pitch_delta_, arc_pitch_sign_, pose))
     return;
@@ -498,9 +409,9 @@ void GimbalrotorPerchingNavigator::applyBaselinePitchDelta(double delta)
   GimbalrotorNavigator::naviCallback(command_ptr);
 }
 
-bool GimbalrotorPerchingNavigator::tryLockBaseline(const std::string& reason)
+bool GimbalrotorPerchingNavigator::tryLockRigid(const std::string& reason)
 {
-  if(getNaviState() != HOVER_STATE)
+  if(navi_state_ != HOVER_STATE)
   {
     ROS_WARN_THROTTLE(
         1.0,
@@ -644,12 +555,17 @@ void GimbalrotorPerchingNavigator::commitFixedContactLock(
   publishLockedPivot();
 }
 
-void GimbalrotorPerchingNavigator::baselineNaviCallback(const aerial_robot_msgs::FlightNavConstPtr& msg)
+void GimbalrotorPerchingNavigator::naviCallback(const aerial_robot_msgs::FlightNavConstPtr& msg)
 {
   std::lock_guard<std::recursive_mutex> lock(perching_state_mutex_);
+  if(articulated() && perching_mode_ != perching_geometry::Mode::DISABLED)
+  {
+    if(accept_uav_nav_pitch_command_ && hasPitchCommand(*msg)) applyManualPitchDelta(msg->target_pitch);
+    return;
+  }
   aerial_robot_msgs::FlightNav nav_msg = *msg;
 
-  if(perching_mode_ != perching_geometry::Mode::DISABLED && getNaviState() == HOVER_STATE)
+  if(perching_mode_ != perching_geometry::Mode::DISABLED && navi_state_ == HOVER_STATE)
   {
     if(!applyPerchingConstraint(nav_msg)) return;
   }
@@ -659,9 +575,9 @@ void GimbalrotorPerchingNavigator::baselineNaviCallback(const aerial_robot_msgs:
   GimbalrotorNavigator::naviCallback(nav_msg_ptr);
 }
 
-void GimbalrotorPerchingNavigator::applyBaselineTarget()
+void GimbalrotorPerchingNavigator::applyActivePerchingTarget()
 {
-  if(perching_mode_ == perching_geometry::Mode::DISABLED || getNaviState() != HOVER_STATE)
+  if(perching_mode_ == perching_geometry::Mode::DISABLED || navi_state_ != HOVER_STATE)
   {
     return;
   }
@@ -772,9 +688,9 @@ tf::Vector3 GimbalrotorPerchingNavigator::computeLockPivotWorld() const
   return computeHandPerchingCenterWorldFromBaselink();
 }
 
-bool GimbalrotorPerchingNavigator::applyBaselineConstraint(aerial_robot_msgs::FlightNav& msg)
+bool GimbalrotorPerchingNavigator::applyPerchingConstraint(aerial_robot_msgs::FlightNav& msg)
 {
-  if(perching_mode_ == perching_geometry::Mode::DISABLED || getNaviState() != HOVER_STATE) return false;
+  if(perching_mode_ == perching_geometry::Mode::DISABLED || navi_state_ != HOVER_STATE) return false;
   if(!perching_locked_ && !tryLockPerching("first perching command")) return false;
 
   const bool position_command = hasPositionCommand(msg);
@@ -1029,10 +945,8 @@ bool GimbalrotorPerchingNavigator::perchingAdmittanceTarget(
     const ros::Time& lock_stamp, double physical_offset,
     const tf::Vector3& nominal_position, perching_geometry::Pose& pose) const
 {
-  if(perching_configuration_ == PerchingConfiguration::PITCH_ONLY)
-    return false;
   std::lock_guard<std::recursive_mutex> lock(perching_state_mutex_);
-  if(perching_mode_ == perching_geometry::Mode::DISABLED || !perching_locked_ || navi_state_ != HOVER_STATE ||
+  if(articulated() || perching_mode_ == perching_geometry::Mode::DISABLED || !perching_locked_ || navi_state_ != HOVER_STATE ||
      lock_stamp != lock_stamp_ || !perching_geometry::finite(nominal_position)) return false;
   // Compliance Y is a physical axis angle. Convert to the logical coordinate
   // before the shared helper applies arc_pitch_sign exactly once.
@@ -1042,5996 +956,955 @@ bool GimbalrotorPerchingNavigator::perchingAdmittanceTarget(
   return true;
 }
 
-// Configuration dispatch
-
-GimbalrotorPerchingNavigator::~GimbalrotorPerchingNavigator()
+namespace
 {
-  // Join the planning worker while all navigator state is still alive.
-  jog_worker_.reset();
-  prepare_worker_.reset();
+tf::Vector3 tfVector(const Eigen::Vector3d& v) { return {v.x(), v.y(), v.z()}; }
+tf::Quaternion tfQuaternion(const Eigen::Matrix3d& r)
+{
+  const Eigen::Quaterniond q(r); return {q.x(), q.y(), q.z(), q.w()};
+}
+geometry_msgs::Pose poseMessage(const Eigen::Isometry3d& p)
+{
+  geometry_msgs::Pose result;
+  tf::pointTFToMsg(tfVector(p.translation()), result.position);
+  tf::quaternionTFToMsg(tfQuaternion(p.linear()), result.orientation);
+  return result;
+}
+double steadyTime()
+{
+  return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
 }
 
-bool GimbalrotorPerchingNavigator::supportsPerchingMode(perching_geometry::Mode mode) const
+void GimbalrotorPerchingNavigator::readProfile()
 {
-  return mode == perching_geometry::Mode::NORMAL ||
-         (perching_configuration_ == PerchingConfiguration::BASELINE && mode == perching_geometry::Mode::SLANTED);
+  ros::NodeHandle pn(nh_, "navigation/perching");
+  pn.getParam("active_joints", active_joints_);
+  coordinate_map_["alpha"] = 0;
+  for(std::size_t i = 0; i < active_joints_.size(); ++i) coordinate_map_[active_joints_[i]] = i + 1;
+  pn.param<std::string>("contact_link", contact_link_, "");
+  pn.param<std::string>("debug_prefix", prefix_, "perching");
+  pn.param<std::string>("diagnostic_name", status_name_, "perching");
+  pn.param<std::string>("world_frame", world_, "world");
+  pn.param<std::string>("joint_state_topic", joint_topic_, "joint_states");
+  pn.param<std::string>("manual_coordinate", manual_coordinate_, "alpha");
+  pn.param("pitch_command_sign", command_pitch_sign_, command_pitch_sign_);
+  pn.param<std::string>("positioning_joint", positioning_joint_, "");
+  positioning_ = !positioning_joint_.empty();
+  pn.param("tracking_tolerance", tracking_tolerance_, tracking_tolerance_);
+  pn.param("body_tracking_tolerance", body_tracking_tolerance_, body_tracking_tolerance_);
+  pn.param("feedback_timeout", timeout_, timeout_);
+  pn.param("future_tolerance", future_tolerance_, future_tolerance_);
+  pn.param("feedback_sync_tolerance", sync_tolerance_, sync_tolerance_);
+  pn.param("max_execution_step", max_step_, max_step_);
+  pn.param("max_execution_gap", max_gap_, max_gap_);
+  pn.param("body_max_tilt", max_tilt_, max_tilt_);
+  pn.param("body_pitch_lower_limit", min_body_pitch_, min_body_pitch_);
+  pn.param("body_pitch_upper_limit", max_body_pitch_, max_body_pitch_);
+  pn.param("cog_speed_limit", cog_speed_limit_, cog_speed_limit_);
+  pn.param("cog_acceleration_limit", cog_acceleration_limit_, cog_acceleration_limit_);
+  pn.param("pitch_rate", rate_limit_, rate_limit_);
+  pn.param("pitch_acceleration", acceleration_limit_, acceleration_limit_);
+  pn.param("body_pitch_velocity_command_duration", velocity_duration_, velocity_duration_);
+  pn.param("body_pitch_jog_max_delta", jog_limit_, jog_limit_);
+  pn.param("pitch_rezero_target_pitch", rezero_target_, rezero_target_);
+  pn.param("pitch_rezero_command_sign", rezero_sign_, rezero_sign_);
+  pn.param("pitch_rezero_rate_limit", rezero_rate_, rezero_rate_);
+  pn.param("pitch_rezero_max_delta", rezero_range_, rezero_range_);
+  pn.param("pitch_rezero_pitch_tolerance", rezero_tolerance_, rezero_tolerance_);
+  pn.param("pitch_rezero_timeout", rezero_timeout_, rezero_timeout_);
+  pn.param("pitch_rezero_kp", rezero_kp_, rezero_kp_);
+  pn.param("pitch_rezero_rate_tolerance", rezero_rate_tolerance_, rezero_rate_tolerance_);
+  pn.param("pitch_rezero_stable_duration", rezero_stable_duration_, rezero_stable_duration_);
+  pn.getParam("wire_angles", wire_angles_);
+  XmlRpc::XmlRpcValue mapping;
+  if(pn.getParam("wire_coordinates", mapping) && mapping.getType() == XmlRpc::XmlRpcValue::TypeStruct)
+    for(auto it = mapping.begin(); it != mapping.end(); ++it)
+      wire_coordinates_[std::stoi(it->first)] = static_cast<std::string>(it->second);
+  const double positive[] = {timeout_, sync_tolerance_, max_step_, max_gap_, max_tilt_, cog_speed_limit_,
+      cog_acceleration_limit_, rate_limit_, acceleration_limit_, velocity_duration_, rezero_rate_, rezero_timeout_,
+      rezero_kp_, rezero_rate_tolerance_, rezero_stable_duration_};
+  for(double value : positive)
+    if(!std::isfinite(value) || value <= 0) throw std::invalid_argument("invalid navigation/perching limits or timing");
+  if(max_step_ > .1 || max_gap_ < max_step_ || !std::isfinite(future_tolerance_) || future_tolerance_ < 0)
+    throw std::invalid_argument("invalid navigation/perching clock bounds");
 }
 
-bool GimbalrotorPerchingNavigator::ownsNavigationTargets() const
+void GimbalrotorPerchingNavigator::initializeMechanism()
 {
-  return perching_configuration_ == PerchingConfiguration::ROLL_YAW && ownsRollYawTargets();
-}
-
-std::unique_lock<std::recursive_mutex> GimbalrotorPerchingNavigator::lockNavigationTargets()
-{
-  if(perching_configuration_ == PerchingConfiguration::ROLL_YAW)
-    return std::unique_lock<std::recursive_mutex>(perchingStateMutex());
-  return {};
-}
-
-void GimbalrotorPerchingNavigator::navigationTargetConflict(const char* source)
-{
-  if(perching_configuration_ == PerchingConfiguration::ROLL_YAW)
-    rollYawTargetConflict(source);
-}
-
-void GimbalrotorPerchingNavigator::selectPerchingMode(perching_geometry::Mode mode, bool enable)
-{
-  if(deferRollYawCommand("mode", [this, mode, enable] { selectPerchingMode(mode, enable); }, true)) return;
-
-  if(perching_configuration_ == PerchingConfiguration::PITCH_ONLY)
-    selectPitchOnlyMode(mode, enable);
-  else
-    selectCommonPerchingMode(mode, enable);
-}
-
-void GimbalrotorPerchingNavigator::relockCallback(const std_msgs::EmptyConstPtr& msg)
-{
-  if(deferRollYawCommand("relock", [this, msg] { relockCallback(msg); }, true)) return;
-
-  if(perching_configuration_ == PerchingConfiguration::PITCH_ONLY)
-    relockPitchOnlyCallback(msg);
-  else
-    relockCommonCallback(msg);
-}
-
-void GimbalrotorPerchingNavigator::update()
-{
-  switch(perching_configuration_)
+  if(!articulated()) return;
+  ros::NodeHandle pn(nh_, "navigation/perching");
+  std::string command, body_topic, source, effort_topic;
+  pn.param<std::string>("joint_command_topic", command, "joints_ctrl");
+  pn.param<std::string>("body_state_topic", body_topic, "uav/baselink/odom");
+  pn.param<std::string>("dynamics/joint_effort/source", source, "unavailable");
+  pn.param<std::string>("dynamics/joint_effort/topic", effort_topic, joint_topic_);
+  pn.param<std::string>("dynamics/joint_effort/producer", effort_producer_, nh_.resolveName("servo_bridge"));
+  effort_source_valid_ = source == "servo_bridge_joint_states" && effort_topic == joint_topic_ &&
+                        effort_producer_ == nh_.resolveName("servo_bridge");
+  if(source == "gazebo_ode_joint_states")
   {
-    case PerchingConfiguration::BASELINE:
-      return updateCommonPerching();
-    case PerchingConfiguration::PITCH_ONLY:
-      return updatePitchOnly();
-    case PerchingConfiguration::MULTILINK:
-      return updateMultilink();
-    case PerchingConfiguration::ROLL_YAW:
-      return updateRollYaw();
+    std::string contract, units, sign, physics, description;
+    pn.getParam("dynamics/joint_effort_contract", contract);
+    pn.getParam("dynamics/joint_effort/units", units); pn.getParam("dynamics/joint_effort/sign", sign);
+    nh_.getParam("robot_description", description); nh_.param<std::string>("simulation/physics_engine", physics, "ode");
+    effort_source_valid_ = ros::Time::isSimTime() && effort_topic == joint_topic_ && physics == "ode" &&
+        contract == "joint_side_actuation_nm" && units == "Nm" && sign == "urdf" &&
+        description.find("gazebo_ros_control/AerialRobotHWSim") != std::string::npos;
   }
-}
-
-bool GimbalrotorPerchingNavigator::tryLockPerching(const std::string& reason)
-{
-  switch(perching_configuration_)
-  {
-    case PerchingConfiguration::BASELINE:
-      return tryLockBaseline(reason);
-    case PerchingConfiguration::PITCH_ONLY:
-      return tryLockPitchOnly(reason);
-    case PerchingConfiguration::MULTILINK:
-      return tryLockMultilink(reason);
-    case PerchingConfiguration::ROLL_YAW:
-      return tryLockRollYaw(reason);
-  }
-  return false;
-}
-
-void GimbalrotorPerchingNavigator::resetPerchingLock()
-{
-  switch(perching_configuration_)
-  {
-    case PerchingConfiguration::BASELINE:
-      return resetCommonPerchingLock();
-    case PerchingConfiguration::PITCH_ONLY:
-      return resetPitchOnlyLock();
-    case PerchingConfiguration::MULTILINK:
-      return resetMultilinkLock();
-    case PerchingConfiguration::ROLL_YAW:
-      return resetRollYawLock();
-  }
-}
-
-void GimbalrotorPerchingNavigator::applyActivePerchingTarget()
-{
-  switch(perching_configuration_)
-  {
-    case PerchingConfiguration::BASELINE:
-      return applyBaselineTarget();
-    case PerchingConfiguration::PITCH_ONLY:
-      return applyPitchOnlyTarget();
-    case PerchingConfiguration::MULTILINK:
-      return applyMultilinkTarget();
-    case PerchingConfiguration::ROLL_YAW:
-      return applyRollYawTarget();
-  }
-}
-
-void GimbalrotorPerchingNavigator::applyManualPitchDelta(double delta)
-{
-  switch(perching_configuration_)
-  {
-    case PerchingConfiguration::BASELINE:
-      return applyBaselinePitchDelta(delta);
-    case PerchingConfiguration::PITCH_ONLY:
-      return applyPitchOnlyDelta(delta);
-    case PerchingConfiguration::MULTILINK:
-      return applyMultilinkPitchDelta(delta);
-    case PerchingConfiguration::ROLL_YAW:
-      return applyRollYawPitchDelta(delta);
-  }
-}
-
-void GimbalrotorPerchingNavigator::naviCallback(const aerial_robot_msgs::FlightNavConstPtr& msg)
-{
-  switch(perching_configuration_)
-  {
-    case PerchingConfiguration::BASELINE:
-      return baselineNaviCallback(msg);
-    case PerchingConfiguration::PITCH_ONLY:
-      return pitchOnlyNaviCallback(msg);
-    case PerchingConfiguration::MULTILINK:
-      return baselineNaviCallback(msg);
-    case PerchingConfiguration::ROLL_YAW:
-      return rollYawNaviCallback(msg);
-  }
-}
-
-bool GimbalrotorPerchingNavigator::applyPerchingConstraint(aerial_robot_msgs::FlightNav& msg)
-{
-  switch(perching_configuration_)
-  {
-    case PerchingConfiguration::BASELINE:
-      return applyBaselineConstraint(msg);
-    case PerchingConfiguration::PITCH_ONLY:
-      return !core_.ownsPose();
-    case PerchingConfiguration::MULTILINK:
-      return applyMultilinkConstraint(msg);
-    case PerchingConfiguration::ROLL_YAW:
-      return false;
-  }
-  return false;
-}
-
-
-// Pitch-only workflow
-
-void GimbalrotorPerchingNavigator::initializePitchOnly(ros::NodeHandle nh, ros::NodeHandle nhp)
-{
-  ros::NodeHandle pn(nh, "navigation/pitch_only_perching");
-  pn.param<std::string>("pitch_joint_name", joint_name_, "joint_pitch_only");
-  pn.param<std::string>("contact_link_name", contact_link_, "pitch_joint_only_hand_link");
-  pn.param<std::string>("world_frame", world_frame_, "world");
-  pn.param<std::string>("topic_prefix", pitch_only_prefix_, "perching/pitch_only");
-  pn.param("pitch_command_sign", pitch_only_pitch_command_sign_, 1.0);
-  pitch_only_pitch_command_sign_ = std::isfinite(pitch_only_pitch_command_sign_) && pitch_only_pitch_command_sign_ < 0 ? -1 : 1;
-  pn.param("pitch_axis_alignment_threshold", pitch_only_pitch_axis_alignment_threshold_, .90);
-  pn.getParam("pitch_lower_limit", configured_lower_);
-  pn.getParam("pitch_upper_limit", configured_upper_);
-  pn.getParam("pitch_rate_limit", configured_rate_);
-  auto& c = core_.config;
-  pn.param("body_pitch_lower_limit", c.body_pitch_min, c.body_pitch_min);
-  pn.param("body_pitch_upper_limit", c.body_pitch_max, c.body_pitch_max);
-  pn.param("joint_state_timeout", c.feedback_timeout, c.feedback_timeout);
-  pn.param("joint_state_future_tolerance", c.future_tolerance, c.future_tolerance);
-  pn.param("pitch_zero_tolerance", c.q_zero_tolerance, c.q_zero_tolerance);
-  pn.param("pitch_position_tolerance", c.q_hold_error, c.q_hold_error);
-  pn.param("pitch_velocity_tolerance", c.joint_settle_rate, c.joint_settle_rate);
-  pn.param("pitch_rezero_rate_tolerance", c.rezero_rate_tolerance, c.rezero_rate_tolerance);
-  pn.param("pitch_rezero_stable_duration", c.settle_duration, c.settle_duration);
-  pn.param("pitch_rezero_target_pitch", c.rezero_pitch, c.rezero_pitch);
-  pn.param("pitch_rezero_command_sign", c.rezero_sign, c.rezero_sign);
-  c.rezero_sign = std::isfinite(c.rezero_sign) && c.rezero_sign < 0 ? -1 : 1;
-  pn.param("pitch_rezero_kp", c.rezero_kp, c.rezero_kp);
-  pn.param("pitch_rezero_rate_limit", c.rezero_rate, c.rezero_rate);
-  pn.param("pitch_rezero_max_delta", c.rezero_range, c.rezero_range);
-  pn.param("pitch_rezero_pitch_tolerance", c.rezero_pitch_tolerance, c.rezero_pitch_tolerance);
-  pn.param("pitch_rezero_timeout", c.rezero_timeout, c.rezero_timeout);
-  pn.param("passive_lower_limit", c.passive_min, c.passive_min);
-  pn.param("passive_upper_limit", c.passive_max, c.passive_max);
-  pn.param("passive_rate_limit", c.passive_rate, c.passive_rate);
-  auto vector = [&pn](const std::string& key, KDL::Vector& v)
-  {
-    if(!pn.hasParam(key))
-      return;
-    std::vector<double> a;
-    if(pn.getParam(key, a) && a.size() == 3)
-      v = KDL::Vector(a[0], a[1], a[2]);
-    else
-      v = KDL::Vector(pitch_only::unknown, pitch_only::unknown, pitch_only::unknown);
-  };
-  vector("pivot_offset", c.pivot_offset);
-  vector("hinge_axis", c.hinge_axis);
-  if(pitch_only::finite(c.hinge_axis) && c.hinge_axis.Norm() > 1e-6)
-    c.hinge_axis = c.hinge_axis / c.hinge_axis.Norm();
-  pitch_only_model_resolution_attempted_ = robot_model_ && robot_model_->initialized();
-  if(pitch_only_model_resolution_attempted_)
-    model_valid_ = resolveModel();
-  core_.model = [this](double q, KDL::Frame& bc, KDL::Vector& g) { return modelAt(q, bc, g); };
-  std::string command_topic, joint_topic;
-  pn.param<std::string>("joint_command_topic", command_topic, "joints_ctrl");
-  pn.param<std::string>("joint_state_topic", joint_topic, "joint_states");
-  pitch_only_joints_pub_ = nh.advertise<sensor_msgs::JointState>(command_topic, 1);
-  pose_pub_ = nh.advertise<geometry_msgs::PoseStamped>(pitch_only_prefix_ + "/target_body_pose", 1);
-  pivot_pub_ = nh.advertise<geometry_msgs::PointStamped>(pitch_only_prefix_ + "/locked_pivot", 1);
-  pitch_only_state_pub_ = nh.advertise<std_msgs::String>(pitch_only_prefix_ + "/state", 1);
-  for(const auto* key : {"model_valid", "contact_valid", "rezero_active", "rezero_ready", "rezero_failed",
-                         "servo_frozen", "cutting_enabled", "feedback_valid"})
-    bool_pubs_[key] = nh.advertise<std_msgs::Bool>(pitch_only_prefix_ + "/" + key, 1);
-  for(const auto* key : {"servo_measured", "servo_target_nominal", "servo_hold_error", "body_pitch", "body_pitch_rate",
-                         "passive_alpha_cmd", "passive_alpha_measured", "cut_alpha_min", "cut_alpha_max", "pivot_error",
-                         "lock_generation"})
-    number_pubs_[key] = nh.advertise<std_msgs::Float64>(pitch_only_prefix_ + "/" + key, 1);
-  subscribers_.push_back(nh.subscribe(joint_topic, 1, &GimbalrotorPerchingNavigator::pitchOnlyJointCallback, this));
-  for(const auto* key :
-      {"confirm_detached_zero", "pitch_rezero", "freeze", "unfreeze", "prepare_unperch", "confirm_released", "recover"})
-  {
-    const std::string action(key);
-    subscribers_.push_back(nh.subscribe<std_msgs::Empty>(
-        pitch_only_prefix_ + "/" + action, 1, [this, action](const std_msgs::EmptyConstPtr&) { requestPitchOnly(action); }));
-  }
-  subscribers_.push_back(nh.subscribe<std_msgs::Float64>(pitch_only_prefix_ + "/servo_command", 1,
-                                                         [this](const std_msgs::Float64ConstPtr& m)
-                                                         {
-                                                           std::lock_guard<std::recursive_mutex> l(
-                                                               perchingStateMutex());
-                                                           core_.servo(pitch_only_pitch_command_sign_ * m->data, sample());
-                                                         }));
-  if(pitch_only_model_resolution_attempted_ && !model_valid_)
-    ROS_ERROR("[PitchOnly] Invalid mechanism/parameters; check joint limits, pivot axis and positive rates/timeouts.");
-}
-
-bool GimbalrotorPerchingNavigator::resolveModel()
-{
-  if(!robot_model_ || !robot_model_->initialized() || contact_link_.empty())
-    return false;
-  const auto j = robot_model_->getUrdfModel().getJoint(joint_name_);
-  if(!j || (j->type != urdf::Joint::REVOLUTE && j->type != urdf::Joint::CONTINUOUS) || j->mimic)
-    return false;
-  KDL::Vector a(j->axis.x, j->axis.y, j->axis.z);
-  if(!pitch_only::finite(a) || a.Norm() < 1e-6 || !std::isfinite(pitch_only_pitch_axis_alignment_threshold_) ||
-     pitch_only_pitch_axis_alignment_threshold_ <= 0 || pitch_only_pitch_axis_alignment_threshold_ > 1)
-    return false;
-  a = a / a.Norm();
-  if(std::abs(a.y()) < pitch_only_pitch_axis_alignment_threshold_)
-    return false;
-  const auto& indices = robot_model_->getJointIndexMap();
-  const auto it = indices.find(joint_name_);
-  if(it == indices.end() || it->second >= robot_model_->getJointPositions().rows())
-    return false;
-  joint_index_ = it->second;
-  KDL::Chain chain;
-  if(!robot_model_->getTree().getChain(robot_model_->getBaselinkName(), contact_link_, chain) ||
-     chain.getNrOfJoints() != 1)
-    return false;
-  for(unsigned i = 0; i < chain.getNrOfSegments(); ++i)
-  {
-    const auto& k = chain.getSegment(i).getJoint();
-    if(k.getType() != KDL::Joint::None && k.getName() != joint_name_)
-      return false;
-  }
-  auto& c = core_.config;
-  c.q_min = configured_lower_;
-  c.q_max = configured_upper_;
-  if(j->type == urdf::Joint::REVOLUTE && j->limits)
-  {
-    c.q_min = std::isnan(configured_lower_) ? j->limits->lower : std::max(j->limits->lower, configured_lower_);
-    c.q_max = std::isnan(configured_upper_) ? j->limits->upper : std::min(j->limits->upper, configured_upper_);
-  }
-  // Preserve the URDF velocity cap; an optional YAML value can reduce it.
-  c.q_rate = j->limits && std::isfinite(j->limits->velocity) && j->limits->velocity > 0 ? j->limits->velocity
-                                                                                        : configured_rate_;
-  if(!std::isnan(configured_rate_))
-    c.q_rate = std::min(c.q_rate, configured_rate_);
-  if(!c.valid())
-    return false;
-  ROS_INFO("[PitchOnly] pitch limits [%.4f, %.4f] rad, rate %.4f rad/s, command sign %.0f", c.q_min, c.q_max, c.q_rate,
-           pitch_only_pitch_command_sign_);
-  return true;
-}
-
-bool GimbalrotorPerchingNavigator::modelAt(double q, KDL::Frame& bc, KDL::Vector& cog) const
-{
-  if(!model_valid_ || !std::isfinite(q))
-    return false;
-  auto joints = robot_model_->getJointPositions();
-  if(joint_index_ >= joints.rows())
-    return false;
-  joints(joint_index_) = q;
-  const auto frames = robot_model_->fullForwardKinematics(joints);
-  const auto b = frames.find(robot_model_->getBaselinkName()), c = frames.find(contact_link_);
-  if(b == frames.end() || c == frames.end() || !pitch_only::finite(b->second) || !pitch_only::finite(c->second))
-    return false;
-  bc = b->second.Inverse() * c->second;
-  KDL::RigidBodyInertia total = KDL::RigidBodyInertia::Zero();
-  for(const auto& item : robot_model_->getInertiaMap())
-  {
-    auto f = frames.find(item.first);
-    if(f == frames.end() || !pitch_only::finite(f->second))
-      return false;
-    perching_geometry::accumulateLinkInertia(total, f->second, item.first, item.second,
-                                             robot_model_->getExtraModuleMap());
-  }
-  if(!std::isfinite(total.getMass()) || total.getMass() <= 1e-9)
-    return false;
-  cog = b->second.Inverse() * total.getCOG();
-  return pitch_only::finite(bc) && pitch_only::finite(cog);
-}
-
-pitch_only::Sample GimbalrotorPerchingNavigator::sample() const
-{
-  pitch_only::Sample s = feedback_;
-  s.now = ros::Time::now().toSec();
-  s.hover = navi_state_ == HOVER_STATE;
-  const double receive_age = s.now - joint_receive_stamp_;
-  s.model_valid =
-      model_valid_ && joint_receive_stamp_ > 0 && receive_age >= 0 && receive_age <= core_.config.feedback_timeout;
-  if(!estimator_)
-  {
-    s.model_valid = false;
-    return s;
-  }
-  // Same estimator source and frame convention as multilink; no extra odometry subscription.
-  const auto p = estimator_->getPos(Frame::BASELINK, estimate_mode_);
-  const auto rotation = estimator_->getOrientation(Frame::BASELINK, estimate_mode_);
-  tf::Quaternion q;
-  rotation.getRotation(q);
-  if(!std::isfinite(q.length2()) || q.length2() < 1e-12)
-  {
-    s.model_valid = false;
-    return s;
-  }
-  q.normalize();
-  s.body = KDL::Frame(KDL::Rotation::Quaternion(q.x(), q.y(), q.z(), q.w()), KDL::Vector(p.x(), p.y(), p.z()));
-  const auto omega = estimator_->getAngularVel(Frame::BASELINK, estimate_mode_);
-  s.angular_speed = omega.length();
-  s.pitch_rate = pitch_only::pitchRate(s.body, KDL::Vector(omega.x(), omega.y(), omega.z()));
-  return s;
-}
-void GimbalrotorPerchingNavigator::pitchOnlyJointCallback(const sensor_msgs::JointStateConstPtr& m)
-{
-  std::lock_guard<std::recursive_mutex> l(perchingStateMutex());
-  const auto it = std::find(m->name.begin(), m->name.end(), joint_name_);
-  if(it == m->name.end() || std::count(m->name.begin(), m->name.end(), joint_name_) != 1)
-    return;
-  const auto index = std::distance(m->name.begin(), it);
-  if(static_cast<std::size_t>(index) >= m->position.size() || !std::isfinite(m->position[index]))
-    return;
-  const double now = ros::Time::now().toSec();
-  const double stamp = m->header.stamp.isZero() ? now : m->header.stamp.toSec();
-  if(!core_.fresh(now, stamp) || stamp <= feedback_.joint_stamp)
-    return;
-  const double q = m->position[index];
-  double v = pitch_only::unknown;
-  if(static_cast<std::size_t>(index) < m->velocity.size() && std::isfinite(m->velocity[index]))
-    v = m->velocity[index];
-  else if(feedback_.joint_stamp > 0 && stamp - feedback_.joint_stamp > 1e-6 && stamp - feedback_.joint_stamp <= .5)
-    v = (q - feedback_.q) / (stamp - feedback_.joint_stamp);
-  feedback_.q = q;
-  feedback_.qdot = v;
-  feedback_.joint_stamp = stamp;
-  joint_receive_stamp_ = now;
-}
-
-void GimbalrotorPerchingNavigator::requestPitchOnly(const std::string& action)
-{
-  std::lock_guard<std::recursive_mutex> l(perchingStateMutex());
-  const auto s = sample();
-  const auto generation = core_.generation;
-  if(action == "confirm_detached_zero")
-    core_.armZero(s);
-  else if(action == "pitch_rezero")
-    core_.rezero(s);
-  else if(action == "freeze")
-    core_.freeze(s);
-  else if(action == "unfreeze")
-    core_.unfreeze(s);
-  else if(action == "prepare_unperch")
-    core_.prepare(s);
-  else if(action == "confirm_released")
-    core_.released(s);
-  else if(action == "recover")
-    core_.recover(s);
-  if(core_.generation != generation && core_.ownsPose())
-    commitLock();
-  publishPitchOnlyDiagnostics();
-}
-void GimbalrotorPerchingNavigator::selectPitchOnlyMode(perching_geometry::Mode mode, bool enable)
-{
-  std::lock_guard<std::recursive_mutex> l(perchingStateMutex());
-  // An optional pre-contact zero hold can exist while perching is disabled.
-  if(mode == perching_geometry::Mode::NORMAL && !enable)
-    core_.zero_hold_armed = false;
-  selectCommonPerchingMode(mode, enable);
-}
-void GimbalrotorPerchingNavigator::resetPitchOnlyLock()
-{
-  core_.reset();
-  resetCommonPerchingLock();
-}
-bool GimbalrotorPerchingNavigator::tryLockPitchOnly(const std::string&)
-{
-  if(!core_.enable(sample()))
-    return false;
-  commitLock();
-  return true;
-}
-void GimbalrotorPerchingNavigator::relockPitchOnlyCallback(const std_msgs::EmptyConstPtr&)
-{
-  std::lock_guard<std::recursive_mutex> l(perchingStateMutex());
-  if(core_.relock(sample()))
-    commitLock();
-  publishPitchOnlyDiagnostics();
-}
-void GimbalrotorPerchingNavigator::applyPitchOnlyDelta(double delta)
-{
-  std::lock_guard<std::recursive_mutex> l(perchingStateMutex());
-  core_.cut(delta, sample());
-}
-void GimbalrotorPerchingNavigator::pitchOnlyNaviCallback(const aerial_robot_msgs::FlightNavConstPtr& m)
-{
-  std::lock_guard<std::recursive_mutex> l(perchingStateMutex());
-  if(!core_.ownsPose())
-    GimbalrotorNavigator::naviCallback(m);
-}
-void GimbalrotorPerchingNavigator::commitLock()
-{
-  const auto p = core_.target * core_.cog;
-  double x, y, z, w;
-  core_.target.M.GetQuaternion(x, y, z, w);
-  const tf::Quaternion body(x, y, z, w);
-  const auto cog_orientation = body * getCommandedBaselinkRotationRelativeToCog().inverse();
-  commitFixedContactLock(tf::Vector3(p.x(), p.y(), p.z()), cog_orientation,
-                         tf::Vector3(core_.pivot.x(), core_.pivot.y(), core_.pivot.z()));
-}
-
-bool GimbalrotorPerchingNavigator::commandPose()
-{
-  if(!pitch_only::finite(core_.target) || !pitch_only::finite(core_.cog))
-    return false;
-  double x, y, z, w;
-  core_.target.M.GetQuaternion(x, y, z, w);
-  setBaselinkRotationTargetRelativeToCog(tf::Quaternion(0, 0, 0, 1));
-  const auto relative = getCommandedBaselinkRotationRelativeToCog();
-  if(!std::isfinite(relative.length2()) || relative.length2() < 1e-12)
-    return false;
-  auto orientation = tf::Quaternion(x, y, z, w) * relative.inverse();
-  orientation.normalize();
-  double r, p, yaw;
-  tf::Matrix3x3(orientation).getRPY(r, p, yaw);
-  const auto position = core_.target * core_.cog;
-  setXyControlMode(POS_CONTROL_MODE);
-  setTargetPos(tf::Vector3(position.x(), position.y(), position.z()));
-  setTargetVel(0, 0, 0);
-  setTargetAcc(0, 0, 0);
-  setTargetRPY(tf::Vector3(r, p, yaw));
-  setTargetOmega(0, 0, 0);
-  setTargetAngAcc(0, 0, 0);
-  return true;
-}
-void GimbalrotorPerchingNavigator::applyPitchOnlyTarget()
-{
-  if(core_.ownsPose() && !commandPose())
-    core_.fault("controller target invalid");
-  if(!model_valid_ || (!core_.ownsPose() && !core_.zero_hold_armed))
-    return;
-  sensor_msgs::JointState cmd;
-  cmd.header.stamp = ros::Time::now();
-  cmd.name = {joint_name_};
-  cmd.position = {core_.q_target};
-  pitch_only_joints_pub_.publish(cmd);  // Joint positions are model radians; Servo.yaml performs motor conversion.
-}
-void GimbalrotorPerchingNavigator::updatePitchOnly()
-{
-  std::lock_guard<std::recursive_mutex> l(perchingStateMutex());
-  if(!pitch_only_model_resolution_attempted_ && robot_model_ && robot_model_->initialized())
-  {
-    pitch_only_model_resolution_attempted_ = true;
-    model_valid_ = resolveModel();
-    if(!model_valid_)
-      ROS_ERROR("[PitchOnly] Unable to resolve pitch mechanism/parameters.");
-  }
-  GimbalrotorNavigator::update();
-  // Match multilink: leaving HOVER disables perching instead of retaining authority.
-  if(navi_state_ != HOVER_STATE)
-  {
-    if(perchingMode() != perching_geometry::Mode::DISABLED)
-      selectCommonPerchingMode(perching_geometry::Mode::NORMAL, false);
-    core_.zero_hold_armed = false;
-    last_update_ = ros::Time();
-    publishPitchOnlyDiagnostics();
-    return;
-  }
-  if(perchingMode() == perching_geometry::Mode::NORMAL && !core_.ownsPose())
-    tryLockPitchOnly("active update");
-  const auto now = ros::Time::now();
-  const double dt = last_update_.isZero() ? 0.025 : (now - last_update_).toSec();
-  last_update_ = now;
-  core_.tick(sample(), dt);
-  applyPitchOnlyTarget();
-  publishPitchOnlyDiagnostics();
-}
-void GimbalrotorPerchingNavigator::publishPitchOnlyDiagnostics()
-{
-  const auto s = sample();
-  auto boolean = [this](const std::string& key, bool v)
-  {
-    std_msgs::Bool m;
-    m.data = v;
-    bool_pubs_.at(key).publish(m);
-  };
-  auto number = [this](const std::string& key, double v)
-  {
-    std_msgs::Float64 m;
-    m.data = v;
-    number_pubs_.at(key).publish(m);
-  };
-  const bool valid = core_.feedback(s);
-  boolean("model_valid", model_valid_);
-  boolean("feedback_valid", valid);
-  boolean("contact_valid", core_.attached() && valid);
-  boolean("rezero_active", core_.stage == pitch_only::Stage::PITCH_REZERO_ACTIVE);
-  boolean("rezero_ready", core_.rezeroReady(s));
-  boolean("rezero_failed", core_.stage == pitch_only::Stage::FAULT_HOLD && !core_.rezero_completed);
-  boolean("servo_frozen", core_.stage == pitch_only::Stage::PASSIVE_CUTTING);
-  boolean("cutting_enabled", core_.stage == pitch_only::Stage::PASSIVE_CUTTING && valid);
-  number("servo_measured", s.q);
-  number("servo_target_nominal", core_.q_target);
-  number("servo_hold_error", s.q - core_.q_target);
-  number("body_pitch", pitch_only::pitch(s.body));
-  number("body_pitch_rate", s.pitch_rate);
-  number("passive_alpha_cmd", core_.alpha);
-  number("passive_alpha_measured", core_.ownsPose() ? core_.measuredAlpha(s) : pitch_only::unknown);
-  number("cut_alpha_min", core_.alpha_min);
-  number("cut_alpha_max", core_.alpha_max);
-  number("lock_generation", core_.generation);
-  KDL::Frame bc;
-  KDL::Vector g;
-  const double error = core_.ownsPose() && modelAt(s.q, bc, g)
-                           ? (s.body * bc * core_.config.pivot_offset - core_.pivot).Norm()
-                           : pitch_only::unknown;
-  number("pivot_error", error);
-  const char* feedback_error = core_.feedbackError(s);
-  // Preserve the 15-field snapshot layout for RViz; old saw-feedback slot is reserved.
-  std::ostringstream out;
-  out << std::setprecision(17) << name(core_.stage) << "|" << core_.generation << "|" << s.now << "|" << s.q << "|"
-      << core_.q_target << "|" << pitch_only::pitch(s.body) << "|" << core_.alpha << "|" << core_.measuredAlpha(s) << "|"
-      << core_.alpha_min << "|" << core_.alpha_max << "|" << valid << "|0|" << error << "|" << core_.zero_hold_armed
-      << "|" << (feedback_error ? feedback_error : core_.status);
-  std_msgs::String state;
-  state.data = out.str();
-  pitch_only_state_pub_.publish(state);
-  if(core_.ownsPose())
-  {
-    geometry_msgs::PoseStamped pose;
-    pose.header.stamp = ros::Time::now();
-    pose.header.frame_id = world_frame_;
-    pose.pose.position.x = core_.target.p.x();
-    pose.pose.position.y = core_.target.p.y();
-    pose.pose.position.z = core_.target.p.z();
-    core_.target.M.GetQuaternion(pose.pose.orientation.x, pose.pose.orientation.y, pose.pose.orientation.z,
-                                 pose.pose.orientation.w);
-    pose_pub_.publish(pose);
-    geometry_msgs::PointStamped pivot;
-    pivot.header = pose.header;
-    pivot.point.x = core_.pivot.x();
-    pivot.point.y = core_.pivot.y();
-    pivot.point.z = core_.pivot.z();
-    pivot_pub_.publish(pivot);
-  }
-}
-
-// Multilink workflow
-
-
-
-
-
-
-namespace aerial_robot_navigation
-{
-
-
-void GimbalrotorPerchingNavigator::initializeMultilink(ros::NodeHandle nh, ros::NodeHandle nhp)
-{
-
-  multilinkRosParamInit();
-
-  multilink_model_valid_ = false;
-  const bool robot_model_ready =
-      robot_model_ && robot_model_->initialized();
-
-  // Model topology is fixed; defer resolution only until the first model update.
-  multilink_model_resolution_attempted_ = robot_model_ready;
-  if(robot_model_ready)
-  {
-    multilink_model_valid_ = resolveMechanismModel();
-  }
-  else
-  {
-    ROS_WARN("[GimbalrotorPerchingNavigator/multilink] waiting for the robot model to initialize.");
-  }
-
-  joint_state_sub_ = nh_.subscribe(
-      joint_state_topic_,
-      1,
-      &GimbalrotorPerchingNavigator::jointStateCallback,
-      this);
-  secondary_joint_target_sub_ = nh_.subscribe(
-      secondary_joint_target_topic_,
-      1,
-      &GimbalrotorPerchingNavigator::
-          secondaryJointTargetCallback,
-      this);
-
-  if(pitch_rezero_config_valid_)
-    pitch_rezero_sub_ = nh_.subscribe(
-        pitch_rezero_topic_, 1,
-        &GimbalrotorPerchingNavigator::multilinkPitchRezeroCallback, this);
-  pitch_rezero_active_pub_ = nh_.advertise<std_msgs::Bool>(
-      "perching/multilink/pitch_rezero_active", 1);
-  pitch_rezero_ready_pub_ = nh_.advertise<std_msgs::Bool>(
-      "perching/multilink/pitch_rezero_ready", 1);
-  pitch_rezero_failed_pub_ = nh_.advertise<std_msgs::Bool>(
-      "perching/multilink/pitch_rezero_failed", 1);
-  pitch_joint_hold_error_pub_ = nh_.advertise<std_msgs::Float64>(
-      "perching/multilink/pitch_joint_hold_error", 1);
-  secondary_joint_hold_error_pub_ = nh_.advertise<std_msgs::Float64>(
-      "perching/multilink/secondary_joint_hold_error", 1);
-  passive_pitch_delta_pub_ = nh_.advertise<std_msgs::Float64>(
-      "perching/multilink/passive_pitch_delta", 1);
-  body_pitch_pub_ = nh_.advertise<std_msgs::Float64>(
-      "perching/multilink/body_pitch", 1);
-  body_pitch_rate_pub_ = nh_.advertise<std_msgs::Float64>(
-      "perching/multilink/body_pitch_rate", 1);
-
-  joint_control_pub_ =
-      nh_.advertise<sensor_msgs::JointState>(joint_command_topic_, 1);
-  model_valid_pub_ =
-      nh_.advertise<std_msgs::Bool>("perching/multilink/model_valid", 1, true);
-  secondary_settled_pub_ =
-      nh_.advertise<std_msgs::Bool>(
-          "perching/multilink/secondary_settled", 1);
-  pitch_measured_pub_ =
-      nh_.advertise<std_msgs::Float64>(
-          "perching/multilink/pitch_joint_measured", 1);
-  pitch_nominal_pub_ =
-      nh_.advertise<std_msgs::Float64>(
-          "perching/multilink/pitch_joint_nominal", 1);
-  pitch_final_pub_ =
-      nh_.advertise<std_msgs::Float64>(
-          "perching/multilink/pitch_joint_final", 1);
-  secondary_measured_pub_ =
-      nh_.advertise<std_msgs::Float64>(
-          "perching/multilink/secondary_joint_measured", 1);
-  // Keep diagnostics off the command topic (especially with a negative command sign).
-  secondary_target_pub_ =
-      nh_.advertise<std_msgs::Float64>(
-          "perching/multilink/secondary_joint_nominal", 1);
-  target_body_pose_pub_ =
-      nh_.advertise<geometry_msgs::PoseStamped>(
-          "perching/multilink/target_body_pose", 1);
-
-  std_msgs::Bool valid_msg;
-  valid_msg.data = multilink_model_valid_;
-  model_valid_pub_.publish(valid_msg);
-
-  if(multilink_model_valid_)
-  {
-    ROS_WARN(
-        "[GimbalrotorPerchingNavigator/multilink] model ready: "
-        "pitch '%s', secondary '%s' (%s), contact '%s'.",
-        pitch_joint_name_.c_str(),
-        secondary_joint_name_.c_str(),
-        secondary_axis_type_ == SECONDARY_AXIS_ROLL ? "roll" : "yaw",
-        contact_link_name_.c_str());
-  }
-  else if(robot_model_ready)
-  {
-    ROS_ERROR(
-        "[GimbalrotorPerchingNavigator/multilink] multilink model is "
-        "not valid. Locking and mechanism commands are disabled.");
-  }
-}
-
-void GimbalrotorPerchingNavigator::multilinkRosParamInit()
-{
-  ros::NodeHandle multilink_nh(nh_, "navigation/multilink_perching");
-
-  multilink_nh.param("pitch_joint_name", pitch_joint_name_, std::string(""));
-  multilink_nh.param(
-      "secondary_joint_name", secondary_joint_name_, std::string(""));
-  multilink_nh.param("contact_link_name", contact_link_name_, std::string(""));
-  multilink_nh.param(
-      "joint_command_topic", joint_command_topic_, std::string("joints_ctrl"));
-  multilink_nh.param(
-      "joint_state_topic", joint_state_topic_, std::string("joint_states"));
-  multilink_nh.param(
-      "secondary_joint_target_topic",
-      secondary_joint_target_topic_,
-      std::string("perching/multilink/secondary_joint_target"));
-
-  multilink_nh.param(
-      "secondary_position_tolerance",
-      secondary_position_tolerance_,
-      0.02);
-  multilink_nh.param(
-      "secondary_velocity_tolerance",
-      secondary_velocity_tolerance_,
-      0.05);
-  multilink_nh.param(
-      "secondary_settle_duration", secondary_settle_duration_, 0.30);
-  multilink_nh.param("joint_state_timeout", joint_state_timeout_, 0.15);
-  multilink_nh.param(
-      "joint_state_future_tolerance",
-      joint_state_future_tolerance_,
-      0.02);
-  multilink_nh.param(
-      "pitch_axis_alignment_threshold",
-      multilink_pitch_axis_alignment_threshold_,
-      0.90);
-  multilink_nh.param(
-      "secondary_axis_alignment_threshold",
-      secondary_axis_alignment_threshold_,
-      0.90);
-  multilink_nh.param("pitch_command_sign", multilink_pitch_command_sign_, 1.0);
-  multilink_nh.param("secondary_command_sign", secondary_command_sign_, 1.0);
-
-  multilink_nh.param("pitch_rezero_topic", pitch_rezero_topic_,
-                    std::string("perching/multilink/pitch_rezero"));
-  multilink_nh.param("pitch_rezero_target_pitch", pitch_rezero_target_pitch_, 0.0);
-  multilink_nh.param("pitch_rezero_kp", pitch_rezero_kp_, 1.0);
-  multilink_nh.param("pitch_rezero_rate_limit", pitch_rezero_rate_limit_, 0.1745329);
-  multilink_nh.param("pitch_rezero_max_delta", pitch_rezero_max_delta_, 0.5235988);
-  multilink_nh.param("pitch_rezero_command_sign", pitch_rezero_command_sign_, 1.0);
-  multilink_nh.param("pitch_rezero_pitch_tolerance", pitch_rezero_pitch_tolerance_, 0.0349066);
-  multilink_nh.param("pitch_rezero_rate_tolerance", pitch_rezero_rate_tolerance_, 0.05);
-  multilink_nh.param("pitch_rezero_stable_duration", pitch_rezero_stable_duration_, 0.3);
-  multilink_nh.param("pitch_rezero_timeout", pitch_rezero_timeout_, 5.0);
-  multilink_nh.param("pitch_rezero_pitch_joint_hold_tolerance",
-                    pitch_rezero_pitch_joint_hold_tolerance_, 0.02);
-  multilink_nh.param("pitch_rezero_secondary_joint_hold_tolerance",
-                    pitch_rezero_secondary_joint_hold_tolerance_, 0.02);
-  for(unsigned int i = 0; i < 3; ++i)
-  {
-    const std::string suffix(1, "xyz"[i]);
-    multilink_nh.param("pitch_rezero_pivot_offset_" + suffix,
-                      pitch_rezero_pivot_offset_(i), 0.0);
-    multilink_nh.param("pitch_rezero_axis_" + suffix,
-                      pitch_rezero_axis_(i), i == 1 ? 1.0 : 0.0);
-  }
-  const auto positive = [](double v) { return std::isfinite(v) && v > 0.0; };
-  std::string topic_error;
-  pitch_rezero_config_valid_ =
-      !pitch_rezero_topic_.empty() &&
-      ros::names::validate(pitch_rezero_topic_, topic_error) &&
-      std::isfinite(pitch_rezero_target_pitch_) &&
-      std::abs(pitch_rezero_target_pitch_) < M_PI / 2.0 &&
-      positive(pitch_rezero_kp_) && positive(pitch_rezero_rate_limit_) &&
-      positive(pitch_rezero_max_delta_) && pitch_rezero_max_delta_ <= M_PI &&
-      std::isfinite(pitch_rezero_command_sign_) && pitch_rezero_command_sign_ != 0.0 &&
-      positive(pitch_rezero_pitch_tolerance_) && pitch_rezero_pitch_tolerance_ < M_PI / 2.0 &&
-      positive(pitch_rezero_rate_tolerance_) &&
-      positive(pitch_rezero_stable_duration_) && positive(pitch_rezero_timeout_) &&
-      pitch_rezero_timeout_ >= pitch_rezero_stable_duration_ &&
-      positive(pitch_rezero_pitch_joint_hold_tolerance_) &&
-      pitch_rezero_pitch_joint_hold_tolerance_ <= 0.5 &&
-      positive(pitch_rezero_secondary_joint_hold_tolerance_) &&
-      pitch_rezero_secondary_joint_hold_tolerance_ <= 0.5 &&
-      frameFinite(KDL::Frame(pitch_rezero_pivot_offset_)) &&
-      frameFinite(KDL::Frame(pitch_rezero_axis_)) &&
-      positive(pitch_rezero_axis_.Norm()) && pitch_rezero_axis_.Norm() > 1.0e-6;
-  if(pitch_rezero_config_valid_)
-  {
-    pitch_rezero_axis_ = pitch_rezero_axis_ / pitch_rezero_axis_.Norm();
-    pitch_rezero_command_sign_ = pitch_rezero_command_sign_ < 0.0 ? -1.0 : 1.0;
-  }
-  else
-    ROS_ERROR("[Multilink] Invalid pitch_rezero configuration; rezero is disabled.");
-
-  configured_pitch_limits_valid_ =
-      multilink_nh.getParam("pitch_lower_limit", configured_pitch_lower_) &&
-      multilink_nh.getParam("pitch_upper_limit", configured_pitch_upper_) &&
-      std::isfinite(configured_pitch_lower_) &&
-      std::isfinite(configured_pitch_upper_) &&
-      configured_pitch_lower_ < configured_pitch_upper_;
-  configured_secondary_limits_valid_ =
-      multilink_nh.getParam(
-          "secondary_lower_limit", configured_secondary_lower_) &&
-      multilink_nh.getParam(
-          "secondary_upper_limit", configured_secondary_upper_) &&
-      std::isfinite(configured_secondary_lower_) &&
-      std::isfinite(configured_secondary_upper_) &&
-      configured_secondary_lower_ < configured_secondary_upper_;
-
-  if(!std::isfinite(secondary_position_tolerance_) || secondary_position_tolerance_ <= 0.0)
-    secondary_position_tolerance_ = 0.02;
-  if(!std::isfinite(secondary_velocity_tolerance_) || secondary_velocity_tolerance_ <= 0.0)
-    secondary_velocity_tolerance_ = 0.05;
-  if(!std::isfinite(secondary_settle_duration_) || secondary_settle_duration_ < 0.0)
-    secondary_settle_duration_ = 0.30;
-  if(!std::isfinite(joint_state_timeout_) || joint_state_timeout_ <= 0.0)
-    joint_state_timeout_ = 0.15;
-  if(!std::isfinite(joint_state_future_tolerance_) || joint_state_future_tolerance_ < 0.0)
-    joint_state_future_tolerance_ = 0.02;
-
-  joint_state_future_tolerance_ = std::min(joint_state_future_tolerance_, joint_state_timeout_);
-
-  if(!std::isfinite(multilink_pitch_axis_alignment_threshold_) || multilink_pitch_axis_alignment_threshold_ <= 0.0 || multilink_pitch_axis_alignment_threshold_ > 1.0)
-    multilink_pitch_axis_alignment_threshold_ = 0.90;
-  if(!std::isfinite(secondary_axis_alignment_threshold_) || secondary_axis_alignment_threshold_ <= 0.0 || secondary_axis_alignment_threshold_ > 1.0)
-    secondary_axis_alignment_threshold_ = 0.90;
-
-  multilink_pitch_command_sign_ =
-      std::isfinite(multilink_pitch_command_sign_) && multilink_pitch_command_sign_ < 0.0 ?
-          -1.0 : 1.0;
-  secondary_command_sign_ =
-      std::isfinite(secondary_command_sign_) && secondary_command_sign_ < 0.0 ?
-          -1.0 : 1.0;
-}
-
-bool GimbalrotorPerchingNavigator::resolveJointLimits(
-    const std::string& joint_name,
-    bool configured_limits_valid,
-    double configured_lower,
-    double configured_upper,
-    double& lower,
-    double& upper) const
-{
-  const urdf::JointConstSharedPtr joint = robot_model_->getUrdfModel().getJoint(joint_name);
-
-  if(joint && joint->type == urdf::Joint::REVOLUTE && joint->limits &&
-     std::isfinite(joint->limits->lower) &&
-     std::isfinite(joint->limits->upper) &&
-     joint->limits->lower < joint->limits->upper)
-  {
-    lower = joint->limits->lower;
-    upper = joint->limits->upper;
-    return true;
-  }
-
-  if(configured_limits_valid)
-  {
-    lower = configured_lower;
-    upper = configured_upper;
-    return true;
-  }
-
-  ROS_ERROR(
-      "[GimbalrotorPerchingNavigator/multilink] joint '%s' has no "
-      "finite position limits and no valid configured fallback limits.",
-      joint_name.c_str());
-  return false;
+  joints_pub_ = nh_.advertise<sensor_msgs::JointState>(command, 1);
+  reference_pub_ = nh_.advertise<nav_msgs::Odometry>(prefix_ + "/body_reference", 1);
+  measured_pub_ = nh_.advertise<nav_msgs::Odometry>(prefix_ + "/body_measured", 1);
+  cog_pub_ = nh_.advertise<nav_msgs::Odometry>(prefix_ + "/cog_reference", 1);
+  body_pose_pub_ = nh_.advertise<geometry_msgs::PoseStamped>(prefix_ + "/target_body_pose", 1);
+  status_pub_ = nh_.advertise<diagnostic_msgs::DiagnosticArray>(prefix_ + "/diagnostics_status", 1);
+  state_pub_ = nh_.advertise<std_msgs::String>(prefix_ + "/state", 1, true);
+  session_pub_ = nh_.advertise<std_msgs::UInt64>(prefix_ + "/session", 1, true);
+  epoch_pub_ = nh_.advertise<std_msgs::UInt64>(prefix_ + "/motion_epoch", 1, true);
+  ack_pub_ = nh_.advertise<std_msgs::String>(prefix_ + "/command_ack", 10);
+  nominal_pub_ = nh_.advertise<geometry_msgs::Vector3Stamped>(prefix_ + "/nominal_angles", 1);
+  angles_pub_ = nh_.advertise<geometry_msgs::Vector3Stamped>(prefix_ + "/target_angles", 1);
+  lower_pub_ = nh_.advertise<geometry_msgs::Vector3Stamped>(prefix_ + "/position_lower", 1, true);
+  upper_pub_ = nh_.advertise<geometry_msgs::Vector3Stamped>(prefix_ + "/position_upper", 1, true);
+  subscriptions_.push_back(nh_.subscribe(joint_topic_, 10, &GimbalrotorPerchingNavigator::jointCallback, this));
+  subscriptions_.push_back(nh_.subscribe(body_topic, 10, &GimbalrotorPerchingNavigator::bodyCallback, this));
+  subscriptions_.push_back(nh_.subscribe(prefix_ + "/motion", 10, &GimbalrotorPerchingNavigator::motionCallback, this));
+  // Legacy names are data at the ROS boundary; algorithms only see coordinates.
+  XmlRpc::XmlRpcValue topics;
+  if(pn.getParam("coordinate_topics", topics) && topics.getType() == XmlRpc::XmlRpcValue::TypeStruct)
+    for(auto it = topics.begin(); it != topics.end(); ++it)
+    {
+      const auto coordinate = coordinate_map_.find(static_cast<std::string>(it->second));
+      if(coordinate == coordinate_map_.end()) throw std::invalid_argument("unknown coordinate in coordinate_topics");
+      const int index = coordinate->second;
+      subscriptions_.push_back(nh_.subscribe<std_msgs::Float64>(it->first, 1, [this, index](const std_msgs::Float64ConstPtr& m)
+      { std::lock_guard<std::recursive_mutex> l(perching_state_mutex_); if(motion_.source.empty()) coordinateCommand(index, m->data); }));
+    }
+  for(const std::string action : {"confirm_detached_zero", "pitch_rezero", "freeze", "unfreeze", "prepare_unperch", "confirm_released", "recover"})
+    subscriptions_.push_back(nh_.subscribe<std_msgs::Empty>(prefix_ + "/" + action, 1,
+      [this, action](const std_msgs::EmptyConstPtr&) { std::lock_guard<std::recursive_mutex> l(perching_state_mutex_); workflowCommand(action); }));
+  subscriptions_.push_back(nh_.subscribe<std_msgs::Float64>(prefix_ + "/servo_command", 1,
+    [this](const std_msgs::Float64ConstPtr& m)
+    { std::lock_guard<std::recursive_mutex> l(perching_state_mutex_); if(positioning_) servo_.servo(m->data, servoSample()); }));
+  subscriptions_.push_back(nh_.subscribe<std_msgs::Float64>(prefix_ + "/body_pitch_delta", 1,
+    [this](const std_msgs::Float64ConstPtr& m)
+    { std::lock_guard<std::recursive_mutex> l(perching_state_mutex_);
+      if(motion_.source.empty() && nominalHeld() && std::abs(m->data) <= jog_limit_)
+        bodyPitchCommand(m->data, rate_limit_, body_frame_id_ + 1); }));
+  subscriptions_.push_back(nh_.subscribe<std_msgs::Float64>(prefix_ + "/body_pitch_velocity", 1,
+    [this](const std_msgs::Float64ConstPtr& m)
+    { std::lock_guard<std::recursive_mutex> l(perching_state_mutex_);
+      if(!motion_.source.empty() || !std::isfinite(m->data)) return;
+      if(m->data == 0) stopMotion();
+      else if(perching_locked_) { velocity_active_ = true; body_target_valid_ = false;
+        velocity_command_ = std::clamp(m->data, -rate_limit_, rate_limit_); velocity_expires_ = ros::Time::now().toSec() + velocity_duration_; } }));
+  for(const std::string action : {"cancel", "stop", "pause", "resume", "prepare", "start"})
+    subscriptions_.push_back(nh_.subscribe<std_msgs::UInt64>(prefix_ + "/" + action, 1,
+      [this, action](const std_msgs::UInt64ConstPtr& m)
+      { std::lock_guard<std::recursive_mutex> l(perching_state_mutex_); planCommand(action, m->data); }));
+  subscriptions_.push_back(nh_.subscribe<geometry_msgs::Vector3Stamped>(prefix_ + "/target", 1,
+    [this](const geometry_msgs::Vector3StampedConstPtr& m)
+    {
+      std::lock_guard<std::recursive_mutex> l(perching_state_mutex_);
+      if(!perching_locked_ || !motion_.source.empty() || m->header.frame_id != "perching_lock_" + std::to_string(session_)) return;
+      const double values[] = {m->vector.x, m->vector.y, m->vector.z};
+      for(std::size_t i = 0; i < wire_angles_.size() && i < 3; ++i) coordinateCommand(coordinate_map_.at(wire_angles_[i]), values[i]);
+    }));
+  for(const std::string key : {"model_valid", "contact_valid", "rezero_active", "rezero_ready", "rezero_failed",
+      "pitch_rezero_active", "pitch_rezero_ready", "pitch_rezero_failed", "servo_frozen", "cutting_enabled", "feedback_valid", "secondary_settled"})
+    bool_pubs_[key] = nh_.advertise<std_msgs::Bool>(prefix_ + "/" + key, 1, true);
+  for(const std::string key : {"servo_measured", "servo_target_nominal", "servo_hold_error", "body_pitch", "body_pitch_rate",
+      "passive_alpha_cmd", "passive_alpha_measured", "cut_alpha_min", "cut_alpha_max", "pivot_error", "lock_generation",
+      "pitch_joint_measured", "pitch_joint_nominal", "pitch_joint_final", "secondary_joint_measured",
+      "secondary_joint_nominal", "pitch_joint_hold_error", "secondary_joint_hold_error", "passive_pitch_delta"})
+    number_pubs_[key] = nh_.advertise<std_msgs::Float64>(prefix_ + "/" + key, 1);
+  if(robot_model_->initialized()) model_valid_ = resolveMechanismModel();
 }
 
 bool GimbalrotorPerchingNavigator::resolveMechanismModel()
 {
-  if(!robot_model_ || !robot_model_->initialized())
-  {
-    ROS_ERROR(
-        "[GimbalrotorPerchingNavigator/multilink] robot model is unavailable.");
-    return false;
-  }
-
-  if(pitch_joint_name_.empty() || secondary_joint_name_.empty() || contact_link_name_.empty())
-  {
-    ROS_ERROR(
-        "[GimbalrotorPerchingNavigator/multilink] pitch_joint_name, "
-        "secondary_joint_name, and contact_link_name must all be configured.");
-    return false;
-  }
-
-  if(pitch_joint_name_ == secondary_joint_name_)
-  {
-    ROS_ERROR(
-        "[GimbalrotorPerchingNavigator/multilink] pitch and secondary "
-        "joint names must be different.");
-    return false;
-  }
-
-  const urdf::JointConstSharedPtr pitch_joint = robot_model_->getUrdfModel().getJoint(pitch_joint_name_);
-  const urdf::JointConstSharedPtr secondary_joint = robot_model_->getUrdfModel().getJoint(secondary_joint_name_);
-
-  if(!pitch_joint || !secondary_joint)
-  {
-    ROS_ERROR(
-        "[GimbalrotorPerchingNavigator/multilink] configured mechanism "
-        "joint is missing from URDF.");
-    return false;
-  }
-
-  const auto revolute_or_continuous = [](const urdf::JointConstSharedPtr& joint)
-  {
-    return joint->type == urdf::Joint::REVOLUTE || joint->type == urdf::Joint::CONTINUOUS;
-  };
-
-  if(!revolute_or_continuous(pitch_joint) ||
-     !revolute_or_continuous(secondary_joint))
-  {
-    ROS_ERROR(
-        "[GimbalrotorPerchingNavigator/multilink] both configured joints "
-        "must be revolute or continuous.");
-    return false;
-  }
-
-  pitch_axis_local_ = Eigen::Vector3d(pitch_joint->axis.x, pitch_joint->axis.y, pitch_joint->axis.z);
-  secondary_axis_local_ = Eigen::Vector3d(
-      secondary_joint->axis.x,
-      secondary_joint->axis.y,
-      secondary_joint->axis.z);
-
-  if(!pitch_axis_local_.allFinite() || pitch_axis_local_.norm() <= 1.0e-6 ||
-     !secondary_axis_local_.allFinite() ||
-     secondary_axis_local_.norm() <= 1.0e-6)
-  {
-    ROS_ERROR(
-        "[GimbalrotorPerchingNavigator/multilink] configured joint axis "
-        "is zero or non-finite.");
-    return false;
-  }
-
-  pitch_axis_local_.normalize();
-  secondary_axis_local_.normalize();
-
-  if(std::abs(pitch_axis_local_.y()) < multilink_pitch_axis_alignment_threshold_)
-  {
-    ROS_ERROR(
-        "[GimbalrotorPerchingNavigator/multilink] pitch joint axis is not "
-        "sufficiently local-Y aligned: [%.3f %.3f %.3f].",
-        pitch_axis_local_.x(),
-        pitch_axis_local_.y(),
-        pitch_axis_local_.z());
-    return false;
-  }
-
-  const double secondary_x = std::abs(secondary_axis_local_.x());
-  const double secondary_z = std::abs(secondary_axis_local_.z());
-  if(secondary_x >= secondary_axis_alignment_threshold_ && secondary_x > secondary_z)
-    secondary_axis_type_ = SECONDARY_AXIS_ROLL;
-  else if(secondary_z >= secondary_axis_alignment_threshold_ && secondary_z > secondary_x)
-    secondary_axis_type_ = SECONDARY_AXIS_YAW;
-  else
-  {
-    ROS_ERROR(
-        "[GimbalrotorPerchingNavigator/multilink] secondary joint axis is "
-        "neither unambiguously local-X nor local-Z aligned: "
-        "[%.3f %.3f %.3f].",
-        secondary_axis_local_.x(),
-        secondary_axis_local_.y(),
-        secondary_axis_local_.z());
-    return false;
-  }
-
-  if(!robot_model_->getUrdfModel().getLink(contact_link_name_) || robot_model_->getTree().getSegment(contact_link_name_) == robot_model_->getTree().getSegments().end())
-  {
-    ROS_ERROR(
-        "[GimbalrotorPerchingNavigator/multilink] contact link '%s' "
-        "does not exist in the model.",
-        contact_link_name_.c_str());
-    return false;
-  }
-
-  const auto& joint_index_map = robot_model_->getJointIndexMap();
-  const auto pitch_index_it = joint_index_map.find(pitch_joint_name_);
-  const auto secondary_index_it = joint_index_map.find(secondary_joint_name_);
-  if(pitch_index_it == joint_index_map.end() || secondary_index_it == joint_index_map.end())
-  {
-    ROS_ERROR(
-        "[GimbalrotorPerchingNavigator/multilink] configured joint is not "
-        "a movable KDL model joint.");
-    return false;
-  }
-
-  pitch_joint_index_ = pitch_index_it->second;
-  secondary_joint_index_ = secondary_index_it->second;
-  if(pitch_joint_index_ >= robot_model_->getJointPositions().rows() ||
-     secondary_joint_index_ >= robot_model_->getJointPositions().rows())
-  {
-    ROS_ERROR(
-        "[GimbalrotorPerchingNavigator/multilink] configured joint index "
-        "is outside the model joint array.");
-    return false;
-  }
-
-  KDL::Chain chain;
-  if(!robot_model_->getTree().getChain(robot_model_->getBaselinkName(), contact_link_name_, chain))
-  {
-    ROS_ERROR(
-        "[GimbalrotorPerchingNavigator/multilink] no KDL chain exists from "
-        "baselink '%s' to contact link '%s'.",
-        robot_model_->getBaselinkName().c_str(),
-        contact_link_name_.c_str());
-    return false;
-  }
-
-  int pitch_order = -1;
-  int secondary_order = -1;
-  int movable_order = 0;
-  for(unsigned int i = 0; i < chain.getNrOfSegments(); ++i)
-  {
-    const KDL::Joint& joint = chain.getSegment(i).getJoint();
-    if(joint.getType() == KDL::Joint::None)
-      continue;
-
-    if(joint.getName() == pitch_joint_name_)
-      pitch_order = movable_order;
-    else if(joint.getName() == secondary_joint_name_)
-      secondary_order = movable_order;
-    else
-    {
-      ROS_ERROR(
-          "[GimbalrotorPerchingNavigator/multilink] unsupported movable "
-          "joint '%s' lies in the baselink-to-contact chain.",
-          joint.getName().c_str());
-      return false;
-    }
-    ++movable_order;
-  }
-
-  if(pitch_order < 0 || secondary_order < 0 || pitch_order >= secondary_order || movable_order != 2)
-  {
-    ROS_ERROR(
-        "[GimbalrotorPerchingNavigator/multilink] chain must contain exactly "
-        "pitch then secondary as its two movable joints.");
-    return false;
-  }
-
-  if(!resolveJointLimits(
-         pitch_joint_name_,
-         configured_pitch_limits_valid_,
-         configured_pitch_lower_,
-         configured_pitch_upper_,
-         pitch_joint_lower_,
-         pitch_joint_upper_) ||
-     !resolveJointLimits(
-         secondary_joint_name_,
-         configured_secondary_limits_valid_,
-         configured_secondary_lower_,
-         configured_secondary_upper_,
-         secondary_joint_lower_,
-         secondary_joint_upper_))
-    return false;
-
-  return true;
-}
-
-void GimbalrotorPerchingNavigator::jointStateCallback(const sensor_msgs::JointStateConstPtr& msg)
-{
-  std::lock_guard<std::recursive_mutex> state_lock(perchingStateMutex());
-  if(!multilink_model_valid_)
-    return;
-
-  int pitch_msg_index = -1;
-  int secondary_msg_index = -1;
-
-  for(std::size_t i = 0; i < msg->name.size(); ++i)
-  {
-    if(msg->name.at(i) == pitch_joint_name_)
-      pitch_msg_index = static_cast<int>(i);
-
-    if(msg->name.at(i) == secondary_joint_name_)
-      secondary_msg_index = static_cast<int>(i);
-  }
-
-  if(pitch_msg_index < 0 ||
-     secondary_msg_index < 0 ||
-     static_cast<std::size_t>(pitch_msg_index) >= msg->position.size() ||
-     static_cast<std::size_t>(secondary_msg_index) >= msg->position.size())
-  {
-    return;
-  }
-
-  const double pitch_position = msg->position.at(pitch_msg_index);
-  const double secondary_position = msg->position.at(secondary_msg_index);
-
-  if(!std::isfinite(pitch_position) || !std::isfinite(secondary_position))
-  {
-    return;
-  }
-
-  const ros::Time receive_stamp = ros::Time::now();
-
-  const ros::Time measurement_stamp =
-      msg->header.stamp.isZero()
-          ? receive_stamp
-          : msg->header.stamp;
-
-  const double measurement_age_at_receive = (receive_stamp - measurement_stamp).toSec();
-
-  if(!std::isfinite(measurement_age_at_receive) ||
-     measurement_age_at_receive < -joint_state_future_tolerance_ ||
-     measurement_age_at_receive > joint_state_timeout_)
-  {
-    ROS_WARN_THROTTLE(
-        1.0,
-        "[GimbalrotorPerchingNavigator/multilink] "
-        "received stale or invalid joint state measurement "
-        "(measurement age %.3f s).",
-        measurement_age_at_receive);
-
-    return;
-  }
-
-  if(joint_state_received_)
-  {
-    const double measurement_dt = (measurement_stamp - joint_state_measurement_stamp_).toSec();
-
-    if(!std::isfinite(measurement_dt) || measurement_dt <= 0.0)
-    {
-      ROS_WARN_THROTTLE(
-          1.0,
-          "[GimbalrotorPerchingNavigator/multilink] "
-          "ignored out-of-order/duplicate joint state timestamp.");
-
-      return;
-    }
-  }
-
-  double pitch_velocity = std::numeric_limits<double>::infinity();
-  double secondary_velocity = std::numeric_limits<double>::infinity();
-
-  if(static_cast<std::size_t>(pitch_msg_index) < msg->velocity.size() &&
-     static_cast<std::size_t>(secondary_msg_index) < msg->velocity.size() &&
-     std::isfinite(msg->velocity.at(pitch_msg_index)) &&
-     std::isfinite(msg->velocity.at(secondary_msg_index)))
-  {
-    pitch_velocity = msg->velocity.at(pitch_msg_index);
-    secondary_velocity = msg->velocity.at(secondary_msg_index);
-  }
-
-  else if(joint_state_received_)
-  {
-    const double dt = (measurement_stamp - joint_state_measurement_stamp_).toSec();
-
-    if(std::isfinite(dt) && dt > 1.0e-6 && dt <= 0.5)
-    {
-      pitch_velocity = (pitch_position - previous_measured_pitch_joint_) / dt;
-      secondary_velocity = (secondary_position - previous_measured_secondary_joint_) / dt;
-    }
-  }
-
-  previous_measured_pitch_joint_ = pitch_position;
-  previous_measured_secondary_joint_ = secondary_position;
-  measured_pitch_joint_ = pitch_position;
-  measured_secondary_joint_ = secondary_position;
-  measured_pitch_velocity_ = pitch_velocity;
-  measured_secondary_velocity_ = secondary_velocity;
-
-  joint_state_measurement_stamp_ = measurement_stamp;
-  joint_state_receive_stamp_ = receive_stamp;
-
-  joint_state_received_ = true;
-}
-
-bool GimbalrotorPerchingNavigator::readCurrentMechanismState(
-    double& pitch_position,
-    double& secondary_position,
-    double& pitch_velocity,
-    double& secondary_velocity) const
-{
-  std::lock_guard<std::recursive_mutex> lock(perchingStateMutex());
-
-  if(!multilink_model_valid_ || !joint_state_received_)
-    return false;
-
-  const ros::Time now = ros::Time::now();
-
-  const double receive_age = (now - joint_state_receive_stamp_).toSec();
-  const double measurement_age = (now - joint_state_measurement_stamp_).toSec();
-
-  if(!std::isfinite(receive_age) ||
-    receive_age < 0.0 ||
-    receive_age > joint_state_timeout_ ||
-    !std::isfinite(measurement_age) ||
-    measurement_age < -joint_state_future_tolerance_ ||
-    measurement_age > joint_state_timeout_)
-  {
-    return false;
-  }
-
-  pitch_position = measured_pitch_joint_;
-  secondary_position = measured_secondary_joint_;
-  pitch_velocity = measured_pitch_velocity_;
-  secondary_velocity = measured_secondary_velocity_;
-
-  return std::isfinite(pitch_position) &&
-         std::isfinite(secondary_position) &&
-         std::isfinite(pitch_velocity) &&
-         std::isfinite(secondary_velocity) &&
-         pitch_position >= pitch_joint_lower_ - 1.0e-6 &&
-         pitch_position <= pitch_joint_upper_ + 1.0e-6 &&
-         secondary_position >= secondary_joint_lower_ - 1.0e-6 &&
-         secondary_position <= secondary_joint_upper_ + 1.0e-6;
-}
-
-bool GimbalrotorPerchingNavigator::computeBaselinkToContactTransform(
-    double pitch_position,
-    double secondary_position,
-    KDL::Frame& T_B_C) const
-{
-  if(!multilink_model_valid_ || !std::isfinite(pitch_position) ||
-     !std::isfinite(secondary_position))
-    return false;
-
-  KDL::JntArray joints = robot_model_->getJointPositions();
-  if(pitch_joint_index_ >= joints.rows() ||
-     secondary_joint_index_ >= joints.rows())
-    return false;
-
-  joints(pitch_joint_index_) = pitch_position;
-  joints(secondary_joint_index_) = secondary_position;
-
-  const KDL::Frame T_R_B = robot_model_->forwardKinematics<KDL::Frame>(
-      robot_model_->getBaselinkName(), joints);
-  const KDL::Frame T_R_C = robot_model_->forwardKinematics<KDL::Frame>(
-      contact_link_name_, joints);
-  T_B_C = T_R_B.Inverse() * T_R_C;
-  return frameFinite(T_R_B) && frameFinite(T_R_C) && frameFinite(T_B_C);
-}
-
-bool GimbalrotorPerchingNavigator::computeBaselinkToCogVector(
-    double pitch_position,
-    double secondary_position,
-    KDL::Vector& p_B_G) const
-{
-  if(!multilink_model_valid_ || !std::isfinite(pitch_position) ||
-     !std::isfinite(secondary_position))
-    return false;
-
-  KDL::JntArray joints = robot_model_->getJointPositions();
-  if(pitch_joint_index_ >= joints.rows() || secondary_joint_index_ >= joints.rows())
-    return false;
-  joints(pitch_joint_index_) = pitch_position;
-  joints(secondary_joint_index_) = secondary_position;
-
-  const std::map<std::string, KDL::Frame> frames =
-      robot_model_->fullForwardKinematics(joints);
-  KDL::RigidBodyInertia total_inertia = KDL::RigidBodyInertia::Zero();
-  for(const auto& inertia : robot_model_->getInertiaMap())
-  {
-    const auto frame_it = frames.find(inertia.first);
-    if(frame_it == frames.end() || !frameFinite(frame_it->second))
-      return false;
-
-    perching_geometry::accumulateLinkInertia(
-        total_inertia, frame_it->second, inertia.first, inertia.second, robot_model_->getExtraModuleMap());
-  }
-
-  if(!std::isfinite(total_inertia.getMass()) ||
-     total_inertia.getMass() <= 1.0e-9)
-    return false;
-
-  const KDL::Frame T_R_B = robot_model_->forwardKinematics<KDL::Frame>(
-      robot_model_->getBaselinkName(), joints);
-  p_B_G = T_R_B.Inverse() * total_inertia.getCOG();
-
-  return frameFinite(T_R_B) &&
-         std::isfinite(p_B_G.x()) &&
-         std::isfinite(p_B_G.y()) &&
-         std::isfinite(p_B_G.z());
-}
-
-bool GimbalrotorPerchingNavigator::tryLockMultilink(
-    const std::string& reason)
-{
-  if(perchingMode() != perching_geometry::Mode::NORMAL ||
-     getNaviState() != HOVER_STATE || !multilink_model_valid_)
-    return false;
-
-  double pitch_position = 0.0;
-  double secondary_position = 0.0;
-  double pitch_velocity = 0.0;
-  double secondary_velocity = 0.0;
-  if(!readCurrentMechanismState(
-         pitch_position,
-         secondary_position,
-         pitch_velocity,
-         secondary_velocity))
-  {
-    ROS_ERROR_THROTTLE(
-        1.0,
-        "[GimbalrotorPerchingNavigator/multilink] cannot lock: named "
-        "mechanism joint state is missing, invalid, or stale.");
-    return false;
-  }
-
-  KDL::Frame T_B_C;
-  if(!computeBaselinkToContactTransform(
-         pitch_position, secondary_position, T_B_C))
-  {
-    ROS_ERROR(
-        "[GimbalrotorPerchingNavigator/multilink] cannot lock: contact FK "
-        "failed.");
-    return false;
-  }
-
-  const tf::Vector3 baselink_pos =
-      estimator_->getPos(Frame::BASELINK, estimate_mode_);
-  tf::Quaternion baselink_quaternion;
-  estimator_->getOrientation(Frame::BASELINK, estimate_mode_)
-      .getRotation(baselink_quaternion);
-
-  if(!std::isfinite(baselink_pos.x()) ||
-     !std::isfinite(baselink_pos.y()) ||
-     !std::isfinite(baselink_pos.z()) ||
-     !std::isfinite(baselink_quaternion.x()) ||
-     !std::isfinite(baselink_quaternion.y()) ||
-     !std::isfinite(baselink_quaternion.z()) ||
-     !std::isfinite(baselink_quaternion.w()) ||
-     !std::isfinite(baselink_quaternion.length2()) ||
-     baselink_quaternion.length2() < 1.0e-12)
-    return false;
-
-  baselink_quaternion.normalize();
-  const KDL::Frame T_W_B(
-      KDL::Rotation::Quaternion(
-          baselink_quaternion.x(),
-          baselink_quaternion.y(),
-          baselink_quaternion.z(),
-          baselink_quaternion.w()),
-      KDL::Vector(baselink_pos.x(), baselink_pos.y(), baselink_pos.z()));
-  const KDL::Frame T_W_C = T_W_B * T_B_C;
-  if(!frameFinite(T_W_C))
-    return false;
-
-  const tf::Vector3 cog_pos = estimator_->getPos(Frame::COG, estimate_mode_);
-  tf::Quaternion cog_orientation;
-  estimator_->getOrientation(Frame::COG, estimate_mode_).getRotation(cog_orientation);
-  if(!perching_geometry::finite(cog_pos) ||
-     !std::isfinite(cog_orientation.length2()) || cog_orientation.length2() < 1.0e-12)
-    return false;
-  cog_orientation.normalize();
-  const tf::Vector3 contact_pos(T_W_C.p.x(), T_W_C.p.y(), T_W_C.p.z());
-
-  {
-    std::lock_guard<std::recursive_mutex> lock(perchingStateMutex());
-    locked_contact_world_ = T_W_C;
-    locked_pitch_joint_ = pitch_position;
-    locked_secondary_joint_ = secondary_position;
-    pitch_joint_nominal_target_ = pitch_position;
-    secondary_joint_nominal_target_ = secondary_position;
-    pitch_joint_final_target_ = pitch_position;
-    secondary_joint_final_target_ = secondary_position;
-    multilink_lock_valid_ = true;
-    secondary_settled_ = false;
-    secondary_settle_start_ = ros::Time(0);
-    ++mechanism_target_generation_;
-  }
-
-  commitFixedContactLock(cog_pos, cog_orientation, contact_pos);
-
-  ROS_WARN(
-      "[GimbalrotorPerchingNavigator/multilink] multilink contact locked "
-      "by %s at q=[%.4f, %.4f].",
-      reason.c_str(),
-      pitch_position,
-      secondary_position);
-  publishDiagnostics();
-  return true;
-}
-
-void GimbalrotorPerchingNavigator::resetMultilinkLock()
-{
-  resetCommonPerchingLock();
-
-  std::lock_guard<std::recursive_mutex> lock(perchingStateMutex());
-  resetMultilinkPitchRezeroState();
-  multilink_lock_valid_ = false;
-  locked_contact_world_ = KDL::Frame::Identity();
-  locked_pitch_joint_ = 0.0;
-  locked_secondary_joint_ = 0.0;
-  pitch_joint_nominal_target_ = 0.0;
-  secondary_joint_nominal_target_ = 0.0;
-  pitch_joint_final_target_ = 0.0;
-  secondary_joint_final_target_ = 0.0;
-  secondary_settled_ = false;
-  secondary_settle_start_ = ros::Time(0);
-  ++mechanism_target_generation_;
-  publishDiagnostics();
-}
-
-bool GimbalrotorPerchingNavigator::buildFinalJointTarget(
-    double& pitch_final,
-    double& secondary_final) const
-{
-  std::lock_guard<std::recursive_mutex> lock(perchingStateMutex());
-  if(!multilink_model_valid_ || !multilink_lock_valid_)
-    return false;
-
-  pitch_final = clampMultilink(
-      pitch_joint_nominal_target_,
-      pitch_joint_lower_,
-      pitch_joint_upper_);
-  secondary_final = clampMultilink(
-      secondary_joint_nominal_target_,
-      secondary_joint_lower_,
-      secondary_joint_upper_);
-
-  return std::isfinite(pitch_final) && std::isfinite(secondary_final);
-}
-
-void GimbalrotorPerchingNavigator::applyMultilinkTarget()
-{
-  std::lock_guard<std::recursive_mutex> state_lock(perchingStateMutex());
-  if(multilink_pitch_rezero_state_ != MultilinkPitchRezeroState::IDLE)
-  {
-    applyMultilinkPitchRezeroTarget();
-    return;
-  }
-  if(perchingMode() != perching_geometry::Mode::NORMAL || getNaviState() != HOVER_STATE ||
-     !multilink_model_valid_)
-    return;
-
-  if(!multilinkLockValid() && !tryLockMultilink("active multilink update"))
-    return;
-
-  double measured_pitch = 0.0;
-  double measured_secondary = 0.0;
-  double pitch_velocity = 0.0;
-  double secondary_velocity = 0.0;
-  if(!readCurrentMechanismState(
-         measured_pitch,
-         measured_secondary,
-         pitch_velocity,
-         secondary_velocity))
-  {
-    ROS_WARN_THROTTLE(
-        1.0,
-        "[GimbalrotorPerchingNavigator/multilink] holding the last target: "
-        "mechanism joint state is stale or invalid.");
-    return;
-  }
-
-  double pitch_final = 0.0;
-  double secondary_final = 0.0;
-  if(!buildFinalJointTarget(pitch_final, secondary_final))
-    return;
-
-  KDL::Frame T_B_C_final;
-  KDL::Vector p_B_G_final;
-  if(!computeBaselinkToContactTransform(
-         pitch_final, secondary_final, T_B_C_final) ||
-     !computeBaselinkToCogVector(
-         pitch_final, secondary_final, p_B_G_final))
-  {
-    ROS_ERROR_THROTTLE(
-        1.0,
-        "[GimbalrotorPerchingNavigator/multilink] rejected invalid target FK.");
-    return;
-  }
-
-  KDL::Frame locked_contact;
-  {
-    std::lock_guard<std::recursive_mutex> lock(perchingStateMutex());
-    if(!multilink_lock_valid_)
-      return;
-    locked_contact = locked_contact_world_;
-  }
-
-  const KDL::Frame T_W_B_des = locked_contact * T_B_C_final.Inverse();
-  if(!commandMultilinkBaselinkPose(T_W_B_des, p_B_G_final))
-    return;
-  pitch_joint_final_target_ = pitch_final;
-  secondary_joint_final_target_ = secondary_final;
-  publishMultilinkJointTarget(pitch_final, secondary_final);
-}
-
-bool GimbalrotorPerchingNavigator::commandMultilinkBaselinkPose(
-    const KDL::Frame& T_W_B_des, const KDL::Vector& p_B_G)
-{
-  const KDL::Vector p_W_G_des = T_W_B_des * p_B_G;
-  if(!frameFinite(T_W_B_des) ||
-     !std::isfinite(p_W_G_des.x()) ||
-     !std::isfinite(p_W_G_des.y()) ||
-     !std::isfinite(p_W_G_des.z()))
-    return false;
-
-  double qx = 0.0;
-  double qy = 0.0;
-  double qz = 0.0;
-  double qw = 1.0;
-  T_W_B_des.M.GetQuaternion(qx, qy, qz, qw);
-  tf::Quaternion R_W_B(qx, qy, qz, qw);
-
-  /*
-   * Multilink perching owns aerial-body orientation.  The normal
-   * gimbalrotor controller tracks CoG attitude, while the navigator's
-   * baselink rotation is baselink relative to CoG.  Drive that relative
-   * target toward identity and compensate its current commanded value so
-   * the resulting baselink target remains exactly T_W_B_des.
-   */
-  setBaselinkRotationTargetRelativeToCog(tf::Quaternion(0.0, 0.0, 0.0, 1.0));
-  const tf::Quaternion R_C_B =
-      getCommandedBaselinkRotationRelativeToCog();
-  if(!std::isfinite(R_C_B.length2()) || R_C_B.length2() < 1.0e-12)
-    return false;
-  tf::Quaternion R_W_G = R_W_B * R_C_B.inverse();
-  R_W_G.normalize();
-
-  double roll = 0.0;
-  double pitch = 0.0;
-  double yaw = 0.0;
-  tf::Matrix3x3(R_W_G).getRPY(roll, pitch, yaw);
-  if(!std::isfinite(roll) || !std::isfinite(pitch) || !std::isfinite(yaw))
-    return false;
-
-  setXyControlMode(POS_CONTROL_MODE);
-  setTargetPos(tf::Vector3(p_W_G_des.x(), p_W_G_des.y(), p_W_G_des.z()));
-  setTargetVel(0.0, 0.0, 0.0);
-  setTargetAcc(0.0, 0.0, 0.0);
-  setTargetRPY(tf::Vector3(roll, pitch, yaw));
-  setTargetOmega(0.0, 0.0, 0.0);
-  setTargetAngAcc(0.0, 0.0, 0.0);
-
-  geometry_msgs::PoseStamped pose_msg;
-  pose_msg.header.stamp = ros::Time::now();
-  pose_msg.header.frame_id = "world";
-  pose_msg.pose.position.x = T_W_B_des.p.x();
-  pose_msg.pose.position.y = T_W_B_des.p.y();
-  pose_msg.pose.position.z = T_W_B_des.p.z();
-  pose_msg.pose.orientation.x = qx;
-  pose_msg.pose.orientation.y = qy;
-  pose_msg.pose.orientation.z = qz;
-  pose_msg.pose.orientation.w = qw;
-  target_body_pose_pub_.publish(pose_msg);
-  return true;
-}
-
-bool GimbalrotorPerchingNavigator::applyMultilinkConstraint(
-    aerial_robot_msgs::FlightNav& nav_msg)
-{
-  /*
-   * While the multilink lock is active, external body commands cannot be
-   * applied independently of the fixed contact.  The active update owns the
-   * complete body target through fixed-contact FK.
-   */
-  nav_msg.pos_xy_nav_mode = aerial_robot_msgs::FlightNav::NO_NAVIGATION;
-  nav_msg.pos_z_nav_mode = aerial_robot_msgs::FlightNav::NO_NAVIGATION;
-  nav_msg.roll_nav_mode = aerial_robot_msgs::FlightNav::NO_NAVIGATION;
-  nav_msg.pitch_nav_mode = aerial_robot_msgs::FlightNav::NO_NAVIGATION;
-  nav_msg.yaw_nav_mode = aerial_robot_msgs::FlightNav::NO_NAVIGATION;
-  return true;
-}
-
-void GimbalrotorPerchingNavigator::applyMultilinkPitchDelta(double delta)
-{
-  std::lock_guard<std::recursive_mutex> lock(perchingStateMutex());
-  if(multilink_pitch_rezero_state_ != MultilinkPitchRezeroState::IDLE)
-  {
-    ROS_WARN_THROTTLE(1.0, "[Multilink] Active joints frozen during pitch rezero/HOLD; relock after ready.");
-    return;
-  }
-
-  if(!multilink_model_valid_ ||
-     !multilink_lock_valid_ ||
-     !std::isfinite(delta))
-    return;
-
-  const double target = clampMultilink(locked_pitch_joint_ + multilink_pitch_command_sign_ * delta,
-                              pitch_joint_lower_, pitch_joint_upper_);
-  if(std::abs(target - pitch_joint_nominal_target_) <= 1.0e-9)
-    return;
-  pitch_joint_nominal_target_ = target;
-  ++mechanism_target_generation_;
-}
-
-void GimbalrotorPerchingNavigator::secondaryJointTargetCallback(
-    const std_msgs::Float64ConstPtr& msg)
-{
-  std::lock_guard<std::recursive_mutex> state_lock(perchingStateMutex());
-  if(multilink_pitch_rezero_state_ != MultilinkPitchRezeroState::IDLE)
-  {
-    ROS_WARN_THROTTLE(1.0, "[Multilink] Active joints frozen during pitch rezero/HOLD; relock after ready.");
-    return;
-  }
-  if(perchingMode() != perching_geometry::Mode::NORMAL ||
-     getNaviState() != HOVER_STATE || !std::isfinite(msg->data))
-    return;
-
-  if(!multilink_model_valid_ || !multilink_lock_valid_)
-  {
-    ROS_WARN_THROTTLE(
-        1.0,
-        "[GimbalrotorPerchingNavigator/multilink] secondary target ignored "
-        "without a valid multilink perching lock.");
-    return;
-  }
-
-  const double target = clampMultilink(
-      secondary_command_sign_ * msg->data,
-      secondary_joint_lower_,
-      secondary_joint_upper_);
-  if(std::abs(target - secondary_joint_nominal_target_) <= 1.0e-9)
-    return;
-
-  secondary_joint_nominal_target_ = target;
-  secondary_settled_ = false;
-  secondary_settle_start_ = ros::Time(0);
-  ++mechanism_target_generation_;
-}
-
-void GimbalrotorPerchingNavigator::updateSecondarySettledState()
-{
-  double pitch_position = 0.0;
-  double secondary_position = 0.0;
-  double pitch_velocity = 0.0;
-  double secondary_velocity = 0.0;
-  const bool state_valid = readCurrentMechanismState(
-      pitch_position,
-      secondary_position,
-      pitch_velocity,
-      secondary_velocity);
-  const ros::Time now = ros::Time::now();
-
-  std::lock_guard<std::recursive_mutex> lock(perchingStateMutex());
-  if(!state_valid || !multilink_lock_valid_ ||
-     getNaviState() != HOVER_STATE)
-  {
-    secondary_settled_ = false;
-    secondary_settle_start_ = ros::Time(0);
-    return;
-  }
-
-  const bool within_tolerance =
-      std::abs(secondary_position - secondary_joint_nominal_target_) <=
-          secondary_position_tolerance_ &&
-      std::abs(secondary_velocity) <= secondary_velocity_tolerance_;
-
-  if(!within_tolerance)
-  {
-    secondary_settled_ = false;
-    secondary_settle_start_ = ros::Time(0);
-    return;
-  }
-
-  if(secondary_settle_start_.isZero())
-    secondary_settle_start_ = now;
-
-  secondary_settled_ =
-      (now - secondary_settle_start_).toSec() >= secondary_settle_duration_;
-}
-
-void GimbalrotorPerchingNavigator::updateMultilink()
-{
-  std::lock_guard<std::recursive_mutex> state_lock(perchingStateMutex());
-  if(!multilink_model_resolution_attempted_ &&
-     robot_model_ &&
-     robot_model_->initialized())
-  {
-    multilink_model_resolution_attempted_ = true;
-    multilink_model_valid_ = resolveMechanismModel();
-
-    std_msgs::Bool valid_msg;
-    valid_msg.data = multilink_model_valid_;
-    model_valid_pub_.publish(valid_msg);
-
-    if(multilink_model_valid_)
-    {
-      ROS_WARN(
-          "[GimbalrotorPerchingNavigator/multilink] "
-          "multilink model initialized after receiving robot state.");
-    }
-    else
-    {
-      ROS_ERROR_THROTTLE(
-          1.0,
-          "[GimbalrotorPerchingNavigator/multilink] "
-          "robot model is initialized, but the multilink mechanism "
-          "configuration is invalid.");
-    }
-  }
-
-  if(multilink_pitch_rezero_state_ != MultilinkPitchRezeroState::IDLE &&
-     (!multilinkLockValid() || perchingMode() != perching_geometry::Mode::NORMAL ||
-      getNaviState() != HOVER_STATE))
-    resetMultilinkPitchRezeroState();
-  updateMultilinkBodyPitchFeedback();
-  rezero_target_applied_this_update_ = false;
-  updateCommonPerching();
-  // Rezero owns a continuous hold even if the common optional fixed-contact
-  // hold is disabled. Avoid integrating twice when the common update called the selected target method.
-  if(multilink_pitch_rezero_state_ != MultilinkPitchRezeroState::IDLE && !rezero_target_applied_this_update_)
-    applyMultilinkPitchRezeroTarget();
-  updateSecondarySettledState();
-  publishDiagnostics();
-}
-
-void GimbalrotorPerchingNavigator::publishMultilinkJointTarget(
-    double pitch_final,
-    double secondary_final)
-{
-  if(!multilink_model_valid_ || !multilinkLockValid() ||
-     !std::isfinite(pitch_final) || !std::isfinite(secondary_final))
-    return;
-
-  sensor_msgs::JointState joint_cmd;
-  joint_cmd.header.stamp = ros::Time::now();
-  joint_cmd.name.push_back(pitch_joint_name_);
-  joint_cmd.name.push_back(secondary_joint_name_);
-  joint_cmd.position.push_back(pitch_final);
-  joint_cmd.position.push_back(secondary_final);
-  joint_control_pub_.publish(joint_cmd);
-}
-
-bool GimbalrotorPerchingNavigator::multilinkModelValid() const
-{
-  std::lock_guard<std::recursive_mutex> lock(perchingStateMutex());
-  return multilink_model_valid_;
-}
-
-bool GimbalrotorPerchingNavigator::multilinkLockValid() const
-{
-  std::lock_guard<std::recursive_mutex> lock(perchingStateMutex());
-  return multilink_model_valid_ && multilink_lock_valid_;
-}
-
-bool GimbalrotorPerchingNavigator::secondaryJointSettled() const
-{
-  double pitch_position = 0.0;
-  double secondary_position = 0.0;
-  double pitch_velocity = 0.0;
-  double secondary_velocity = 0.0;
-  if(!readCurrentMechanismState(
-         pitch_position,
-         secondary_position,
-         pitch_velocity,
-         secondary_velocity))
-    return false;
-
-  std::lock_guard<std::recursive_mutex> lock(perchingStateMutex());
-  return multilink_model_valid_ && multilink_lock_valid_ &&
-         secondary_settled_;
-}
-
-std::uint64_t
-GimbalrotorPerchingNavigator::mechanismTargetGeneration() const
-{
-  std::lock_guard<std::recursive_mutex> lock(perchingStateMutex());
-  return mechanism_target_generation_;
-}
-
-void GimbalrotorPerchingNavigator::publishDiagnostics() const
-{
-  std::lock_guard<std::recursive_mutex> state_lock(perchingStateMutex());
-  std_msgs::Bool rezero_bool;
-  rezero_bool.data = multilink_pitch_rezero_state_ == MultilinkPitchRezeroState::ACTIVE;
-  pitch_rezero_active_pub_.publish(rezero_bool);
-  rezero_bool.data = multilink_pitch_rezero_ready_;
-  pitch_rezero_ready_pub_.publish(rezero_bool);
-  rezero_bool.data = multilink_pitch_rezero_failed_;
-  pitch_rezero_failed_pub_.publish(rezero_bool);
-  std_msgs::Float64 rezero_value;
-  rezero_value.data = rezero_pitch_joint_hold_error_;
-  pitch_joint_hold_error_pub_.publish(rezero_value);
-  rezero_value.data = rezero_secondary_joint_hold_error_;
-  secondary_joint_hold_error_pub_.publish(rezero_value);
-  rezero_value.data = rezero_alpha_cmd_;
-  passive_pitch_delta_pub_.publish(rezero_value);
-  rezero_value.data = currentBaselinkPitch();
-  body_pitch_pub_.publish(rezero_value);
-  rezero_value.data = rezero_pitch_rate_valid_ ? rezero_measured_pitch_rate_ :
-      std::numeric_limits<double>::quiet_NaN();
-  body_pitch_rate_pub_.publish(rezero_value);
-
-  bool settled = false;
-  double pitch_measured = 0.0;
-  double pitch_nominal = 0.0;
-  double pitch_final = 0.0;
-  double secondary_measured = 0.0;
-  double secondary_target = 0.0;
-
-  {
-    std::lock_guard<std::recursive_mutex> lock(perchingStateMutex());
-    settled = secondary_settled_;
-    pitch_measured = measured_pitch_joint_;
-    pitch_nominal = pitch_joint_nominal_target_;
-    pitch_final = pitch_joint_final_target_;
-    secondary_measured = measured_secondary_joint_;
-    secondary_target = secondary_joint_nominal_target_;
-  }
-
-  // Do not make stale mechanism samples look fresh to diagnostic consumers.
-  double pitch_velocity, secondary_velocity;
-  if(!readCurrentMechanismState(pitch_measured, secondary_measured,
-                                pitch_velocity, secondary_velocity))
-    pitch_measured = secondary_measured = std::numeric_limits<double>::quiet_NaN();
-
-  std_msgs::Bool bool_msg;
-  std_msgs::Float64 value_msg;
-  bool_msg.data = settled;
-  secondary_settled_pub_.publish(bool_msg);
-  value_msg.data = pitch_measured;
-  pitch_measured_pub_.publish(value_msg);
-  value_msg.data = pitch_nominal;
-  pitch_nominal_pub_.publish(value_msg);
-  value_msg.data = pitch_final;
-  pitch_final_pub_.publish(value_msg);
-  value_msg.data = secondary_measured;
-  secondary_measured_pub_.publish(value_msg);
-  value_msg.data = secondary_target;
-  secondary_target_pub_.publish(value_msg);
-}
-
-void GimbalrotorPerchingNavigator::resetMultilinkPitchRezeroState()
-{
-  multilink_pitch_rezero_state_ = MultilinkPitchRezeroState::IDLE;
-  multilink_pitch_rezero_ready_ = false;
-  multilink_pitch_rezero_failed_ = false;
-  rezero_frozen_pitch_joint_ = 0.0;
-  rezero_frozen_secondary_joint_ = 0.0;
-  rezero_pitch_joint_hold_error_ = 0.0;
-  rezero_secondary_joint_hold_error_ = 0.0;
-  rezero_alpha_cmd_ = 0.0;
-  rezero_start_stamp_ = ros::Time(0);
-  rezero_stable_start_stamp_ = ros::Time(0);
-  rezero_previous_body_pitch_stamp_ = ros::Time(0);
-  rezero_previous_body_pitch_ = 0.0;
-  rezero_measured_pitch_rate_ = 0.0;
-  multilink_rezero_feedback_dt_ = 0.0;
-  rezero_pitch_rate_valid_ = false;
-  rezero_pivot_world_ = KDL::Vector::Zero();
-  rezero_axis_world_ = KDL::Vector::Zero();
-  rezero_p_B_G_ = KDL::Vector::Zero();
-  rezero_reference_body_world_ = KDL::Frame::Identity();
-  rezero_last_body_target_ = KDL::Frame::Identity();
-}
-
-bool GimbalrotorPerchingNavigator::readBaselinkPose(KDL::Frame& pose) const
-{
-  const tf::Vector3 p = estimator_->getPos(Frame::BASELINK, estimate_mode_);
-  const tf::Matrix3x3 orientation = estimator_->getOrientation(Frame::BASELINK, estimate_mode_);
-  for(unsigned int i = 0; i < 3; ++i)
-    for(unsigned int j = 0; j < 3; ++j)
-      if(!std::isfinite(orientation[i][j])) return false;
-  tf::Quaternion q;
-  orientation.getRotation(q);
-  if(!perching_geometry::finite(p) || !std::isfinite(q.length2()) || q.length2() < 1.0e-12)
-    return false;
-  q.normalize();
-  pose = KDL::Frame(KDL::Rotation::Quaternion(q.x(), q.y(), q.z(), q.w()),
-                    KDL::Vector(p.x(), p.y(), p.z()));
-  return frameFinite(pose);
-}
-
-double GimbalrotorPerchingNavigator::currentBaselinkPitch() const
-{
-  KDL::Frame pose;
-  if(!readBaselinkPose(pose)) return std::numeric_limits<double>::quiet_NaN();
-  double roll, pitch, yaw;
-  pose.M.GetRPY(roll, pitch, yaw);
-  return pitch;
-}
-
-double GimbalrotorPerchingNavigator::wrapAngle(double angle)
-{
-  return std::remainder(angle, 2.0 * M_PI);
-}
-
-void GimbalrotorPerchingNavigator::multilinkPitchRezeroCallback(
-    const std_msgs::EmptyConstPtr& msg)
-{
-  (void)msg;
-  std::lock_guard<std::recursive_mutex> lock(perchingStateMutex());
-  double pitch, secondary, pitch_velocity, secondary_velocity;
-  if(perchingMode() != perching_geometry::Mode::NORMAL || getNaviState() != HOVER_STATE ||
-     !multilinkLockValid() || !pitch_rezero_config_valid_ ||
-     multilink_pitch_rezero_state_ != MultilinkPitchRezeroState::IDLE ||
-     !readCurrentMechanismState(pitch, secondary, pitch_velocity, secondary_velocity))
-  {
-    ROS_WARN_THROTTLE(1.0, "[Multilink] Rezero rejected: require NORMAL/HOVER, valid model/config/lock, fresh joints and IDLE.");
-    return;
-  }
-
-  KDL::Frame T_W_B, T_B_C;
-  KDL::Vector p_B_G;
-  const ros::Time now = ros::Time::now();
-  if(now.isZero() || !readBaselinkPose(T_W_B) ||
-     !computeBaselinkToContactTransform(pitch, secondary, T_B_C) ||
-     !computeBaselinkToCogVector(pitch, secondary, p_B_G))
-  {
-    ROS_WARN_THROTTLE(1.0, "[Multilink] Rezero rejected: invalid time, BASELINK pose or mechanism FK/CoG.");
-    return;
-  }
-  const KDL::Frame T_W_C = T_W_B * T_B_C;
-  const KDL::Vector pivot = T_W_C * pitch_rezero_pivot_offset_;
-  KDL::Vector axis = T_W_C.M * pitch_rezero_axis_;
-  if(!frameFinite(T_W_C) || !frameFinite(KDL::Frame(pivot)) ||
-     !frameFinite(KDL::Frame(axis)) || !std::isfinite(axis.Norm()) || axis.Norm() < 1.0e-6)
-  {
-    ROS_WARN_THROTTLE(1.0, "[Multilink] Rezero rejected: invalid passive pivot/axis.");
-    return;
-  }
-  axis = axis / axis.Norm();
-  // Establish a valid initial hold before accepting the trigger.
-  if(!commandMultilinkBaselinkPose(T_W_B, p_B_G))
-  {
-    ROS_WARN_THROTTLE(1.0, "[Multilink] Rezero rejected: cannot command initial body pose.");
-    return;
-  }
-  resetMultilinkPitchRezeroState();
-  rezero_frozen_pitch_joint_ = pitch;
-  rezero_frozen_secondary_joint_ = secondary;
-  rezero_reference_body_world_ = T_W_B;
-  rezero_last_body_target_ = T_W_B;
-  rezero_pivot_world_ = pivot;
-  rezero_axis_world_ = axis;
-  rezero_p_B_G_ = p_B_G;
-  rezero_start_stamp_ = now;
-  double roll, yaw;
-  T_W_B.M.GetRPY(roll, rezero_previous_body_pitch_, yaw);
-  rezero_previous_body_pitch_stamp_ = now;
-  pitch_joint_nominal_target_ = pitch_joint_final_target_ = pitch;
-  secondary_joint_nominal_target_ = secondary_joint_final_target_ = secondary;
-  secondary_settled_ = false;
-  secondary_settle_start_ = ros::Time(0);
-  ++mechanism_target_generation_;
-  multilink_pitch_rezero_state_ = MultilinkPitchRezeroState::ACTIVE;
-  publishMultilinkJointTarget(pitch, secondary);
-  publishDiagnostics();
-  ROS_WARN("[Multilink] Pitch rezero started about external passive pivot; both active joints frozen.");
-}
-
-void GimbalrotorPerchingNavigator::updateMultilinkBodyPitchFeedback()
-{
-  const ros::Time now = ros::Time::now();
-  const double pitch = currentBaselinkPitch();
-  rezero_pitch_rate_valid_ = false;
-  multilink_rezero_feedback_dt_ = 0.0;
-  if(!std::isfinite(pitch) || now.isZero())
-  {
-    rezero_previous_body_pitch_stamp_ = ros::Time(0);
-    return;
-  }
-  if(!rezero_previous_body_pitch_stamp_.isZero())
-  {
-    multilink_rezero_feedback_dt_ = (now - rezero_previous_body_pitch_stamp_).toSec();
-    // Long gaps cannot count as continuously observed stabilization.
-    if(std::isfinite(multilink_rezero_feedback_dt_) && multilink_rezero_feedback_dt_ > 0.0 &&
-       multilink_rezero_feedback_dt_ <= 0.1)
-    {
-      rezero_measured_pitch_rate_ =
-          wrapAngle(pitch - rezero_previous_body_pitch_) / multilink_rezero_feedback_dt_;
-      rezero_pitch_rate_valid_ = std::isfinite(rezero_measured_pitch_rate_);
-    }
-  }
-  rezero_previous_body_pitch_ = pitch;
-  rezero_previous_body_pitch_stamp_ = now;
-}
-
-void GimbalrotorPerchingNavigator::failMultilinkPitchRezero(const char* reason)
-{
-  multilink_pitch_rezero_state_ = MultilinkPitchRezeroState::HOLD;
-  multilink_pitch_rezero_ready_ = false;
-  multilink_pitch_rezero_failed_ = true;
-  rezero_stable_start_stamp_ = ros::Time(0);
-  ROS_WARN("[Multilink] Pitch rezero failed (%s); holding last valid rezero pose and frozen joints. Disable perching and retry safely.", reason);
-}
-
-bool GimbalrotorPerchingNavigator::verifyMultilinkPitchRezeroFrozenJoints()
-{
-  if(multilink_pitch_rezero_state_ == MultilinkPitchRezeroState::IDLE) return true;
-
-  double q_pitch, q_secondary, v_pitch, v_secondary;
-  if(!readCurrentMechanismState(q_pitch, q_secondary, v_pitch, v_secondary))
-  {
-    rezero_pitch_joint_hold_error_ = std::numeric_limits<double>::quiet_NaN();
-    rezero_secondary_joint_hold_error_ = std::numeric_limits<double>::quiet_NaN();
-    if(!multilink_pitch_rezero_failed_)
-      failMultilinkPitchRezero("active-joint state unavailable while joints must remain frozen");
-    return false;
-  }
-
-  rezero_pitch_joint_hold_error_ = wrapAngle(q_pitch - rezero_frozen_pitch_joint_);
-  rezero_secondary_joint_hold_error_ = wrapAngle(q_secondary - rezero_frozen_secondary_joint_);
-  if(std::abs(rezero_pitch_joint_hold_error_) > pitch_rezero_pitch_joint_hold_tolerance_)
-  {
-    if(!multilink_pitch_rezero_failed_)
-    {
-      ROS_WARN("[Multilink] Pitch rezero active pitch joint hold violation: error=%.4f rad, tolerance=%.4f rad.",
-               rezero_pitch_joint_hold_error_, pitch_rezero_pitch_joint_hold_tolerance_);
-      failMultilinkPitchRezero("active pitch joint moved outside rezero hold tolerance");
-    }
-    return false;
-  }
-  if(std::abs(rezero_secondary_joint_hold_error_) > pitch_rezero_secondary_joint_hold_tolerance_)
-  {
-    if(!multilink_pitch_rezero_failed_)
-    {
-      ROS_WARN("[Multilink] Pitch rezero active secondary joint hold violation: error=%.4f rad, tolerance=%.4f rad.",
-               rezero_secondary_joint_hold_error_, pitch_rezero_secondary_joint_hold_tolerance_);
-      failMultilinkPitchRezero("active secondary joint moved outside rezero hold tolerance");
-    }
-    return false;
-  }
-  return true;
-}
-
-void GimbalrotorPerchingNavigator::updateMultilinkPitchRezeroCommand()
-{
-  if(multilink_pitch_rezero_state_ != MultilinkPitchRezeroState::ACTIVE) return;
-  const ros::Time now = ros::Time::now();
-  const double elapsed = (now - rezero_start_stamp_).toSec();
-  const double pitch = currentBaselinkPitch();
-  double q_pitch, q_secondary, v_pitch, v_secondary;
-  if(!std::isfinite(elapsed) || elapsed < 0.0 || multilink_rezero_feedback_dt_ < 0.0 ||
-     multilink_rezero_feedback_dt_ > 0.5)
-    return failMultilinkPitchRezero("invalid or discontinuous time");
-  if(elapsed > pitch_rezero_timeout_)
-    return failMultilinkPitchRezero("timeout before stabilization");
-  if(!std::isfinite(pitch) ||
-     !readCurrentMechanismState(q_pitch, q_secondary, v_pitch, v_secondary))
-    return failMultilinkPitchRezero("invalid body feedback or stale mechanism state");
-
-  const double error = wrapAngle(pitch_rezero_target_pitch_ - pitch);
-  if(rezero_pitch_rate_valid_ && std::abs(error) <= pitch_rezero_pitch_tolerance_ &&
-     std::abs(rezero_measured_pitch_rate_) <= pitch_rezero_rate_tolerance_)
-  {
-    if(rezero_stable_start_stamp_.isZero()) rezero_stable_start_stamp_ = now;
-    if((now - rezero_stable_start_stamp_).toSec() >= pitch_rezero_stable_duration_)
-    {
-      multilink_pitch_rezero_state_ = MultilinkPitchRezeroState::HOLD;
-      multilink_pitch_rezero_ready_ = true;
-      multilink_pitch_rezero_failed_ = false;
-      ROS_WARN("[Multilink] Pitch rezero ready; body pitch is stable. Publish /perching/relock to commit this pose as the new fixed-contact lock.");
-      return;
-    }
-  }
-  else
-    rezero_stable_start_stamp_ = ros::Time(0);
-
-  if(!std::isfinite(multilink_rezero_feedback_dt_) || multilink_rezero_feedback_dt_ <= 0.0) return;
-  const double dt = std::min(multilink_rezero_feedback_dt_, 0.1);
-  const double rate = pitch_rezero_command_sign_ *
-      clampMultilink(pitch_rezero_kp_ * error, -pitch_rezero_rate_limit_, pitch_rezero_rate_limit_);
-  const double alpha = clampMultilink(rezero_alpha_cmd_ + rate * dt,
-                             -pitch_rezero_max_delta_, pitch_rezero_max_delta_);
-  const KDL::Rotation rotation = KDL::Rotation::Rot(rezero_axis_world_, alpha);
-  const KDL::Frame target(
-      rotation * rezero_reference_body_world_.M,
-      rezero_pivot_world_ + rotation * (rezero_reference_body_world_.p - rezero_pivot_world_));
-  if(!std::isfinite(alpha) || !frameFinite(target) ||
-     !commandMultilinkBaselinkPose(target, rezero_p_B_G_))
-    return failMultilinkPitchRezero("invalid revolute body target");
-  // Commit only a successfully issued target; failures retain the previous pose.
-  rezero_alpha_cmd_ = alpha;
-  rezero_last_body_target_ = target;
-}
-
-void GimbalrotorPerchingNavigator::applyMultilinkPitchRezeroTarget()
-{
-  rezero_target_applied_this_update_ = true;
-  // Monitor ACTIVE and both HOLD outcomes before advancing the passive pivot.
-  const bool frozen_joints_valid = verifyMultilinkPitchRezeroFrozenJoints();
-  if(multilink_pitch_rezero_state_ == MultilinkPitchRezeroState::ACTIVE && frozen_joints_valid)
-    updateMultilinkPitchRezeroCommand();
-  pitch_joint_nominal_target_ = pitch_joint_final_target_ = rezero_frozen_pitch_joint_;
-  secondary_joint_nominal_target_ = secondary_joint_final_target_ = rezero_frozen_secondary_joint_;
-  publishMultilinkJointTarget(rezero_frozen_pitch_joint_, rezero_frozen_secondary_joint_);
-  if(!commandMultilinkBaselinkPose(rezero_last_body_target_, rezero_p_B_G_) &&
-     !multilink_pitch_rezero_failed_)
-    failMultilinkPitchRezero("cannot reissue last valid body pose");
-}
-
-bool GimbalrotorPerchingNavigator::frameFinite(
-    const KDL::Frame& frame)
-{
-  if(!std::isfinite(frame.p.x()) || !std::isfinite(frame.p.y()) ||
-     !std::isfinite(frame.p.z()))
-    return false;
-
-  for(unsigned int row = 0; row < 3; ++row)
-    for(unsigned int column = 0; column < 3; ++column)
-      if(!std::isfinite(frame.M(row, column)))
-        return false;
-  return true;
-}
-
-double GimbalrotorPerchingNavigator::clampMultilink(
-    double value,
-    double lower,
-    double upper)
-{
-  return std::max(lower, std::min(value, upper));
-}
-
-}  // namespace aerial_robot_navigation
-
-// Roll-yaw workflow
-
-namespace aerial_robot_navigation
-{
-
-namespace
-{
-struct CallbackTimer
-{
-  double& elapsed;
-  double started;
-  ~CallbackTimer()
-  {
-    elapsed = roll_yaw::steadySeconds() - started;
-  }
-};
-tf::Vector3 tfVector(const Eigen::Vector3d& v)
-{
-  return {v.x(), v.y(), v.z()};
-}
-tf::Quaternion tfQuaternion(const Eigen::Matrix3d& r)
-{
-  Eigen::Quaterniond q(r);
-  return {q.x(), q.y(), q.z(), q.w()};
-}
-geometry_msgs::Pose poseMsg(const Eigen::Isometry3d& p)
-{
-  geometry_msgs::Pose m;
-  tf::pointTFToMsg(tfVector(p.translation()), m.position);
-  tf::quaternionTFToMsg(tfQuaternion(p.linear()), m.orientation);
-  return m;
-}
-std::string frameName(std::string s)
-{
-  if(!s.empty() && s.front() == '/')
-    s.erase(0, 1);
-  return s;
-}
-bool readVector(ros::NodeHandle& nh, const std::string& key, Eigen::Vector3d& value, bool required = false)
-{
-  if(!nh.hasParam(key))
-    return !required;
-  std::vector<double> v;
-  if(!nh.getParam(key, v) || v.size() != 3)
-    return false;
-  value = Eigen::Vector3d(v[0], v[1], v[2]);
-  return value.allFinite();
-}
-}  // namespace
-void GimbalrotorPerchingNavigator::initializeRollYaw(ros::NodeHandle nh, ros::NodeHandle nhp)
-{
-  prepare_worker_ = std::make_unique<roll_yaw::Worker<roll_yaw::Plan>>();
-  jog_worker_ = std::make_unique<roll_yaw::Worker<JogAdmission>>();
-  rollYawRosParamInit(nh, nhp);
-  ros::NodeHandle pn(nh, "navigation/roll_yaw_perching");
-  std::string joint_topic, command_topic, body_topic;
-  pn.param<std::string>("joint_state_topic", joint_topic, "joint_states");
-  pn.param<std::string>("joint_command_topic", command_topic, "joints_ctrl");
-  pn.param<std::string>("body_state_topic", body_topic, "uav/baselink/odom");
-  roll_yaw_joints_pub_ = nh.advertise<sensor_msgs::JointState>(command_topic, 1);
-  roll_yaw_state_pub_ = nh.advertise<std_msgs::String>(roll_yaw_prefix_ + "/state", 1, true);
-  session_pub_ = nh.advertise<std_msgs::UInt64>(roll_yaw_prefix_ + "/session", 1, true);
-  details_pub_ = nh.advertise<std_msgs::String>(roll_yaw_prefix_ + "/diagnostics", 1);
-  status_pub_ = nh.advertise<diagnostic_msgs::DiagnosticArray>(roll_yaw_prefix_ + "/diagnostics_status", 1);
-  task_pub_ = nh.advertise<geometry_msgs::Vector3Stamped>(roll_yaw_prefix_ + "/task_pitch", 1);
-  compliance_pub_ = nh.advertise<geometry_msgs::Vector3Stamped>(roll_yaw_prefix_ + "/compliance", 1);
-  ack_pub_ = nh.advertise<std_msgs::String>(roll_yaw_prefix_ + "/command_ack", 1);
-  nominal_pub_ = nh.advertise<geometry_msgs::Vector3Stamped>(roll_yaw_prefix_ + "/nominal_angles", 1);
-  position_lower_pub_ = nh.advertise<geometry_msgs::Vector3Stamped>(roll_yaw_prefix_ + "/position_lower", 1);
-  position_upper_pub_ = nh.advertise<geometry_msgs::Vector3Stamped>(roll_yaw_prefix_ + "/position_upper", 1);
-  angles_pub_ = nh.advertise<geometry_msgs::Vector3Stamped>(roll_yaw_prefix_ + "/target_angles", 1);
-  rezero_active_pub_ = nh.advertise<std_msgs::Bool>(roll_yaw_prefix_ + "/pitch_rezero_active", 1, true);
-  rezero_ready_pub_ = nh.advertise<std_msgs::Bool>(roll_yaw_prefix_ + "/pitch_rezero_ready", 1, true);
-  rezero_failed_pub_ = nh.advertise<std_msgs::Bool>(roll_yaw_prefix_ + "/pitch_rezero_failed", 1, true);
-  pitch_pub_ = nh.advertise<std_msgs::Float64>("perching/commanded_pitch_delta", 1);
-  reference_pub_ = nh.advertise<nav_msgs::Odometry>(roll_yaw_prefix_ + "/body_reference", 1);
-  measured_pub_ = nh.advertise<nav_msgs::Odometry>(roll_yaw_prefix_ + "/body_measured", 1);
-  cog_pub_ = nh.advertise<nav_msgs::Odometry>(roll_yaw_prefix_ + "/cog_reference", 1);
-  subscriptions_.push_back(nh.subscribe(joint_topic, 1, &GimbalrotorPerchingNavigator::rollYawJointCallback, this));
-  subscriptions_.push_back(nh.subscribe(body_topic, 1, &GimbalrotorPerchingNavigator::bodyCallback, this));
-  for(const auto* key : {"prepare", "start", "pause", "resume", "stop", "cancel"})
-  {
-    std::string action(key);
-    subscriptions_.push_back(nh.subscribe<std_msgs::UInt64>(roll_yaw_prefix_ + "/" + action, 1,
-                                                            [this, action](const std_msgs::UInt64ConstPtr& m)
-                                                            { taskCommandCallback(m, action); }));
-  }
-  for(int axis = 0; axis < 3; ++axis)
-  {
-    const std::string name = axis == 0 ? "alpha_target" : axis == 1 ? "roll_target" : "yaw_target";
-    subscriptions_.push_back(nh.subscribe<std_msgs::Float64>(roll_yaw_prefix_ + "/" + name, 1,
-                                                             [this, axis](const std_msgs::Float64ConstPtr& msg)
-                                                             { mechanismTargetCallback(msg, axis); }));
-  }
-  for(int axis = 0; axis < 2; ++axis)
-  {
-    subscriptions_.push_back(nh.subscribe<std_msgs::Float64>(
-        roll_yaw_prefix_ + (axis == 0 ? "/body_yaw_target" : "/body_roll_target"), 1,
-        [this, axis](const std_msgs::Float64ConstPtr& msg) { bodyAlignmentCallback(msg, axis); }));
-  }
-  subscriptions_.push_back(
-      nh.subscribe(roll_yaw_prefix_ + "/body_pitch_delta", 1, &GimbalrotorPerchingNavigator::bodyPitchCallback, this));
-  motion_epoch_pub_ = nh.advertise<std_msgs::UInt64>(roll_yaw_prefix_ + "/motion_epoch", 1, true);
-  std_msgs::UInt64 epoch;
-  epoch.data = motion_identity_.epoch;
-  motion_epoch_pub_.publish(epoch);
-  subscriptions_.push_back(nh.subscribe(roll_yaw_prefix_ + "/motion", 10,
-                                      &GimbalrotorPerchingNavigator::motionCallback, this));
-  subscriptions_.push_back(
-      nh.subscribe(roll_yaw_prefix_ + "/body_pitch_velocity", 1,
-                   &GimbalrotorPerchingNavigator::bodyPitchVelocityCallback, this));
-  subscriptions_.push_back(
-      nh.subscribe(roll_yaw_prefix_ + "/target", 1, &GimbalrotorPerchingNavigator::manualCallback, this));
-  subscriptions_.push_back(
-      nh.subscribe(roll_yaw_prefix_ + "/pitch_rezero", 1, &GimbalrotorPerchingNavigator::rollYawPitchRezeroCallback, this));
-  if(!planning_configuration_valid_)
-    ROS_WARN("[RollYaw] Invalid offline configuration; manual navigation remains usable.");
-  if(!configuration_valid_)
-    ROS_ERROR("[RollYaw] Lock disabled: require valid hinge geometry, limits and ordinary fully actuated controller.");
-  publishRollYawDiagnostics();
-}
-void GimbalrotorPerchingNavigator::rollYawRosParamInit(ros::NodeHandle nh, ros::NodeHandle nhp)
-{
-  ros::NodeHandle pn(nh, "navigation/roll_yaw_perching");
-  pn.param<std::string>("roll_joint", roll_, "joint_roll");
-  pn.param<std::string>("yaw_joint", yaw_, "joint_yaw");
-  pn.param<std::string>("contact_link", contact_, "roll_hand_link");
-  pn.param<std::string>("debug_prefix", roll_yaw_prefix_, "perching/roll_yaw");
-  pn.param<std::string>("world_frame", world_, "world");
-  std::string tf_prefix;
-  nhp.param<std::string>("tf_prefix", tf_prefix, "");
-  pn.param<std::string>("body_frame", body_frame_, tf::resolve(tf_prefix, robot_model_->getBaselinkName()));
-  Eigen::Vector3d xyz = Eigen::Vector3d::Zero(), rpy = Eigen::Vector3d::Zero();
-  configuration_valid_ = readVector(pn, "pivot_offset", xyz, true) && readVector(pn, "pivot_rpy", rpy, true) &&
-                         readVector(pn, "hinge_axis", axis_, true) && std::abs(axis_.norm() - 1) < 1e-7;
-  cp_.translation() = xyz;
-  cp_.linear() = roll_yaw::expSO3(Eigen::Vector3d::UnitZ() * rpy.z()) * roll_yaw::expSO3(Eigen::Vector3d::UnitY() * rpy.y()) *
-                 roll_yaw::expSO3(Eigen::Vector3d::UnitX() * rpy.x());
-  auto& p = planning_config_;
-  auto& c = feedback_config_;
-  pn.param("body_pitch_jog_max_delta", body_pitch_jog_max_delta_, body_pitch_jog_max_delta_);
-  pn.param("body_pitch_velocity_command_duration", body_pitch_velocity_command_duration_,
-           body_pitch_velocity_command_duration_);
-  if(pn.hasParam("body_pitch_velocity_command_duration") &&
-     !pn.getParam("body_pitch_velocity_command_duration", body_pitch_velocity_command_duration_))
-    body_pitch_velocity_command_duration_ = std::numeric_limits<double>::quiet_NaN();
-  pn.param("prepare_deadline", prepare_deadline_, prepare_deadline_);
-  pn.param("max_execution_step", c.max_execution_step, c.max_execution_step);
-  pn.param("max_execution_gap", c.max_execution_gap, c.max_execution_gap);
-  pn.param("observer_max_interval", c.observer_max_interval, c.observer_max_interval);
-  pn.param("soft_tracking_fraction", c.soft_tracking_fraction, c.soft_tracking_fraction);
-  pn.param("resume_fraction", c.resume_fraction, c.resume_fraction);
-  pn.param("preparation_tolerance", c.preparation_tolerance, c.preparation_tolerance);
-  pn.param("preparation_quiet_time", c.preparation_quiet_time, c.preparation_quiet_time);
-  pn.param("reference_lead", c.reference_lead, c.reference_lead);
-  pn.param("progress_filter_time", c.progress_filter_time, c.progress_filter_time);
-  pn.param("goal_tolerance", c.goal_tolerance, c.goal_tolerance);
-  pn.param("progress_timeout", c.progress_timeout, c.progress_timeout);
-  const bool vectors =
-      readVector(pn, "position_lower", p.limits.lower) && readVector(pn, "position_upper", p.limits.upper);
-  // Shared mechanism and trajectory bounds.
-  const bool rate_vectors =
-      readVector(pn, "velocity_caps", p.limits.velocity) && readVector(pn, "acceleration_caps", p.limits.acceleration);
-  pn.param("planning_dt", p.dt, p.dt);
-  pn.param("body_max_tilt", p.max_tilt, p.max_tilt);
-  pn.param("orientation_tolerance", p.orientation_tolerance, p.orientation_tolerance);
-  pn.param("rate_tolerance", p.rate_tolerance, p.rate_tolerance);
-  pn.param("alignment_rate", p.alignment_rate, p.alignment_rate);
-  pn.param("alignment_acceleration", p.alignment_acceleration, p.alignment_acceleration);
-  pn.param("max_phase_duration", p.max_duration, p.max_duration);
-  pn.param("scaling_attempts", p.scaling_attempts, p.scaling_attempts);
-  pn.param("cog_speed_limit", p.cog_speed_limit, p.cog_speed_limit);
-  pn.param("cog_acceleration_limit", p.cog_acceleration_limit, p.cog_acceleration_limit);
-  pn.param("min_singular_value", p.min_singular_value, p.min_singular_value);
-  pn.param("feedback_timeout", c.timeout, c.timeout);
-  pn.param("future_tolerance", c.future_tolerance, c.future_tolerance);
-  pn.param("pivot_tolerance", c.pivot_tolerance, c.pivot_tolerance);
-  pn.param("hinge_residual_tolerance", c.hinge_tolerance, c.hinge_tolerance);
-  pn.param("tracking_tolerance", c.tracking_tolerance, c.tracking_tolerance);
-  pn.param("body_tracking_tolerance", c.orientation_tolerance, c.orientation_tolerance);
-  pn.param("settle_rate", c.settle_rate, c.settle_rate);
-  pn.param("settle_time", c.settle_time, c.settle_time);
-  pn.param("settle_timeout", c.settle_timeout, c.settle_timeout);
-  pn.param("settle_use_window", c.settle_use_window, c.settle_use_window);
-  pn.param("settle_body_rate", c.settle_body_rate, c.settle_body_rate);
-  pn.param("settle_joint_rate", c.settle_joint_rate, c.settle_joint_rate);
-  pn.param("settle_mean_rate", c.settle_mean_rate, c.settle_mean_rate);
-  c.require_settled_on_enable = false;  // Same measured-pose capture policy as multilink.
-  pn.param("feedback_sync_tolerance", synchronization_tolerance_, synchronization_tolerance_);
-  c.synchronization_tolerance = synchronization_tolerance_;
-  const bool jog_bound_valid = std::isfinite(body_pitch_jog_max_delta_) && body_pitch_jog_max_delta_ > 0 &&
-                               body_pitch_jog_max_delta_ <= M_PI / 180 + 1e-12;
-  if(!jog_bound_valid)
-    ROS_ERROR("[RollYaw] invalid body_pitch_jog_max_delta: local pitch disabled");
-  planning_configuration_valid_ = rate_vectors && p.valid() && c.governorValid(p) && c.settlingValid() &&
-                                  std::isfinite(prepare_deadline_) && prepare_deadline_ > 0 && prepare_deadline_ <= 300;
-  configuration_valid_ = configuration_valid_ && roll_yaw::poseValid(cp_) && vectors && rate_vectors && p.limits.valid() &&
-                         p.onlineValid() && c.motionConfigValid() && std::isfinite(synchronization_tolerance_) &&
-                         synchronization_tolerance_ > 0;
-  pn.param("pitch_rezero_target_pitch", rezero_pitch_, rezero_pitch_);
-  pn.param("pitch_rezero_kp", rezero_kp_, rezero_kp_);
-  pn.param("pitch_rezero_command_sign", rezero_sign_, rezero_sign_);
-  pn.param("pitch_rezero_rate_limit", rezero_rate_, rezero_rate_);
-  pn.param("pitch_rezero_max_delta", rezero_travel_, rezero_travel_);
-  pn.param("pitch_rezero_pitch_tolerance", rezero_tolerance_, rezero_tolerance_);
-  pn.param("pitch_rezero_rate_tolerance", rezero_rate_tolerance_, rezero_rate_tolerance_);
-  pn.param("pitch_rezero_stable_duration", rezero_stable_duration_, rezero_stable_duration_);
-  pn.param("pitch_rezero_timeout", rezero_timeout_, rezero_timeout_);
-  pn.param("pitch_rezero_roll_joint_hold_tolerance", rezero_roll_tolerance_, rezero_roll_tolerance_);
-  pn.param("pitch_rezero_yaw_joint_hold_tolerance", rezero_yaw_tolerance_, rezero_yaw_tolerance_);
-  rezero_configuration_valid_ = std::isfinite(rezero_pitch_) && std::abs(rezero_pitch_) < M_PI / 2;
-  for(double value : {rezero_kp_, rezero_rate_, rezero_travel_, rezero_tolerance_, rezero_rate_tolerance_,
-                      rezero_stable_duration_, rezero_timeout_, rezero_roll_tolerance_, rezero_yaw_tolerance_})
-    rezero_configuration_valid_ = rezero_configuration_valid_ && std::isfinite(value) && value > 0;
-  rezero_configuration_valid_ = rezero_configuration_valid_ && rezero_travel_ <= M_PI &&
-                                rezero_timeout_ >= rezero_stable_duration_ && rezero_roll_tolerance_ <= .5 &&
-                                rezero_yaw_tolerance_ <= .5 && std::isfinite(rezero_sign_) && rezero_sign_ != 0;
-  if(rezero_configuration_valid_)
-    rezero_sign_ = rezero_sign_ < 0 ? -1 : 1;
-  bool underactuated = false;
-  nh.param("controller/underactuate", underactuated, false);
-  std::string controller;
-  nh.getParam("aerial_robot_control_name", controller);
-  if(underactuated || controller != "aerial_robot_control/gimbalrotor_multilink_perching_admittance_controller")
-    configuration_valid_ = false;
-}
-
-bool GimbalrotorPerchingNavigator::snapshotModel(roll_yaw::Kinematics& out, std::string& error)
-{
-  if(!configuration_valid_ || !robot_model_ || !robot_model_->initialized())
-  {
-    error = "model/configuration unavailable or invalid";
-    return false;
-  }
-  const auto model = boost::dynamic_pointer_cast<GimbalrotorRobotModel>(robot_model_);
-  if(!model)
-  {
-    error = "roll-yaw requires a transformable GimbalrotorRobotModel";
-    return false;
-  }
-  const auto indices = model->getJointIndexMap();
-  const auto& names = model->getLinkJointNames();
-  const auto& link_indices = model->getLinkJointIndices();
-  std::map<std::string, unsigned> articulation;
-  if(names.size() != link_indices.size())
-  {
-    error = "invalid link-joint name/index correspondence";
-    return false;
-  }
-  for(std::size_t i = 0; i < names.size(); ++i)
-  {
-    if(link_indices[i] < 0 || indices.count(names[i]) != 1 ||
-       indices.at(names[i]) != static_cast<unsigned>(link_indices[i]) ||
-       !articulation.emplace(names[i], link_indices[i]).second)
-    {
-      error = "invalid articulation mapping: " + names[i];
-      return false;
-    }
-    if(names[i] != roll_ && names[i] != yaw_)
-    {
-      error = "unsupported additional link articulation: " + names[i];
-      return false;
-    }
-  }
-  if(roll_ == yaw_ || articulation.count(roll_) != 1 || articulation.count(yaw_) != 1)
-  {
-    error = "configured roll/yaw absent from model link articulations";
-    return false;
-  }
-  const unsigned ri = articulation.at(roll_), yi = articulation.at(yaw_);
-  auto joints = model->getJointPositionsSnapshot();
-  if(ri >= joints.rows() || yi >= joints.rows() || !joints.data.allFinite())
-  {
-    error = "invalid model joint positions/indices";
-    return false;
-  }
-  for(int i = 1; i < 3; ++i)
-  {
-    const auto joint = robot_model_->getUrdfModel().getJoint(i == 1 ? roll_ : yaw_);
-    if(!joint || joint->type != urdf::Joint::REVOLUTE || joint->mimic || !joint->limits ||
-       !std::isfinite(joint->limits->lower) || !std::isfinite(joint->limits->upper) ||
-       !std::isfinite(joint->limits->velocity) || joint->limits->velocity <= 0)
-    {
-      error = "expected bounded URDF roll/yaw revolutes";
-      return false;
-    }
-    Eigen::Vector3d axis(joint->axis.x, joint->axis.y, joint->axis.z);
-    if(!axis.allFinite() || axis.norm() < 1e-9 ||
-       std::abs(axis.normalized().dot(i == 1 ? Eigen::Vector3d::UnitX() : Eigen::Vector3d::UnitZ())) < .99)
-    {
-      error = "unexpected URDF roll/yaw axes";
-      return false;
-    }
-    planning_config_.limits.lower[i] = std::max(planning_config_.limits.lower[i], joint->limits->lower);
-    planning_config_.limits.upper[i] = std::min(planning_config_.limits.upper[i], joint->limits->upper);
-    planning_config_.limits.velocity[i] = std::min(planning_config_.limits.velocity[i], joint->limits->velocity);
-  }
-  if(!planning_config_.mechanismValid())
-  {
-    error = "empty URDF/configured limit intersection";
-    return false;
-  }
-  // Reconstruct from immutable configuration instead of copying live KDL joint
-  // caches while RobotModel::fullForwardKinematicsImpl is updating them.
+  auto robot = boost::dynamic_pointer_cast<GimbalrotorRobotModel>(robot_model_);
+  if(!robot) return false;
   KDL::Tree tree;
-  if(!kdl_parser::treeFromUrdfModel(robot_model_->getUrdfModel(), tree))
+  if(!kdl_parser::treeFromUrdfModel(robot->getUrdfModel(), tree)) return false;
+  ros::NodeHandle pn(nh_, "navigation/perching");
+  auto read = [&](const std::string& key, Eigen::Vector3d& value)
   {
-    error = "unable to snapshot configured kinematic tree";
-    return false;
-  }
-  std::map<std::string, perching_geometry::JointGeometry> joint_geometry;
-  for(const auto& item : robot_model_->getUrdfModel().joints_)
-    joint_geometry.emplace(item.first, perching_geometry::jointGeometry(*item.second));
-  const auto inertia = robot_model_->getInertiaMap();
-  const auto extra = robot_model_->getExtraModuleMap();
-  for(const auto& item : extra)
-  {
-    if(item.second.getJoint().getType() != KDL::Joint::None)
-    {
-      error = "extra module must be fixed: " + item.first;
-      return false;
-    }
-  }
-  const auto base = robot_model_->getBaselinkName();
-  const auto relative = robot_model_->getCogDesireOrientation<KDL::Rotation>();
-  KDL::Chain chain;
-  if(!tree.getChain(base, contact_, chain))
-  {
-    error = "missing baselink-to-contact chain";
-    return false;
-  }
-  // Use the controller's exact rotor-indexed names, verified on the URDF/KDL
-  // rotor-arm-to-thrust chains used by GimbalrotorRobotModel. Do not exempt
-  // arbitrary mechanism joints just because their names contain "gimbal".
-  std::map<std::string, unsigned> gimbal_indices;
-  for(int rotor = 1; rotor <= robot_model_->getRotorNum(); ++rotor)
-  {
-    const auto id = std::to_string(rotor);
-    KDL::Chain rotor_chain;
-    if(!tree.getChain("rotor_arm" + id, "thrust" + id, rotor_chain))
-      continue;
-    for(unsigned i = 0; i < rotor_chain.getNrOfSegments(); ++i)
-    {
-      const auto& name = rotor_chain.getSegment(i).getJoint().getName();
-      if(name != "gimbal" + id && name != "gimbal" + id + "_roll" && name != "gimbal" + id + "_pitch")
-        continue;
-      const auto joint = robot_model_->getUrdfModel().getJoint(name);
-      if(joint && joint->type == urdf::Joint::REVOLUTE && !joint->mimic && indices.count(name))
-        gimbal_indices.emplace(name, indices.at(name));
-    }
-  }
-  planning_config_.saw_point_valid = false;
-  KDL::Chain saw_chain;
-  if(tree.getChain(base, "saw", saw_chain) && saw_chain.getNrOfJoints() == 0)
-  {
-    KDL::TreeFkSolverPos_recursive fk(tree);
-    KDL::Frame b, saw;
-    if(fk.JntToCart(joints, b, base) >= 0 && fk.JntToCart(joints, saw, "saw") >= 0)
-    {
-      planning_config_.saw_point = roll_yaw::fromKdl(b.Inverse() * saw).translation();
-      planning_config_.saw_point_valid = planning_config_.saw_point.allFinite();
-    }
-  }
-  // Snapshot all model data before launching the planning worker. No mutation of
-  // the live robot model and no ROS access from the worker.
-  roll_yaw::CogDerivatives derivatives;
-  double cog_radius = 0;
-  auto cog = roll_yaw::articulatedCogModel(tree, joints, inertia, extra, base, relative, ri, yi, &derivatives, &cog_radius);
-  const auto roll = roll_, yaw = yaw_;
-  dynamics_factory_ = [tree, joints, inertia, extra, base, ri, yi, roll, yaw]
-      (const roll_yaw::Kinematics& geometry, perching_dynamics::MultilinkModel& dynamics, std::string& why)
-  {
-    return perching_dynamics::rollYawModel(geometry, tree, joints, inertia, extra, base, ri, yi, roll, yaw, dynamics, why);
+    std::vector<double> values;
+    if(!pn.getParam(key, values) || values.size() != 3) return false;
+    value = Eigen::Vector3d(values[0], values[1], values[2]); return value.allFinite();
   };
-  // RobotModel exposes const references but has no shared configuration lock or
-  // generation. Contract: fixed configuration writers must be quiescent while
-  // attached. This local check detects sequential changes; it cannot make an
-  // unsynchronized external setExtraModuleMap safe. Never compare evolving FK.
-  dynamics_snapshot_check_ = [robot = robot_model_, tree, indices, inertia, extra, base, joint_geometry]()
+  Eigen::Vector3d xyz, axis, rpy = Eigen::Vector3d::Zero();
+  if(!read("pivot_offset", xyz) || !read("hinge_axis", axis)) return false;
+  if(pn.hasParam("pivot_rpy") && !read("pivot_rpy", rpy)) return false;
+  Pose cp = Pose::Identity(); cp.translation() = xyz;
+  cp.linear() = perching_geometry::expSO3(Eigen::Vector3d::UnitZ() * rpy.z()) *
+      perching_geometry::expSO3(Eigen::Vector3d::UnitY() * rpy.y()) * perching_geometry::expSO3(Eigen::Vector3d::UnitX() * rpy.x());
+  std::string reason;
+  const auto joints = robot->getJointPositionsSnapshot();
+  if(!model_.configure(robot->getUrdfModel(), tree, joints, robot->getInertiaMap(), robot->getExtraModuleMap(),
+      robot->getBaselinkName(), contact_link_, active_joints_, cp, axis,
+      robot->getCogDesireOrientation<Eigen::Matrix3d>().transpose(), reason))
+  { ROS_ERROR_STREAM("Perching model: " << reason); return false; }
+  for(const auto& key : {"position_lower", "position_upper", "velocity_caps", "acceleration_caps"})
   {
-    ModelCheck result;
-    auto mismatch = [&](const std::string& category, const std::string& name,
-                        const std::string& captured, const std::string& current, double difference = 0)
+    std::vector<double> limits;
+    if(!pn.hasParam(key)) continue;
+    if(!pn.getParam(key, limits) || limits.size() != model_.coordinates().size()) return false;
+    for(std::size_t i = 0; i < limits.size(); ++i)
     {
-      if(result.valid) result = {false, true, category, name, captured, current, difference};
-    };
-    auto number = [&](const std::string& category, const auto& name, double a, double b)
-    {
-      if(!std::isfinite(a) || !std::isfinite(b) || std::abs(a-b) > 1e-12 * std::max({1.0, std::abs(a), std::abs(b)}))
-      {
-        std::ostringstream x, y;
-        x << std::setprecision(17) << a; y << std::setprecision(17) << b;
-        if constexpr(std::is_invocable_v<decltype(name)>)
-          mismatch(category, name(), x.str(), y.str(), b-a);
-        else
-          mismatch(category, name, x.str(), y.str(), b-a);
-      }
-    };
-    auto frame = [&](const std::string& category, const std::string& name, const KDL::Frame& a, const KDL::Frame& b)
-    {
-      for(int i=0; i<3; ++i)
-      {
-        number(category, [&] { return name + ".translation[" + std::to_string(i) + "]"; }, a.p[i], b.p[i]);
-        for(int j=0; j<3; ++j)
-          number(category, [&] { return name + ".rotation[" + std::to_string(i) + "," + std::to_string(j) + "]"; }, a.M(i,j), b.M(i,j));
-      }
-    };
-    auto mass = [&](const std::string& name, const KDL::RigidBodyInertia& a, const KDL::RigidBodyInertia& b)
-    {
-      number("inertia", [&] { return name + ".mass"; }, a.getMass(), b.getMass());
-      for(int i=0; i<3; ++i) number("inertia", [&] { return name + ".cog[" + std::to_string(i) + "]"; }, a.getCOG()[i], b.getCOG()[i]);
-      const auto ia=a.getRotationalInertia(), ib=b.getRotationalInertia();
-      for(int i=0; i<9; ++i) number("inertia", [&] { return name + ".tensor[" + std::to_string(i) + "]"; }, ia.data[i], ib.data[i]);
-    };
-    if(!robot->initialized())
-      return ModelCheck{false, false, "unavailable", "robot_model", "initialized", "not initialized", 0};
-    if(robot->getBaselinkName() != base) mismatch("topology", "baselink", base, robot->getBaselinkName());
-    const auto& current_indices = robot->getJointIndexMap();
-    number("topology", "joint_index_count", indices.size(), current_indices.size());
-    for(const auto& item : indices)
-    {
-      auto it = current_indices.find(item.first);
-      if(it == current_indices.end()) mismatch("topology", item.first, "present", "missing");
-      else number("topology", [&] { return item.first + ".index"; }, item.second, it->second);
+      if(!std::isfinite(limits[i])) return false;
+      if(std::string(key) == "position_lower") model_.lower[i] = std::max(model_.lower[i], limits[i]);
+      if(std::string(key) == "position_upper") model_.upper[i] = std::min(model_.upper[i], limits[i]);
+      if(std::string(key) == "velocity_caps") model_.velocity[i] = std::min(model_.velocity[i], limits[i]);
+      if(std::string(key) == "acceleration_caps") model_.acceleration[i] = limits[i];
     }
-    const auto& current_urdf = robot->getUrdfModel();
-    number("topology", "urdf_joint_count", joint_geometry.size(), current_urdf.joints_.size());
-    for(const auto& item : joint_geometry)
-    {
-      const auto joint = current_urdf.getJoint(item.first);
-      if(!joint) { mismatch("joint", item.first, "present", "missing"); return result; }
-      const auto& a = item.second;
-      const auto b = perching_geometry::jointGeometry(*joint);
-      if(a.parent != b.parent) mismatch("topology", item.first + ".parent", a.parent, b.parent);
-      if(a.child != b.child) mismatch("topology", item.first + ".child", a.child, b.child);
-      number("joint", [&] { return item.first + ".type"; }, a.type, b.type);
-      for(std::size_t i = 0; i < a.values.size(); ++i)
-        number("geometry", [&] { return item.first + ".urdf[" + std::to_string(i) + "]"; }, a.values[i], b.values[i]);
-      if(!result.valid) return result;
-    }
-    const auto& current_tree = robot->getTree();
-    const auto& segments = current_tree.getSegments();
-    number("topology", "segment_count", tree.getSegments().size(), segments.size());
-    if(current_tree.getRootSegment()->first != tree.getRootSegment()->first)
-      mismatch("topology", "root", tree.getRootSegment()->first, current_tree.getRootSegment()->first);
-    for(const auto& item : tree.getSegments())
-    {
-      auto it = segments.find(item.first);
-      if(it == segments.end()) { mismatch("topology", item.first, "present", "missing"); continue; }
-      const auto& a = GetTreeElementSegment(item.second);
-      const auto& b = GetTreeElementSegment(it->second);
-      if(a.getJoint().getName() != b.getJoint().getName())
-        mismatch("joint", item.first, a.getJoint().getName(), b.getJoint().getName());
-      number("joint", [&] { return item.first + ".type"; }, a.getJoint().getType(), b.getJoint().getType());
-      number("joint", [&] { return item.first + ".index"; }, GetTreeElementQNr(item.second), GetTreeElementQNr(it->second));
-      // Axis/origin are immutable KDL fields. Never call pose() on this live
-      // joint: the November 15 runs observed its concurrent FK cache as geometry.
-      for(int i = 0; i < 3; ++i)
-      {
-        number("joint", item.first + ".axis[" + std::to_string(i) + "]",
-               a.getJoint().JointAxis()[i], b.getJoint().JointAxis()[i]);
-        number("joint", item.first + ".origin[" + std::to_string(i) + "]",
-               a.getJoint().JointOrigin()[i], b.getJoint().JointOrigin()[i]);
-      }
-      const auto& ca=GetTreeElementChildren(item.second);
-      const auto& cb=GetTreeElementChildren(it->second);
-      number("topology", [&] { return item.first + ".children"; }, ca.size(), cb.size());
-      for(std::size_t i=0; i<std::min(ca.size(), cb.size()); ++i)
-        if(ca[i]->first != cb[i]->first) mismatch("topology", item.first + ".child", ca[i]->first, cb[i]->first);
-      if(!result.valid) return result;
-    }
-    const auto& current_inertia = robot->getInertiaMap();
-    const auto& current_extra = robot->getExtraModuleMap();
-    number("inertia", "link_count", inertia.size(), current_inertia.size());
-    number("module", "module_count", extra.size(), current_extra.size());
-    for(const auto& item : inertia)
-    {
-      auto it=current_inertia.find(item.first);
-      if(it==current_inertia.end()) mismatch("inertia", item.first, "present", "missing");
-      else mass(item.first, item.second, it->second);
-      if(!result.valid) return result;
-    }
-    for(const auto& item : extra)
-    {
-      auto it=current_extra.find(item.first);
-      if(it==current_extra.end()) { mismatch("module", item.first, "present", "missing"); return result; }
-      const auto& a=item.second; const auto& b=it->second;
-      if(b.getJoint().getType() != KDL::Joint::None)
-      { mismatch("module", item.first + ".joint", "fixed", "movable"); return result; }
-      if(a.getName()!=b.getName()) mismatch("module", item.first + ".parent", a.getName(), b.getName());
-      frame("module", item.first + ".tip", a.getFrameToTip(), b.getFrameToTip());
-      mass(item.first, a.getInertia(), b.getInertia());
-      if(!result.valid) return result;
-    }
-    return result;
-  };
-  model_check_ = dynamics_snapshot_check_();
-  dynamics_snapshot_valid_ = model_check_.valid;
-  dynamics_snapshot_current_ = [this] { return dynamics_snapshot_valid_; };
-  // Only link articulations are dynamic inputs. Other internal joints retain
-  // their captured modelling geometry, without constraining the live actuators.
-  rotor_gimbal_joints_.clear();
-  for(const auto& item : gimbal_indices)
-    rotor_gimbal_joints_.insert(item.first);
-  return out.configure(chain, roll_, yaw_, cp_, axis_, cog, error, derivatives, cog_radius);
-}
-roll_yaw::Feedback GimbalrotorPerchingNavigator::feedback() const
-{
-  roll_yaw::Feedback s = measured_;
-  s.now = ros::Time::now().toSec();
-  s.hover = navi_state_ == HOVER_STATE && !force_landing_flag_;
-  s.invalid_reason.clear();
-  if(!joint_valid_)
-    s.invalid_reason = joint_failure_;
-  else if(!body_valid_)
-    s.invalid_reason = body_failure_;
-  else if(std::abs(s.joint_stamp - s.body_stamp) > synchronization_tolerance_)
-  {
-    std::ostringstream why;
-    why << "joint/body feedback skew=" << std::abs(s.joint_stamp - s.body_stamp) << " s exceeds "
-        << synchronization_tolerance_ << " s";
-    s.invalid_reason = why.str();
   }
-  if(estimator_)
+  if(!model_.lower.allFinite() || !model_.upper.allFinite() || (model_.lower.array() >= model_.upper.array()).any() ||
+      (model_.velocity.array() <= 0).any() || (model_.acceleration.array() <= 0).any()) return false;
+  moving_.assign(active_joints_.size() + 1, false);
+  std::vector<std::string> moving;
+  pn.getParam("pitch_coordinates", moving);
+  for(const auto& name : moving)
   {
-    for(auto axis : {State::X_BASE, State::Y_BASE, State::Z_BASE})
-      if(!estimator_->getStateStatus(axis, estimate_mode_) && s.invalid_reason.empty())
-        s.invalid_reason = "baselink position estimate unavailable";
+    if(!coordinate_map_.count(name)) return false;
+    moving_[coordinate_map_.at(name)] = true;
   }
-  else
-    s.invalid_reason = "estimator unavailable";
-  s.valid = s.invalid_reason.empty();
-  return s;
-}
-namespace
-{
-thread_local const GimbalrotorPerchingNavigator* roll_yaw_dispatch_owner = nullptr;
-struct RollYawDispatchScope
-{
-  const GimbalrotorPerchingNavigator* previous;
-  explicit RollYawDispatchScope(const GimbalrotorPerchingNavigator* owner)
-      : previous(roll_yaw_dispatch_owner) { roll_yaw_dispatch_owner = owner; }
-  ~RollYawDispatchScope() { roll_yaw_dispatch_owner = previous; }
-};
-
-bool sameClaimIdentity(const gimbalrotor::RollYawMotion& a, const gimbalrotor::RollYawMotion& b)
-{
-  return a.session == b.session && a.epoch == b.epoch && a.source == b.source && a.sequence == b.sequence;
-}
-
-bool sameClaim(const gimbalrotor::RollYawMotion& a, const gimbalrotor::RollYawMotion& b)
-{
-  return sameClaimIdentity(a, b) && a.mode == b.mode && a.value == b.value && a.frame == b.frame &&
-      a.rate_limit == b.rate_limit && a.duration == b.duration;
-}
-
-std::string motionReplyIdentity(const gimbalrotor::RollYawMotion& motion)
-{
-  return "action=motion session=" + std::to_string(motion.session) + " epoch=" + std::to_string(motion.epoch) +
-      " source=" + motion.source + " sequence=" + std::to_string(motion.sequence) + " mode=" + std::to_string(motion.mode);
-}
-}
-
-bool GimbalrotorPerchingNavigator::replayMotionClaim(const gimbalrotor::RollYawMotion& motion, std_msgs::String& ack) const
-{
-  // The request carries the pre-grant epoch. This exception applies only to
-  // the exact current grant; revocation immediately makes the record stale.
-  if(!accepted_motion_claim_ || accepted_claim_epoch_ != input_motion_epoch_.load() ||
-     motion.session != input_session_.load() || input_motion_identity_.source != motion.source ||
-     !sameClaimIdentity(motion, *accepted_motion_claim_)) return false;
-  ack = accepted_claim_ack_;
-  if(!sameClaim(motion, *accepted_motion_claim_))
-    ack.data = motionReplyIdentity(motion) + " accepted=false reason=claim identity reused with changed payload";
+  if(moving.empty() || !coordinate_map_.count(manual_coordinate_)) return false;
+  std::string prefix; nhp_.param<std::string>("tf_prefix", prefix, "");
+  pn.param<std::string>("body_frame", body_frame_, tf::resolve(prefix, robot->getBaselinkName()));
+  if(positioning_)
+  {
+    if(!coordinate_map_.count(positioning_joint_) || coordinate_map_.at(positioning_joint_) == 0) return false;
+    const int index = coordinate_map_.at(positioning_joint_);
+    auto& c = servo_.config;
+    c.q_min = model_.lower[index]; c.q_max = model_.upper[index]; c.q_rate = model_.velocity[index];
+    c.pivot_offset = KDL::Vector(xyz.x(), xyz.y(), xyz.z()); c.hinge_axis = KDL::Vector(axis.x(), axis.y(), axis.z());
+    c.body_pitch_min = min_body_pitch_; c.body_pitch_max = max_body_pitch_;
+    c.feedback_timeout = timeout_; c.future_tolerance = future_tolerance_;
+    c.rezero_pitch = rezero_target_; c.rezero_sign = rezero_sign_; c.rezero_rate = rezero_rate_;
+    c.rezero_range = rezero_range_; c.rezero_timeout = rezero_timeout_; c.rezero_pitch_tolerance = rezero_tolerance_;
+    c.rezero_kp = rezero_kp_; c.rezero_rate_tolerance = rezero_rate_tolerance_; c.settle_duration = rezero_stable_duration_;
+    pn.param("pitch_position_tolerance", c.q_hold_error, c.q_hold_error);
+    pn.param("pitch_velocity_tolerance", c.joint_settle_rate, c.joint_settle_rate);
+    pn.param("pitch_zero_tolerance", c.q_zero_tolerance, c.q_zero_tolerance);
+    pn.param("passive_lower_limit", c.passive_min, c.passive_min); pn.param("passive_upper_limit", c.passive_max, c.passive_max);
+    pn.param("passive_rate_limit", c.passive_rate, c.passive_rate);
+    servo_.model = [this](double q, KDL::Frame& contact, KDL::Vector& cog) { return servoModel(q, contact, cog); };
+    if(!c.valid()) return false;
+  }
   return true;
 }
 
-bool GimbalrotorPerchingNavigator::deferRollYawCommand(
-    const std::string& key, std::function<void()> apply, bool urgent, const gimbalrotor::RollYawMotion* motion)
+bool GimbalrotorPerchingNavigator::fresh(double stamp, double receipt) const
 {
-  if(perching_configuration_ != PerchingConfiguration::ROLL_YAW || roll_yaw_dispatch_owner == this)
-    return false;
-  std_msgs::String ack;
-  std::vector<std_msgs::String> cancellations;
-  const std::string action = key == "pitch_jog" ? "body_pitch_delta" : key;
+  const double age = ros::Time::now().toSec() - stamp;
+  return stamp > 0 && std::isfinite(age) && age >= -future_tolerance_ && age <= timeout_ &&
+      receipt > 0 && (ros::Time::isSimTime() || steadyTime() - receipt <= timeout_);
+}
+
+void GimbalrotorPerchingNavigator::jointCallback(const ros::MessageEvent<sensor_msgs::JointState const>& event)
+{
+  std::lock_guard<std::recursive_mutex> lock(perching_state_mutex_);
+  const auto& msg = *event.getMessage();
+  Sample sample;
+  sample.stamp = msg.header.stamp.toSec(); sample.receipt = steadyTime();
+  if(!fresh(sample.stamp, sample.receipt)) return;
+  if(!joint_history_.empty() && sample.stamp <= joint_history_.back().stamp) return;
+  const int n = active_joints_.size() + 1;
+  sample.q = sample.rate = sample.effort = Vector::Zero(n);
+  const auto header = event.getConnectionHeaderPtr();
+  const auto producer = header ? header->find("callerid") : ros::M_string::const_iterator();
+  sample.effort_valid = effort_source_valid_ && header && producer != header->end() && producer->second == effort_producer_;
+  for(int i = 1; i < n; ++i)
   {
-    std::lock_guard<std::mutex> lock(input_mutex_);
-    if(motion)
+    const auto it = std::find(msg.name.begin(), msg.name.end(), active_joints_[i - 1]);
+    if(it == msg.name.end() || std::count(msg.name.begin(), msg.name.end(), *it) != 1) return;
+    const std::size_t index = std::distance(msg.name.begin(), it);
+    if(index >= msg.position.size() || !std::isfinite(msg.position[index])) return;
+    sample.q[i] = msg.position[index];
+    if(index < msg.velocity.size() && std::isfinite(msg.velocity[index])) sample.rate[i] = msg.velocity[index];
+    else if(!joint_history_.empty() && sample.stamp - joint_history_.back().stamp <= max_gap_)
+      sample.rate[i] = (sample.q[i] - joint_history_.back().q[i]) / (sample.stamp - joint_history_.back().stamp);
+    else sample.rate[i] = std::numeric_limits<double>::quiet_NaN();
+    if(index < msg.effort.size() && std::isfinite(msg.effort[index])) sample.effort[i] = msg.effort[index];
+    else sample.effort_valid = false;
+  }
+  joint_history_.push_back(sample);
+  while(joint_history_.size() > 64) joint_history_.pop_front();
+}
+
+void GimbalrotorPerchingNavigator::bodyCallback(const nav_msgs::OdometryConstPtr& msg)
+{
+  std::lock_guard<std::recursive_mutex> lock(perching_state_mutex_);
+  Sample sample;
+  sample.stamp = msg->header.stamp.toSec(); sample.receipt = steadyTime();
+  auto frame = [](std::string name) { if(!name.empty() && name.front() == '/') name.erase(0, 1); return name; };
+  if(!fresh(sample.stamp, sample.receipt) || frame(msg->header.frame_id) != frame(world_) ||
+     (!body_frame_.empty() && frame(msg->child_frame_id) != frame(body_frame_))) return;
+  if(!body_history_.empty() && sample.stamp <= body_history_.back().stamp) return;
+  const auto& p = msg->pose.pose.position; const auto& q = msg->pose.pose.orientation;
+  Eigen::Quaterniond orientation(q.w, q.x, q.y, q.z);
+  if(!orientation.coeffs().allFinite() || std::abs(orientation.norm() - 1) > .002) return;
+  sample.body.linear() = orientation.normalized().toRotationMatrix(); sample.body.translation() = Eigen::Vector3d(p.x, p.y, p.z);
+  const auto& w = msg->twist.twist.angular; sample.omega = Eigen::Vector3d(w.x, w.y, w.z);
+  if(!perching_geometry::poseValid(sample.body) || !sample.omega.allFinite()) return;
+  body_history_.push_back(sample);
+  while(body_history_.size() > 64) body_history_.pop_front();
+}
+
+bool GimbalrotorPerchingNavigator::observation(Sample& sample) const
+{
+  if(body_history_.empty() || joint_history_.empty()) return false;
+  const auto& body = body_history_.back(); const auto& joint = joint_history_.back();
+  if(!fresh(body.stamp, body.receipt) || !fresh(joint.stamp, joint.receipt) ||
+      std::abs(body.stamp - joint.stamp) > sync_tolerance_) return false;
+  const double stamp = std::min(body.stamp, joint.stamp);
+  auto bracket = [stamp, this](const std::deque<Sample>& history, Sample& result, bool body)
+  {
+    for(std::size_t i = 0; i < history.size(); ++i)
     {
-      const auto epoch = input_motion_epoch_.load();
-      if(input_motion_identity_.epoch != epoch)
+      if(history[i].stamp == stamp) { result = history[i]; return true; }
+      if(i == 0 || history[i - 1].stamp > stamp || history[i].stamp < stamp) continue;
+      const auto& a = history[i - 1]; const auto& b = history[i];
+      if(b.stamp - a.stamp > max_gap_) return false;
+      const double u = (stamp - a.stamp) / (b.stamp - a.stamp);
+      result = a; result.stamp = stamp; result.receipt = std::min(a.receipt, b.receipt);
+      if(body)
       {
-        input_motion_identity_ = roll_yaw::MotionIdentity();
-        input_motion_identity_.epoch = epoch;
+        result.body.translation() = (1 - u) * a.body.translation() + u * b.body.translation();
+        result.body.linear() = Eigen::Quaterniond(a.body.linear()).slerp(u, Eigen::Quaterniond(b.body.linear())).toRotationMatrix();
+        result.omega = result.body.linear().transpose() * ((1 - u) * a.body.linear() * a.omega + u * b.body.linear() * b.omega);
       }
-      const bool claim = motion->mode == gimbalrotor::RollYawMotion::CLAIM;
-      if(claim && replayMotionClaim(*motion, ack))
+      else
       {
-        ack_pub_.publish(ack);
-        return true;
+        result.q = (1 - u) * a.q + u * b.q; result.rate = (1 - u) * a.rate + u * b.rate;
+        result.effort = (1 - u) * a.effort + u * b.effort;
+        result.effort_valid = a.effort_valid && b.effort_valid;
       }
-      auto error = input_motion_identity_.rejection(motion->epoch, motion->source, motion->sequence, claim);
-      if(!claim && input_motion_identity_.source.empty()) error = "claim motion ownership first";
-      if(!motion->session || motion->session != input_session_.load()) error = "old contact session";
-      if(motion->mode > gimbalrotor::RollYawMotion::RELEASE || !std::isfinite(motion->value)) error = "invalid motion request";
-      if(claim && (!std::isfinite(motion->rate_limit) || !std::isfinite(motion->duration)))
-        error = "invalid claim payload";
-      if(claim && pending_motion_claim_ && error.empty())
-      {
-        if(sameClaim(*motion, *pending_motion_claim_)) return true; // One queued/in-flight acquisition.
-        error = sameClaimIdentity(*motion, *pending_motion_claim_)
-            ? "claim identity reused with changed payload" : "busy; ownership acquisition pending";
-      }
-      if(motion->mode == gimbalrotor::RollYawMotion::BODY_PITCH &&
-         (!motion->frame || motion->frame > motion->sequence || std::abs(motion->value) >= M_PI ||
-          !std::isfinite(motion->rate_limit) || motion->rate_limit <= 0))
-        error = "invalid body pitch frame, offset or speed limit";
-      if(motion->mode == gimbalrotor::RollYawMotion::PULSE &&
-         (!std::isfinite(motion->duration) || motion->duration <= 0 || motion->duration > 8 || motion->value == 0))
-        error = "invalid pulse duration or rate";
-      if((claim || motion->mode == gimbalrotor::RollYawMotion::JOG || motion->mode == gimbalrotor::RollYawMotion::PULSE) &&
-         std::any_of(pending_commands_.begin(), pending_commands_.end(),
-                     [](const PendingCommand& c) { return !c.urgent && c.key.compare(0, 7, "motion_") == 0; }))
-        error = "busy; finite motion rejected, not retained";
-      if(!error.empty())
-      {
-        ack.data = "action=motion session=" + std::to_string(motion->session) + " epoch=" + std::to_string(motion->epoch) +
-            " source=" + motion->source + " sequence=" + std::to_string(motion->sequence) + " mode=" + std::to_string(motion->mode) +
-            " accepted=false reason=" + error;
-        ack_pub_.publish(ack);
-        return true;
-      }
-      // Claim input ownership and reject reordered arrivals before a stale
-      // command could overwrite a newer pending destination.
-      if(!claim) input_motion_identity_.accept(motion->source, motion->sequence);
-    }
-    const auto sequence = ++input_sequence_;
-    if(key == "branch" || key == "point" || key == "interaction_command_wrench" || key == "interaction_external_wrench")
-    {
-      pending_observations_[key] = {sequence, key, input_session_.load(), urgent, std::move(apply)};
       return true;
     }
-    roll_yaw::replacePendingMotion(pending_commands_, key);
-    if(urgent)
-    {
-      urgent_sequence_ = sequence;
-      // Preempt calculation immediately, but cancel intent only after the
-      // request passes its session/admission checks on the owner thread.
-      if(pending_commands_.size() >= 64)
-      {
-        const auto& displaced = pending_commands_.back();
-        if(displaced.key == "owner_claim") pending_motion_claim_.reset();
-        std_msgs::String rejected;
-        rejected.data = "action=" + displaced.key + " sequence=" + std::to_string(displaced.sequence) +
-            " accepted=false phase=rejected reason=queue_capacity_reserved_for_urgent_request";
-        cancellations.push_back(rejected);
-        pending_commands_.pop_back();
-      }
-    }
-    if(pending_commands_.size() >= 64)
-      ack.data = (motion ? motionReplyIdentity(*motion) : "action=" + action +
-          " session=" + std::to_string(input_session_.load()) + " sequence=" + std::to_string(sequence)) +
-          " accepted=false phase=rejected reason=command_queue_full";
-    else
-    {
-      if(motion && motion->mode == gimbalrotor::RollYawMotion::CLAIM)
-        pending_motion_claim_.reset(new gimbalrotor::RollYawMotion(*motion));
-      PendingCommand command{sequence, key, input_session_.load(), urgent, std::move(apply)};
-      if(urgent)
-        pending_commands_.insert(std::find_if(pending_commands_.begin(), pending_commands_.end(),
-            [](const PendingCommand& pending) { return !pending.urgent; }), std::move(command));
-      else pending_commands_.push_back(std::move(command));
-      ack.data = "action=" + action + " session=" + std::to_string(input_session_.load()) + " sequence=" + std::to_string(sequence) +
-          " received=true phase=queued reason=update_admission_pending";
-    }
-  }
-  for(const auto& cancelled : cancellations) ack_pub_.publish(cancelled);
-  ack_pub_.publish(ack);
-  return true;
-}
-
-void GimbalrotorPerchingNavigator::drainRollYawCommands()
-{
-  RollYawDispatchScope dispatch(this);
-  std::map<std::string, PendingCommand> observations;
-  {
-    std::lock_guard<std::mutex> lock(input_mutex_);
-    observations.swap(pending_observations_);
-  }
-  for(auto& item : observations) item.second.apply();
-  PendingCommand command;
-  bool urgent_command = false;
-  {
-    std::lock_guard<std::mutex> lock(input_mutex_);
-    calculation_sequence_ = urgent_sequence_;
-    if(pending_commands_.empty()) return;
-    const bool urgent = pending_commands_.front().urgent;
-    urgent_command = urgent;
-    // Motion replaces the current destination. Finite jogs reject busy state
-    // in admission; no command waits here for another motion to finish.
-    command = std::move(pending_commands_.front());
-    pending_commands_.pop_front();
-  }
-  if(!urgent_command && command.session != input_session_.load())
-  {
-    if(command.key == "owner_claim")
-    {
-      std::lock_guard<std::mutex> lock(input_mutex_);
-      pending_motion_claim_.reset();
-    }
-    std_msgs::String ack;
-    ack.data = "action=" + command.key + " sequence=" + std::to_string(command.sequence) +
-        " accepted=false phase=rejected reason=old_contact_session";
-    ack_pub_.publish(ack);
-    return;
-  }
-  dispatch_sequence_ = command.sequence;
-  command.apply(); // At most one admission per update; no backlog-dependent work.
-}
-
-void GimbalrotorPerchingNavigator::cancelQueuedRollYawCommands(const std::string& why, bool all)
-{
-  revokeMotion();
-  std::vector<PendingCommand> cancelled;
-  {
-    std::lock_guard<std::mutex> lock(input_mutex_);
-    for(auto it = pending_commands_.begin(); it != pending_commands_.end();)
-    {
-      if(!it->urgent && (all || it->sequence < dispatch_sequence_))
-      {
-        if(it->key == "owner_claim") pending_motion_claim_.reset();
-        cancelled.push_back(std::move(*it)); it = pending_commands_.erase(it);
-      }
-      else ++it;
-    }
-    if(all)
-    {
-      pending_observations_.erase("interaction_command_wrench");
-      pending_observations_.erase("interaction_external_wrench");
-    }
-  }
-  for(const auto& command : cancelled)
-  {
-    std_msgs::String ack;
-    ack.data = "action=" + (command.key == "pitch_jog" ? std::string("body_pitch_delta") : command.key) +
-        " session=" + std::to_string(command.session) + " sequence=" + std::to_string(command.sequence) +
-        " phase=cancelled reason=" + why;
-    ack_pub_.publish(ack);
-  }
-}
-
-void GimbalrotorPerchingNavigator::captureRollYawInputs()
-{
-  RollYawInputs snapshot;
-  const double started = roll_yaw::steadySeconds();
-  {
-    std::lock_guard<std::mutex> lock(input_mutex_);
-    const double acquired = roll_yaw::steadySeconds();
-    snapshot = inputs_;
-    inputs_.clock_reset = false;
-    input_lock_wait_ = acquired - started;
-    input_lock_held_ = roll_yaw::steadySeconds() - acquired;
-  }
-  measured_ = snapshot.measured_;
-  body_receipt_ = snapshot.body_receipt_;
-  joint_receipt_ = snapshot.joint_receipt_;
-  joint_failure_ = snapshot.joint_failure_;
-  body_failure_ = snapshot.body_failure_;
-  joint_ignored_stamps_ = snapshot.joint_ignored_stamps_;
-  body_ignored_stamps_ = snapshot.body_ignored_stamps_;
-  joint_invalid_messages_ = snapshot.joint_invalid_messages_;
-  body_invalid_messages_ = snapshot.body_invalid_messages_;
-  last_joint_message_stamp_ = snapshot.last_joint_message_stamp_;
-  last_body_message_stamp_ = snapshot.last_body_message_stamp_;
-  joint_valid_ = snapshot.joint_valid_;
-  body_valid_ = snapshot.body_valid_;
-  joint_callback_wait_ = snapshot.joint_callback_wait;
-  body_callback_wait_ = snapshot.body_callback_wait;
-  joint_queue_age_ = snapshot.joint_queue_age;
-  if(snapshot.clock_reset)
-    resetArticulatedSession("source clock moved backwards; awaiting coherent samples");
-  if(snapshot.joint_sequence != consumed_joint_sequence_)
-  {
-    if(snapshot.joint_sequence > consumed_joint_sequence_ + 1)
-      coalesced_joint_samples_ += snapshot.joint_sequence - consumed_joint_sequence_ - 1;
-    consumed_joint_sequence_ = snapshot.joint_sequence;
-    if(auto interaction = interaction_.lock(); interaction && interaction->articulated())
-      interaction->captureDynamicsJoints(interactionInput(feedback()), snapshot.joints,
-                                          snapshot.producer, snapshot.joint_wall);
-  }
-  snapshot_feedback_valid_ = roll_yaw::feedbackRejection(feedback(), feedback_config_, planning_config_).empty();
-}
-
-void GimbalrotorPerchingNavigator::rollYawJointCallback(const ros::MessageEvent<sensor_msgs::JointState const>& event)
-{
-  const auto& m = event.getMessage();
-  const double arrival = roll_yaw::steadySeconds();
-  const double source = m->header.stamp.toSec(), receipt = ros::Time::now().toSec();
-  std::lock_guard<std::mutex> l(input_mutex_);
-  inputs_.joint_callback_wait = roll_yaw::steadySeconds() - arrival;
-  inputs_.joint_queue_age = receipt - event.getReceiptTime().toSec();
-  // Other publishers may send gimbal-only messages on this shared topic.
-  if(std::find(m->name.begin(), m->name.end(), roll_) == m->name.end() &&
-     std::find(m->name.begin(), m->name.end(), yaw_) == m->name.end())
-    return;
-  Eigen::Vector3d q = inputs_.measured_.eta, rate = Eigen::Vector3d::Zero();
-  const double now = receipt, stamp = source;
-  const double previous = std::max(inputs_.measured_.joint_stamp, inputs_.joint_bootstrap_stamp_);
-  if(now < previous - feedback_config_.future_tolerance)
-  {
-    inputs_.measured_.joint_stamp = 0;
-    inputs_.joint_valid_ = false;
-    inputs_.joint_bootstrap_stamp_ = 0;
-    inputs_.clock_reset = true;
-  }
-  if(stamp > 0 && stamp <= std::max(inputs_.measured_.joint_stamp, inputs_.joint_bootstrap_stamp_))
-  {
-    ++inputs_.joint_ignored_stamps_;
-    inputs_.joint_failure_ = "duplicate/out-of-order joint stamp";
-    return;
-  }
-  if(!inputs_.producer.empty() && inputs_.producer != event.getPublisherName())
-    inputs_.joint_bootstrap_stamp_ = 0;
-  inputs_.joints = *m;
-  inputs_.producer = event.getPublisherName();
-  inputs_.joint_wall = arrival;
-  ++inputs_.joint_sequence;
-  inputs_.joint_valid_ = false;
-  ++inputs_.joint_invalid_messages_;
-  inputs_.last_joint_message_stamp_ = stamp;
-  inputs_.joint_failure_ = "invalid/stale/future joint timestamp";
-  if(stamp <= 0 || now - stamp > feedback_config_.timeout || now - stamp < -feedback_config_.future_tolerance)
-    return;
-  inputs_.joint_failure_ = "missing/duplicate joint name or invalid joint arrays";
-  if(m->position.size() != m->name.size() || (!m->velocity.empty() && m->velocity.size() != m->name.size()))
-    return;
-  for(int i = 1; i < 3; ++i)
-  {
-    const auto& name = i == 1 ? roll_ : yaw_;
-    if(std::count(m->name.begin(), m->name.end(), name) != 1)
-      return;
-    const auto index = std::distance(m->name.begin(), std::find(m->name.begin(), m->name.end(), name));
-    if(!std::isfinite(m->position[index]))
-      return;
-    q[i] = m->position[index];
-    if(!m->velocity.empty())
-    {
-      if(!std::isfinite(m->velocity[index]))
-        return;
-      rate[i] = m->velocity[index];
-    }
-  }
-  if(m->velocity.empty())
-  {
-    const double dt = stamp - inputs_.joint_bootstrap_stamp_;
-    if(inputs_.joint_bootstrap_stamp_ > 0 && dt > 1e-4 && dt <= feedback_config_.timeout)
-      rate.tail<2>() = (q - inputs_.joint_bootstrap_).tail<2>() / dt;
-    else
-    {
-      // Bootstrap is not a complete control sample and never refreshes one.
-      inputs_.joint_bootstrap_ = q;
-      inputs_.joint_bootstrap_stamp_ = stamp;
-      inputs_.joint_failure_ = "joint rate bootstrap: need two advancing fresh samples";
-      return;
-    }
-    if(!rate.allFinite())
-    {
-      inputs_.joint_failure_ = "nonfinite derived joint rates";
-      return;
-    }
-  }
-  inputs_.joint_bootstrap_ = q;
-  inputs_.joint_bootstrap_stamp_ = stamp;
-  inputs_.joint_receipt_ = now;
-  inputs_.measured_.eta = q;
-  inputs_.measured_.joint_rate = rate;
-  inputs_.measured_.joint_stamp = stamp;
-  // Preserve the producer's timestamp/effort alignment. Fill a missing rate
-  // from ingestion history so a slower consumer does not bootstrap repeatedly.
-  if(inputs_.joints.velocity.empty())
-  {
-    inputs_.joints.velocity.resize(m->name.size(), 0);
-    for(int axis = 1; axis < 3; ++axis)
-    {
-      const auto it = std::find(m->name.begin(), m->name.end(), axis == 1 ? roll_ : yaw_);
-      inputs_.joints.velocity[it - m->name.begin()] = rate[axis];
-    }
-  }
-  inputs_.joint_valid_ = true;
-  --inputs_.joint_invalid_messages_;
-  inputs_.joint_failure_.clear();
-}
-void GimbalrotorPerchingNavigator::bodyCallback(const nav_msgs::OdometryConstPtr& m)
-{
-  const double arrival = roll_yaw::steadySeconds();
-  const double stamp = m->header.stamp.toSec(), now = ros::Time::now().toSec();
-  std::lock_guard<std::mutex> l(input_mutex_);
-  inputs_.body_callback_wait = roll_yaw::steadySeconds() - arrival;
-  // The estimator publishes on a timer using the latest IMU measurement stamp;
-  // consecutive odometry publications can legitimately share that stamp.
-  // Keep the accepted sample, never replace its stamp with receipt time.
-  if(now < inputs_.measured_.body_stamp - feedback_config_.future_tolerance)
-  {
-    inputs_.measured_.body_stamp = 0;
-    inputs_.body_valid_ = false;
-    inputs_.clock_reset = true;
-  }
-  if(stamp > 0 && stamp <= inputs_.measured_.body_stamp)
-  {
-    ++inputs_.body_ignored_stamps_;
-    inputs_.body_failure_ = "duplicate/out-of-order body stamp";
-    return;
-  }
-  inputs_.body_valid_ = false;
-  ++inputs_.body_invalid_messages_;
-  inputs_.last_body_message_stamp_ = stamp;
-  inputs_.body_failure_ = "invalid/stale/future body timestamp";
-  if(stamp <= 0 || now - stamp > feedback_config_.timeout || now - stamp < -feedback_config_.future_tolerance)
-    return;
-  inputs_.body_failure_ = "body odometry world/child frame mismatch";
-  if(frameName(m->header.frame_id) != frameName(world_) || frameName(m->child_frame_id) != frameName(body_frame_))
-    return;
-  inputs_.body_failure_ = "invalid body quaternion";
-  const auto& p = m->pose.pose;
-  Eigen::Quaterniond q(p.orientation.w, p.orientation.x, p.orientation.y, p.orientation.z);
-  if(!q.coeffs().allFinite() || std::abs(q.norm() - 1) > 1e-3)
-    return;
-  Eigen::Isometry3d body = Eigen::Isometry3d::Identity();
-  body.linear() = q.normalized().toRotationMatrix();
-  body.translation() = Eigen::Vector3d(p.position.x, p.position.y, p.position.z);
-  const auto& w = m->twist.twist.angular;
-  const Eigen::Vector3d omega(w.x, w.y, w.z);
-  inputs_.body_failure_ = "invalid body position/angular rate";
-  if(!roll_yaw::poseValid(body) || !omega.allFinite())
-    return;
-  inputs_.measured_.body = body;
-  inputs_.measured_.body_omega = omega;
-  inputs_.body_receipt_ = now;
-  inputs_.measured_.body_stamp = stamp;
-  inputs_.body_valid_ = true;
-  --inputs_.body_invalid_messages_;
-  inputs_.body_failure_.clear();
-}
-bool GimbalrotorPerchingNavigator::ownsRollYawTargets() const
-{
-  std::lock_guard<std::recursive_mutex> l(perchingStateMutex());
-  return perchingSession().mode != perching_geometry::Mode::DISABLED;
-}
-void GimbalrotorPerchingNavigator::rollYawTargetConflict(const char* source)
-{
-  std::lock_guard<std::recursive_mutex> l(perchingStateMutex());
-  reason_ = std::string("unsupported free-flight target while perched: ") + source;
-  ROS_WARN_STREAM_THROTTLE(1.0, "[RollYaw] " << reason_);
-}
-void GimbalrotorPerchingNavigator::rollYawNaviCallback(const aerial_robot_msgs::FlightNavConstPtr& m)
-{
-  if(input_session_.load() && rejectUnscopedMotion("nav")) return;
-  if(deferRollYawCommand("nav", [this, m] { rollYawNaviCallback(m); }, false)) return;
-
-  const double started = roll_yaw::steadySeconds();
-  std::lock_guard<std::recursive_mutex> l(perchingStateMutex());
-  CallbackTimer timing{manual_wall_, started};
-  if(!ownsRollYawTargets())
-  {
-    GimbalrotorNavigator::naviCallback(m);
-    return;
-  }
-  if(m->pos_xy_nav_mode == aerial_robot_msgs::FlightNav::NO_NAVIGATION &&
-     m->pos_z_nav_mode == aerial_robot_msgs::FlightNav::NO_NAVIGATION &&
-     m->roll_nav_mode == aerial_robot_msgs::FlightNav::NO_NAVIGATION &&
-     m->yaw_nav_mode == aerial_robot_msgs::FlightNav::NO_NAVIGATION &&
-     m->pitch_nav_mode == aerial_robot_msgs::FlightNav::POS_MODE)
-    applyRollYawPitchDelta(m->target_pitch);
-  else
-    rollYawTargetConflict(
-        "uav/nav accepts lock-relative alpha only; use body_yaw_target/body_roll_target for body alignment");
-}
-void GimbalrotorPerchingNavigator::applyRollYawPitchDelta(double alpha)
-{
-  const double started = roll_yaw::steadySeconds();
-  std::lock_guard<std::recursive_mutex> l(perchingStateMutex());
-  CallbackTimer timing{manual_wall_, started};
-  Eigen::Vector3d target = nominal_;
-  target[0] = alpha;
-  setNominalTarget(target, 0);
-}
-bool GimbalrotorPerchingNavigator::tryLockRollYaw(const std::string& cause)
-{
-  std::lock_guard<std::recursive_mutex> l(perchingStateMutex());
-  const auto interaction = interaction_.lock();
-  const auto f = feedback();
-  std::string error = roll_yaw::feedbackRejection(f, feedback_config_, planning_config_);
-  roll_yaw::Kinematics model;
-  roll_yaw::Reference held;
-  Eigen::Vector3d q = f.eta;
-  q[0] = 0;
-  if(!interaction || perchingSession().mode != perching_geometry::Mode::NORMAL ||
-     !error.empty() || !snapshotModel(model, error) ||
-     !model.lock(f.body, q) || !roll_yaw::mechanismAllowed(model, q, planning_config_, error) ||
-     !roll_yaw::mechanismReference(model, q, Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero(), held))
-  {
-    reason_ = "contact capture failed: " + (error.empty() ? "invalid HOVER/model/FK snapshot" : error);
-    if(!previous_failure_.empty())
-      reason_ += "; previous failure: " + previous_failure_;
-    ROS_WARN_STREAM("[RollYaw] " << reason_);
-    publishRollYawDiagnostics();
     return false;
-  }
-  cancelQueuedRollYawCommands("new_contact_session", true);
-  pitch_velocity_ = PitchVelocity();
-  finishPitchJog("cancelled", "contact reset/relock");
-  jog_ = PitchJog();
-  invalidatePlanner();
-  resetRollYawPitchRezeroState();
-  stop_pending_ = retarget_pending_ = false;
-  preparation_window_.reset();
-  preparation_stats_ = roll_yaw::SettlingStatistics();
-  preparation_ready_ = false;
-  preparation_clock_ = 0;
-  manual_tracking_ = false;
-  manual_time_ = f.now;
-  contact_body_stamp_ = contact_joint_stamp_ = -1;
-  model_ = std::move(model);
-  interaction->captureModel(interactionInput(feedback()));
-  nominal_ = q;
-  final_target_ = held;
-  body_alignment_valid_ = false;
-  lock_valid_ = true;
-  faulted_ = false;
-  feedback_waiting_ = false;
-  hold_reason_ = HoldReason::NONE;
-  tracking_hold_ = false;
-  contact_hold_since_ = 0;
-  feed_scale_.setOnes();
-  previous_failure_.clear();
-  neutral_ = held.body.linear();
-  trajectory_mode_ = false;
-  traj_generator_ptr_.reset();
-  gps_waypoint_ = vel_based_waypoint_ = force_att_control_flag_ = false;
-  commitFixedContactLock(tfVector(held.cog.translation()), tfQuaternion(held.cog.linear()),
-                         tfVector(model_.pivotLock().translation()));
-  roll_yaw_lock_stamp_ = perchingSession().lock_stamp;
-  input_session_.store(roll_yaw_lock_stamp_.toNSec());
-  resetArticulatedSession("new contact lock; awaiting first coherent dynamics sample");
-  resetComplianceSession();
-  planning_model_ = std::make_shared<roll_yaw::Kinematics>(model_);
-  reason_ = "measured contact captured by " + cause + "; independent nominal targets initialized";
-  publishRollYawDiagnostics();
-  return true;
-}
-void GimbalrotorPerchingNavigator::resetRollYawLock()
-{
-  std::lock_guard<std::recursive_mutex> l(perchingStateMutex());
-  if(faulted_ || roll_yaw_pitch_rezero_failed_)
-  {
-    if(previous_failure_.empty())
-      previous_failure_ = reason_;
-    ROS_WARN_STREAM("[RollYaw] Resetting reference after: " << previous_failure_);
-  }
-  cancelQueuedRollYawCommands("contact_session_reset", true);
-  resetCommonPerchingLock();
-  pitch_velocity_ = PitchVelocity();
-  finishPitchJog("cancelled", "contact reset/relock");
-  jog_ = PitchJog();
-  invalidatePlanner();
-  resetRollYawPitchRezeroState();
-  lock_valid_ = false;
-  if(auto interaction = interaction_.lock())
-    interaction->clearModel();
-  faulted_ = false;
-  feedback_waiting_ = false;
-  hold_reason_ = HoldReason::NONE;
-  tracking_hold_ = false;
-  contact_hold_since_ = 0;
-  feed_scale_.setOnes();
-  roll_yaw_lock_stamp_ = ros::Time();
-  input_session_.store(0);
-  resetArticulatedSession("perching lock reset; no attached dynamics sample");
-  resetComplianceSession();
-  manual_tracking_ = false;
-  manual_time_ = 0;
-  stop_pending_ = retarget_pending_ = false;
-  preparation_window_.reset();
-  preparation_stats_ = roll_yaw::SettlingStatistics();
-  preparation_ready_ = false;
-  preparation_clock_ = 0;
-  body_alignment_valid_ = false;
-  nominal_.setZero();  // Never publish these reset values; capture must succeed first.
-  manual_receipt_stamp_ = ros::Time();
-  // Base enable performs another reset on a rejected capture. Keep its cause.
-  if(reason_.find("contact capture failed:") != 0)
-  {
-    if(previous_failure_.empty())
-      reason_ = "perching reference reset";
-    else
-      reason_ = "perching reference reset; previous failure: " + previous_failure_;
-  }
-}
-void GimbalrotorPerchingNavigator::invalidatePlanner()
-{
-  if(prepare_pending_)
-    ++prepare_cancellations_;
-  ++producer_generation_;
-  prepare_worker_->cancel();
-  prepare_pending_ = false;
-  connection_pending_ = false;
-  planner_.reset();  // Late workers hold only immutable model snapshots.
-}
-void GimbalrotorPerchingNavigator::stopMotion(const std::string& why)
-{
-  // Retire future destinations immediately, including untouched axes. A new
-  // command during braking must not revive the cancelled nominal vector.
-  nominal_ = manual_tracking_ ? manual_reference_.eta : nominal_;
-  if(pitch_velocity_.active)
-  {
-    pitch_velocity_.requested = 0;
-    pitch_velocity_.expires = 0;
-    pitch_velocity_.stopping = true;
-    if(!pitch_velocity_.pending && !feedback_waiting_ && !faulted_)
-    {
-      retarget_pending_ = false;
-      body_alignment_valid_ = false;
-      stop_pending_ = true;
-      reason_ = why + "; STOPPING body-local velocity";
-      return;
-    }
-    pitch_velocity_ = PitchVelocity(); // Cancel pending takeover; never replay it.
-  }
-  retarget_pending_ = false;
-  body_alignment_valid_ = false;
-  if(feedback_waiting_ || faulted_)
-  {
-    completeStop(why);
-    return;
-  }
-  if(prepare_pending_)
-  {
-    ++prepare_cancellations_;
-    ++producer_generation_;
-    prepare_worker_->cancel();
-    prepare_pending_ = false;
-  }
-  if(planner_ && (planner_->stage == roll_yaw::Stage::EXECUTING || planner_->stage == roll_yaw::Stage::PRE_ALIGN))
-  {
-    planner_->command("cancel", roll_yaw_lock_stamp_.toNSec());
-    stop_pending_ = true;
-    reason_ = why + "; STOPPING along applied trajectory";
-    return;
-  }
-  if(manual_tracking_)
-  {
-    stop_pending_ = true;
-    reason_ = why + "; STOPPING along applied manual path";
-    return;
-  }
-  completeStop(why);
-}
-void GimbalrotorPerchingNavigator::completeStop(const std::string& why)
-{
-  if(pitch_velocity_.active && !pitch_velocity_.pending)
-    pitch_velocity_ = PitchVelocity();
-  // Preserve the applied reference and completed calibration, never recapture
-  // measured pose or promote a cancelled future destination into the hold.
-  if(!retarget_pending_)
-    finishPitchJog("cancelled", why);
-  const auto interaction = interaction_.lock();
-  // The applied reference may still move under compliance after nominal STOP.
-  if(!transitionNominalReference())
-  {
-    faultHold(reason_);
-    return;
-  }
-  invalidatePlanner();
-  manual_tracking_ = false;
-  manual_time_ = ros::Time::now().toSec();
-  if(!retarget_pending_) nominal_ = manual_reference_.eta;
-  body_alignment_valid_ = false;
-  if(interaction) interaction->stopped();
-  stop_pending_ = false;
-  reason_ = why + "; stop complete, holding contact";
-  if(pitch_velocity_.pending)
-  {
-    pitch_velocity_.pending = false;
-    pitch_velocity_.clock = ros::Time::now().toSec();
-    if(pitch_velocity_.clock >= pitch_velocity_.expires)
-      pitch_velocity_ = PitchVelocity();
-  }
-  if(retarget_pending_)
-  {
-    if(!transitionNominalReference()) { faultHold(reason_); return; }
-    retarget_pending_ = false;
-    manual_tracking_ = true;
-    manual_time_ = ros::Time::now().toSec();
-    reason_ = "braking complete; advancing accepted nominal destination";
-  }
-}
-void GimbalrotorPerchingNavigator::faultHold(const std::string& why)
-{
-  pitch_velocity_ = PitchVelocity();
-  if(!faulted_)
-  {
-    revokeMotion();
-    finishPitchJog("failed", why);
-    manual_tracking_ = false;
-    nominal_ = manual_reference_.eta;
-    connection_pending_ = false;
-    if(prepare_pending_)
-      ++prepare_cancellations_;
-    ++producer_generation_;
-    prepare_worker_->cancel();
-    prepare_pending_ = false;
-    body_alignment_valid_ = false;
-    stop_pending_ = retarget_pending_ = false;
-    if(planner_)
-    {
-      planner_->fault(why);
-      planner_->plan = roll_yaw::Plan();
-    }
-    roll_yaw::Reference held;
-    if(lock_valid_ &&
-       roll_yaw::mechanismReference(model_, final_target_.eta, Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero(), held))
-      final_target_ = held;
-    roll_yaw::scaleReference(manual_reference_, 0, 0);
-    local_pitch_.rate = 0;
-    if(auto interaction = interaction_.lock()) interaction->holdReference(local_pitch_.offset);
-    previous_failure_ = reason_ = why;
-  }
-  preparation_window_.reset();
-  preparation_stats_ = roll_yaw::SettlingStatistics();
-  preparation_ready_ = false;
-  preparation_clock_ = 0;
-  faulted_ = true;
-  if(roll_yaw_pitch_rezero_state_ != RollYawPitchRezeroState::IDLE && !roll_yaw_pitch_rezero_failed_)
-    failRollYawPitchRezero(why);
-}
-std::string GimbalrotorPerchingNavigator::contactSafetyRejection(const roll_yaw::Feedback& f, bool* hard_fault) const
-{
-  if(hard_fault)
-    *hard_fault = roll_yaw::feedbackStatus(f, feedback_config_, planning_config_) == roll_yaw::FeedbackStatus::FAULT;
-  if(lock_valid_ && !dynamics_snapshot_valid_)
-  {
-    if(hard_fault) *hard_fault = model_check_.available;
-    return "kinematic model: " + model_check_.describe();
-  }
-  auto why = roll_yaw::feedbackRejection(f, feedback_config_, planning_config_);
-  if(!why.empty())
-    return why;
-  if(contact_session_ == roll_yaw_lock_stamp_.toNSec() &&
-     contact_body_stamp_ == f.body_stamp && contact_joint_stamp_ == f.joint_stamp)
-  {
-    if(hard_fault) *hard_fault = contact_hard_fault_;
-    return contact_reason_;
-  }
-  contact_session_ = roll_yaw_lock_stamp_.toNSec();
-  contact_body_stamp_ = f.body_stamp;
-  contact_joint_stamp_ = f.joint_stamp;
-  contact_hard_fault_ = false;
-  const auto evaluate = [&]() -> std::string
-  {
-    roll_yaw::Estimate contact;
-    if(!model_.estimate(f.body, f.eta, contact))
-    { contact_hard_fault_ = true; return "invalid passive hinge geometry/estimate"; }
-    Eigen::Vector3d q = f.eta;
-    q[0] = contact.alpha;
-    if((q.array() < planning_config_.limits.lower.array()).any() ||
-       (q.array() > planning_config_.limits.upper.array()).any() ||
-       f.body.linear()(2, 2) < std::cos(planning_config_.max_tilt))
-    {
-      contact_hard_fault_ = true;
-      return "measured mechanism/body outside operating limits";
-    }
-    // Finite pivot/hinge mismatch describes model quality, not lost feedback
-    // or detached contact. Physical limits remain enforced below.
-    if(!roll_yaw::mechanismAllowed(model_, q, planning_config_, why))
-    {
-      contact_hard_fault_ = true;
-      return "measured operating limits: " + why;
-    }
-    return "";
   };
-  contact_reason_ = evaluate();
-  if(hard_fault) *hard_fault = contact_hard_fault_;
-  return contact_reason_;
-}
-void GimbalrotorPerchingNavigator::mechanismTargetCallback(const std_msgs::Float64ConstPtr& msg, int axis)
-{
-  if(rejectUnscopedMotion("mechanism_target")) return;
-  if(deferRollYawCommand("axis" + std::to_string(axis), [this, msg, axis] { mechanismTargetCallback(msg, axis); })) return;
-
-  const double started = roll_yaw::steadySeconds();
-  std::lock_guard<std::recursive_mutex> l(perchingStateMutex());
-  CallbackTimer timing{manual_wall_, started};
-  Eigen::Vector3d target = nominal_;
-  target[axis] = msg->data;  // Untouched destinations survive axis changes.
-  setNominalTarget(target, axis);
-}
-void GimbalrotorPerchingNavigator::bodyAlignmentCallback(const std_msgs::Float64ConstPtr& msg, int axis)
-{
-  if(deferRollYawCommand("alignment" + std::to_string(axis), [this, msg, axis] { bodyAlignmentCallback(msg, axis); }, true)) return;
-
-  std::uint64_t session;
+  Sample b, j;
+  if(!bracket(body_history_, b, true) || !bracket(joint_history_, j, false)) return false;
+  sample = j; sample.body = b.body; sample.omega = b.omega; sample.receipt = std::min(b.receipt, j.receipt);
+  if(model_.locked())
   {
-    std::lock_guard<std::recursive_mutex> l(perchingStateMutex());
-    session = roll_yaw_lock_stamp_.toNSec();
+    double pivot, hinge;
+    if(!model_.estimate(sample.body, sample.q, pivot, hinge)) return false;
   }
-  requestRollYaw("body_align", session, axis, msg->data);
-  std::lock_guard<std::recursive_mutex> l(perchingStateMutex());
-  std_msgs::String ack;
-  ack.data = std::string("action=") + (axis == 0 ? "body_yaw_target" : "body_roll_target") +
-             " session=" + std::to_string(roll_yaw_lock_stamp_.toNSec()) +
-             " accepted=" + (last_command_accepted_ ? "true" : "false") + " reason=" + reason_;
-  ack_pub_.publish(ack);
-  if(!defer_diagnostics_) last_diagnostics_ = 0;
-  publishRollYawDiagnostics();
-}
-void GimbalrotorPerchingNavigator::revokeMotion(bool retain_reference)
-{
-  motion_identity_.revoke();
-  input_motion_epoch_.store(motion_identity_.epoch);
-  if(!retain_reference)
-  {
-    pitch_target_ = PitchTarget();
-    pitch_pulse_ = roll_yaw::PitchPulse();
-  }
-  if(motion_epoch_pub_)
-  {
-    std_msgs::UInt64 epoch;
-    epoch.data = motion_identity_.epoch;
-    motion_epoch_pub_.publish(epoch);
-  }
-}
-
-bool GimbalrotorPerchingNavigator::rejectUnscopedMotion(const std::string& action)
-{
-  if(perching_configuration_ != PerchingConfiguration::ROLL_YAW) return false;
-  std_msgs::String ack;
-  ack.data = "action=" + action + " accepted=false phase=rejected reason=use_motion_with_session_epoch_source_sequence";
-  ack_pub_.publish(ack);
   return true;
+}
+
+bool GimbalrotorPerchingNavigator::motionFeedbackValid() const
+{
+  if(!perching_locked_ || navi_state_ != HOVER_STATE) return false;
+  if(!articulated()) return perching_geometry::finite(getCurrentRobotPos());
+  Sample sample;
+  if(!model_valid_ || !observation(sample) || !sample.q.allFinite() || !sample.rate.allFinite()) return false;
+  const double pitch = std::asin(std::clamp(-sample.body.linear()(2, 0), -1.0, 1.0));
+  return sample.body.linear()(2, 2) >= std::cos(max_tilt_) && pitch >= min_body_pitch_ && pitch <= max_body_pitch_ &&
+      model_.allowed(sample.q, max_tilt_, min_body_pitch_, max_body_pitch_);
+}
+
+bool GimbalrotorPerchingNavigator::tryLockPerching(const std::string& reason)
+{
+  if(!articulated()) return tryLockRigid(reason);
+  if(navi_state_ != HOVER_STATE || !model_valid_ || !observation(measured_)) return false;
+  if(!resolveMechanismModel()) return false; // Capture held internal geometry/inertias for this lock.
+  measured_.q[0] = 0;
+  if(!model_.lock(measured_.body, measured_.q) || !model_.allowed(measured_.q, max_tilt_, min_body_pitch_, max_body_pitch_)) return false;
+  nominal_ = destination_ = proposed_ = applied_ = locked_q_ = measured_.q;
+  nominal_rate_ = proposed_rate_ = applied_rate_ = Vector::Zero(nominal_.size());
+  if(!model_.evaluate(applied_, applied_state_)) return false;
+  if(positioning_ && !servo_.enable(servoSample())) return false;
+  commitFixedContactLock(tfVector(applied_state_.cog.translation()), tfQuaternion(applied_state_.cog.linear()),
+                         tfVector(model_.pivot().translation()));
+  session_ = lock_stamp_.toNSec();
+  applied_stamp_ = 0; last_update_ = ros::Time::now().toSec();
+  phase_ = "CONTACT_LOCKED"; status_ = "locked; collecting unloaded baseline";
+  publishDiagnostics();
+  return true;
+}
+
+void GimbalrotorPerchingNavigator::resetMotion()
+{
+  motion_.revoke(); session_ = 0;
+  body_target_valid_ = velocity_active_ = stopping_ = proposal_valid_ = false;
+  rezero_active_ = rezero_ready_ = rezero_failed_ = false;
+  body_destination_ = body_progress_ = body_rate_ = 0;
+  applied_pitch_offset_ = applied_offset_rate_ = 0;
+  applied_stamp_ = last_update_ = 0; rigid_applied_valid_ = false;
+  servo_.reset(); phase_ = "FREE_FLIGHT"; prepared_motion_ = paused_ = false;
+}
+
+bool GimbalrotorPerchingNavigator::supportsPerchingMode(perching_geometry::Mode mode) const
+{
+  return mode == perching_geometry::Mode::NORMAL || (!articulated() && mode == perching_geometry::Mode::SLANTED);
+}
+bool GimbalrotorPerchingNavigator::ownsNavigationTargets() const
+{
+  return articulated() && perching_locked_ && perching_mode_ != perching_geometry::Mode::DISABLED;
+}
+std::unique_lock<std::recursive_mutex> GimbalrotorPerchingNavigator::lockNavigationTargets()
+{
+  return std::unique_lock<std::recursive_mutex>(perching_state_mutex_);
+}
+void GimbalrotorPerchingNavigator::navigationTargetConflict(const char* source)
+{
+  status_ = std::string("perching owns reference: ignored ") + source;
+}
+
+bool GimbalrotorPerchingNavigator::nominalHeld() const
+{
+  if(!articulated()) return true;
+  return perching_locked_ && !rezero_active_ && nominal_rate_.norm() < 1e-6 && std::abs(body_rate_) < 1e-6 &&
+      !velocity_active_ && !stopping_ && (destination_ - nominal_).norm() < 1e-5 &&
+      (!body_target_valid_ || std::abs(body_destination_ - body_progress_) < 1e-4);
+}
+
+bool GimbalrotorPerchingNavigator::trackingHeld() const
+{
+  if(!articulated()) return true;
+  Sample sample;
+  return observation(sample) && applied_.size() == sample.q.size() &&
+      (sample.q - applied_).cwiseAbs().maxCoeff() <= tracking_tolerance_ &&
+      perching_geometry::logSO3(sample.body.linear().transpose() * applied_state_.body.linear()).norm() <= body_tracking_tolerance_;
+}
+
+void GimbalrotorPerchingNavigator::stopMotion()
+{
+  motion_.revoke();
+  // STOP changes the nominal destination, never the physical correction.
+  destination_ = nominal_; body_destination_ = body_progress_;
+  velocity_active_ = false; stopping_ = true;
+  status_ = "braking nominal motion";
+}
+
+void GimbalrotorPerchingNavigator::coordinateCommand(int index, double value)
+{
+  if(!perching_locked_ || !std::isfinite(value) || index < 0 || index >= nominal_.size() ||
+      value < model_.lower[index] || value > model_.upper[index] || rezero_active_) return;
+  body_target_valid_ = velocity_active_ = false;
+  destination_[index] = value; stopping_ = false; rezero_ready_ = false;
+  phase_ = "EXECUTING";
+}
+
+void GimbalrotorPerchingNavigator::bodyPitchCommand(double angle, double rate, std::uint64_t frame)
+{
+  if(!perching_locked_ || !std::isfinite(angle) || !std::isfinite(rate) || rate <= 0 || rezero_active_) return;
+  const bool new_frame = !body_target_valid_ || frame != body_frame_id_;
+  const Vector start = new_frame ? nominal_ : body_start_;
+  Vector endpoint;
+  if(!model_.pitch(start, angle, moving_, endpoint) || !model_.allowed(endpoint, max_tilt_, min_body_pitch_, max_body_pitch_))
+  { status_ = "requested body pitch is infeasible"; return; }
+  if(new_frame)
+  {
+    // Capture the nominal body frame. Loaded applied motion must not change the
+    // origin or positive direction of later cumulative destinations/reversals.
+    body_start_ = nominal_; body_progress_ = 0; body_frame_id_ = frame;
+  }
+  rezero_ready_ = false;
+  body_destination_ = angle; body_target_valid_ = true; velocity_active_ = false; stopping_ = false;
+  destination_ = nominal_; body_rate_limit_ = std::min(rate, rate_limit_); phase_ = "EXECUTING";
 }
 
 void GimbalrotorPerchingNavigator::motionCallback(const gimbalrotor::RollYawMotionConstPtr& msg)
 {
-  using Motion = gimbalrotor::RollYawMotion;
-  const double receipt = ros::Time::now().toSec();
-  auto apply = [this, msg, receipt]
+  std::lock_guard<std::recursive_mutex> lock(perching_state_mutex_);
+  using Command = gimbalrotor::RollYawMotion;
+  const auto& m = *msg;
+  if(last_motion_request_ && m.session == last_motion_request_->session && m.epoch == last_motion_request_->epoch &&
+      m.source == last_motion_request_->source && m.sequence == last_motion_request_->sequence)
+  { ack_pub_.publish(last_motion_ack_); return; }
+  std::string why = motion_.rejection(m.epoch, m.source, m.sequence, m.mode == Command::CLAIM);
+  if(!perching_locked_ || m.session != session_) why = "invalid contact session";
+  if(!std::isfinite(m.value)) why = "nonfinite command";
+  if(why.empty() && m.mode == Command::CLAIM && !nominalHeld()) why = "nominal motion is not held";
+  if(why.empty())
   {
-    CallbackTimer timing{manual_wall_, roll_yaw::steadySeconds()};
-    const bool stop = msg->mode == Motion::STOP;
-    const bool claim = msg->mode == Motion::CLAIM, release = msg->mode == Motion::RELEASE;
-    if(claim)
+    if(m.mode == Command::STOP) stopMotion();
+    else if(m.mode == Command::CLAIM) { motion_.revoke(); motion_.accept(m.source, m.sequence); body_target_valid_ = false; prepared_motion_ = false; }
+    else if(m.mode == Command::RELEASE) motion_.revoke();
+    else
     {
-      std::lock_guard<std::mutex> lock(input_mutex_);
-      std_msgs::String replay;
-      if(replayMotionClaim(*msg, replay))
+      motion_.accept(m.source, m.sequence);
+      if(m.mode == Command::BODY_PITCH)
       {
-        ack_pub_.publish(replay);
-        return;
+        bodyPitchCommand(m.value, m.rate_limit, m.frame);
+        if(!body_target_valid_ || body_frame_id_ != m.frame || body_destination_ != m.value) why = "infeasible body pitch target";
       }
-    }
-    bool accepted = false;
-    std::string error = motion_identity_.rejection(msg->epoch, msg->source, msg->sequence, claim);
-    if(!lock_valid_ || msg->session != roll_yaw_lock_stamp_.toNSec()) error = "old contact session";
-    if(error.empty() && (!std::isfinite(msg->value) || msg->mode > Motion::RELEASE)) error = "invalid motion request";
-    if(error.empty() && claim && (!std::isfinite(msg->rate_limit) || !std::isfinite(msg->duration)))
-      error = "invalid claim payload";
-    if(error.empty() && !claim && motion_identity_.source.empty()) error = "claim motion ownership first";
-    if(error.empty())
-    {
-      motion_dispatch_ = true;
-      if(claim)
+      else if(m.mode == Command::VELOCITY || m.mode == Command::PULSE)
       {
-        const auto f = feedback();
-        if(faulted_ || !f.hover || feedback_waiting_ || !model_check_.available || !dynamics_snapshot_valid_ ||
-           roll_yaw_pitch_rezero_state_ != RollYawPitchRezeroState::IDLE || !contactSafetyRejection(f).empty())
-          reason_ = "claim rejected: require valid held contact/model feedback";
-        else if(pitch_velocity_.active || manual_tracking_ || retarget_pending_ || jog_.active || jog_pending_ ||
-           stop_pending_ || prepare_pending_ || planner_ ||
-           (local_pitch_.valid ? std::abs(local_pitch_.rate) > 1e-5 : final_target_.velocity.norm() > 1e-5))
-          reason_ = "busy; claim rejected until nominal motion finishes";
+        if(m.value == 0) stopMotion();
+        else if(m.mode == Command::PULSE && (!std::isfinite(m.duration) || m.duration <= 0 || m.duration > 8)) why = "invalid pulse duration";
         else
         {
-          std::lock_guard<std::mutex> lock(input_mutex_);
-          revokeMotion();
-          motion_identity_.accept(msg->source, msg->sequence);
-          // Receipt-side admission must see the newly claimed owner too.
-          input_motion_identity_ = motion_identity_;
-          accepted = true;
-          reason_ = "idle motion ownership acquired; contact and admittance retained";
-          accepted_motion_claim_ = msg;
-          accepted_claim_epoch_ = motion_identity_.epoch;
-          accepted_claim_ack_.data = motionReplyIdentity(*msg) + " motion_epoch=" + std::to_string(accepted_claim_epoch_) +
-              " accepted=true reason=" + reason_;
+          velocity_active_ = true; body_target_valid_ = false; stopping_ = false;
+          velocity_command_ = std::clamp(m.value, -rate_limit_, rate_limit_);
+          velocity_expires_ = ros::Time::now().toSec() + (m.mode == Command::PULSE ? m.duration : velocity_duration_);
         }
       }
-      else if(release)
+      else if(m.mode == Command::JOG)
       {
-        // Retire old packets now, but keep the pulse deadline and bounded brake.
-        // A new CLAIM is rejected until that nominal motion has finished.
-        revokeMotion(true);
-        accepted = true;
-        reason_ = "motion ownership released; accepted reference and admittance retained";
-      }
-      else if(stop)
-      {
-        requestRollYaw("stop", msg->session);
-        accepted = last_command_accepted_;
-      }
-      else if(msg->mode <= Motion::YAW)
-      {
-        Eigen::Vector3d target = nominal_;
-        target[msg->mode] = msg->value;
-        accepted = setNominalTarget(target, msg->mode);
-      }
-      else if(msg->mode == Motion::BODY_PITCH)
-        accepted = msg->frame <= msg->sequence && admitPitchTarget(msg->value, msg->rate_limit, msg->frame);
-      else if(msg->mode == Motion::PULSE)
-        accepted = admitPitchPulse(msg->value, msg->duration, msg->sequence);
-      else if(msg->mode == Motion::VELOCITY)
-      {
-        // Switching from a retained pitch destination to a rate ends its frame.
-        accepted = admitPitchVelocity(msg->value, receipt);
-        if(accepted) pitch_target_ = PitchTarget();
+        if(!nominalHeld() || std::abs(m.value) > jog_limit_) why = "jog requires held nominal reference within configured bound";
+        else bodyPitchCommand(m.value, rate_limit_, m.sequence);
       }
       else
       {
-        accepted = admitPitchJog(msg->value);
-        if(accepted) pitch_target_ = PitchTarget();
-      }
-      motion_dispatch_ = false;
-      if(accepted && !stop && !claim && !release)
-      {
-        motion_identity_.accept(msg->source, msg->sequence);
-        if(msg->mode != Motion::PULSE) pitch_pulse_ = roll_yaw::PitchPulse();
-      }
-      error = reason_;
-    }
-    std_msgs::String ack;
-    std::ostringstream detail;
-    detail << std::setprecision(17) << "action=motion session=" << msg->session << " epoch=" << msg->epoch
-           << " source=" << msg->source << " sequence=" << msg->sequence << " mode=" << int(msg->mode)
-           << " motion_epoch=" << motion_identity_.epoch
-           << " accepted=" << (accepted ? "true" : "false") << " value=" << msg->value
-           << " accepted_value=" << (msg->mode <= Motion::YAW ? nominal_[msg->mode] : pitch_target_.angle)
-           << " reason=" << error;
-    ack.data = detail.str();
-    if(claim)
-    {
-      std::lock_guard<std::mutex> lock(input_mutex_);
-      if(pending_motion_claim_ && sameClaimIdentity(*msg, *pending_motion_claim_)) pending_motion_claim_.reset();
-      if(accepted) ack = accepted_claim_ack_;
-    }
-    ack_pub_.publish(ack);
-  };
-  const std::string key = msg->mode == Motion::CLAIM ? "owner_claim" : msg->mode == Motion::RELEASE ? "owner_release"
-      : msg->mode <= Motion::YAW ? "motion_axis" + std::to_string(msg->mode)
-      : msg->mode == Motion::BODY_PITCH ? "motion_body" : msg->mode == Motion::VELOCITY ? "motion_velocity"
-      : msg->mode == Motion::JOG ? "motion_jog" : msg->mode == Motion::PULSE ? "motion_pulse" : "motion_stop";
-  if(deferRollYawCommand(key, apply, msg->mode == Motion::STOP, msg.get())) return;
-  apply();
-}
-
-bool GimbalrotorPerchingNavigator::admitPitchPulse(double rate, double duration, std::uint64_t sequence)
-{
-  auto pulse = pitch_pulse_;
-  if(!pulse.start(sequence, duration, feedback().now, roll_yaw::steadySeconds()) || !std::isfinite(rate) || rate == 0)
-  { reason_ = "invalid or repeated pulse"; return false; }
-  if(pitch_velocity_.active || manual_tracking_ || stop_pending_ || prepare_pending_ || planner_ ||
-     (local_pitch_.valid ? std::abs(local_pitch_.rate) > 1e-5 : final_target_.velocity.norm() > 1e-5))
-  { reason_ = "busy; pulse rejected, not retained"; return false; }
-  if(!admitPitchVelocity(rate, feedback().now)) return false;
-  pitch_target_ = PitchTarget();
-  pitch_pulse_ = pulse;
-  pitch_velocity_.expires = pulse.expires;
-  reason_ = "finite pulse accepted; duration runs onboard, including feedback holds";
-  return true;
-}
-
-bool GimbalrotorPerchingNavigator::admitPitchTarget(double angle, double rate, std::uint64_t frame)
-{
-  if(!frame || !std::isfinite(angle) || std::abs(angle) >= M_PI || !std::isfinite(rate) || rate <= 0)
-  {
-    reason_ = "body pitch target requires finite offset smaller than pi and positive speed limit";
-    return false;
-  }
-  if(pitch_target_.valid && pitch_target_.frame == frame && pitch_target_.angle == angle && pitch_target_.rate == rate)
-    return true; // Repeated absolute destinations never restart the stroke.
-  // Reuse the velocity admission/transition and the existing coordinated local-Y
-  // generator. First entry captures its frame after any previous mode brakes.
-  if(!admitPitchVelocity(rate, feedback().now)) return false;
-  if(!pitch_target_.valid || pitch_target_.frame != frame)
-  {
-    pitch_target_ = PitchTarget();
-    pitch_target_.valid = true;
-    pitch_target_.frame = frame;
-  }
-  pitch_target_.angle = angle;
-  pitch_target_.rate = rate;
-  pitch_target_.complete = false;
-  pitch_velocity_.stopping = false;
-  pitch_velocity_.expires = std::numeric_limits<double>::infinity();
-  reason_ = "body-local pitch destination replaced; bounded nominal motion with retained correction";
-  return true;
-}
-
-void GimbalrotorPerchingNavigator::bodyPitchCallback(const std_msgs::Float64ConstPtr& msg)
-{
-  if(rejectUnscopedMotion("body_pitch_delta")) return;
-  if(deferRollYawCommand("pitch_jog", [this, msg] { bodyPitchCallback(msg); })) return;
-
-  const double started = roll_yaw::steadySeconds();
-  std::lock_guard<std::recursive_mutex> l(perchingStateMutex());
-  CallbackTimer timing{manual_wall_, started};
-  last_command_accepted_ = admitPitchJog(msg->data);
-  jog_admission_wall_ = roll_yaw::steadySeconds() - started;
-  std_msgs::String ack;
-  ack.data = "action=body_pitch_delta session=" + std::to_string(roll_yaw_lock_stamp_.toNSec()) +
-             " accepted=" + (last_command_accepted_ ? "true" : "false") +
-             " phase=" + (last_command_accepted_ ? (msg->data == 0 ? "noop" : "waiting") : "rejected") +
-             " route=manual_endpoint_ik delta_rad=" + std::to_string(msg->data) +
-             " admission_wall_s=" + std::to_string(jog_admission_wall_) + " reason=" + reason_;
-  ack_pub_.publish(ack);
-  if(!defer_diagnostics_) last_diagnostics_ = 0;
-  publishRollYawDiagnostics();
-}
-void GimbalrotorPerchingNavigator::bodyPitchVelocityCallback(const std_msgs::Float64ConstPtr& msg)
-{
-  if(msg->data != 0 && rejectUnscopedMotion("body_pitch_velocity")) return;
-  const double receipt = ros::Time::now().toSec();
-  auto apply = [this, msg, receipt]
-  {
-    last_command_accepted_ = admitPitchVelocity(msg->data, receipt);
-    std_msgs::String ack;
-    ack.data = "action=body_pitch_velocity session=" + std::to_string(roll_yaw_lock_stamp_.toNSec()) +
-               " accepted=" + (last_command_accepted_ ? "true" : "false") +
-               " requested_rad_s=" + std::to_string(msg->data) + " reason=" + reason_;
-    ack_pub_.publish(ack);
-  };
-  if(deferRollYawCommand("pitch_velocity", apply, msg->data == 0)) return;
-  apply();
-}
-
-bool GimbalrotorPerchingNavigator::admitPitchVelocity(double rate, double receipt)
-{
-  auto reject = [&](const std::string& why)
-  {
-    reason_ = "body-local pitch velocity rejected: " + why;
-    return false;
-  };
-  if(!std::isfinite(rate))
-    return reject("require finite radians/second");
-  if(rate == 0)
-  {
-    if(!lock_valid_) return reject("require enabled contact session");
-    // Scoped zero is a temporary pause in this task. STOP revokes ownership;
-    // the unscoped compatibility zero remains a global cancellation.
-    if(!motion_dispatch_) cancelQueuedRollYawCommands("zero_velocity_stop");
-    stopMotion("zero body-local pitch velocity");
-    return true; // Stop is admissible even during a recoverable feedback hold.
-  }
-  if(!std::isfinite(body_pitch_velocity_command_duration_) || body_pitch_velocity_command_duration_ <= 0)
-    return reject("body_pitch_velocity_command_duration must be finite and positive");
-  // Online motion does not depend on offline planning/settling or force settings.
-  if(!planning_config_.onlineValid() || !feedback_config_.motionConfigValid())
-    return reject("invalid velocity motion/clock limits");
-  const auto f = feedback();
-  if(!configuration_valid_ || !planning_config_.mechanismValid() || !feedback_config_.feedbackConfigValid() ||
-     !lock_valid_ || faulted_ || !f.hover)
-    return reject("require valid enabled HOVER contact/configuration");
-  if(roll_yaw_pitch_rezero_state_ != RollYawPitchRezeroState::IDLE)
-    return reject("pitch rezero owns reference");
-  const auto why = contactSafetyRejection(f);
-  if(!why.empty())
-    return reject(why);
-  if(feedback_waiting_ && (f.body_stamp <= recovery_body_stamp_ || f.joint_stamp <= recovery_joint_stamp_))
-    return reject("awaiting advancing required feedback");
-  const double expires = receipt + body_pitch_velocity_command_duration_;
-  if(!std::isfinite(expires) || (rate != 0 && (f.now >= expires || f.now < receipt)))
-    return reject("expired command or discontinuous receipt clock");
-  if(!pitch_velocity_.active)
-  {
-    // Brake the existing nominal producer, retaining the independent correction.
-    finishPitchJog("replaced", "body-local velocity takeover");
-    if(planner_ || manual_tracking_ || stop_pending_)
-      stopMotion("body-local velocity takeover");
-    pitch_velocity_ = PitchVelocity();
-    pitch_velocity_.active = true;
-    pitch_velocity_.pending = stop_pending_;
-    pitch_velocity_.clock = f.now;
-  }
-  retarget_pending_ = false;
-  if(!pitch_velocity_.pending)
-    stop_pending_ = false;
-  pitch_velocity_.requested = rate;
-  pitch_velocity_.expires = rate == 0 ? f.now : expires;
-  pitch_velocity_.stopping = rate == 0;
-  reason_ = pitch_velocity_.pending ? "velocity accepted; bounded takeover from applied reference"
-                                   : "body-local velocity accepted/refreshed (rad/s)";
-  return true;
-}
-
-bool GimbalrotorPerchingNavigator::advancePitchVelocity(roll_yaw::Reference& next, double dt, double now)
-{
-  auto& v = pitch_velocity_;
-  v.clock = now;
-  next = final_target_;
-  const auto interaction = interaction_.lock();
-  const auto& compliance = interaction->diagnostics().admittance_;
-  auto& local = local_pitch_;
-  if(!local.valid)
-  {
-    local.valid = true;
-    local.offset = compliance.offset;
-    local.start = final_target_.body.linear() * roll_yaw::expSO3(-Eigen::Vector3d::UnitY() * local.offset);
-    local.rate = final_target_.body_omega.y() - compliance.rate;
-  }
-  if(pitch_target_.valid && v.active)
-  {
-    auto& target = pitch_target_;
-    const Eigen::Matrix3d nominal_rotation = local.start * roll_yaw::expSO3(Eigen::Vector3d::UnitY() * local.angle);
-    if(!target.frame_valid) { target.start = nominal_rotation; target.frame_valid = true; }
-    double cross;
-    if(!roll_yaw::taskPitch(target.start, nominal_rotation, target.progress, target.progress, cross))
-    { faultHold("body pitch target frame invalid"); return false; }
-    v.requested = roll_yaw::pitchTargetRate(target.angle, target.progress, target.rate);
-    v.expires = std::numeric_limits<double>::infinity();
-  }
-  v.stopping = v.stopping || (v.active && (now >= v.expires ||
-      pitch_pulse_.expired(now, roll_yaw::steadySeconds(), ros::Time::isSimTime())));
-  const auto limits = onlineLimits();
-  std::string error;
-  bool accepted = false;
-  // Ordinary opposing contact drives the bounded correction, not a feed veto.
-  // Only scalar/kinematic feasibility and tracking may hold nominal motion;
-  // a torque outage independently runs zero-input correction recovery.
-  const double requested = v.active && !v.stopping && !local_interaction_hold_ ? v.requested : 0;
-  if(requested == 0 && std::abs(local.rate) < 1e-12 && final_target_.velocity.norm() < 1e-12 &&
-     std::abs(compliance.offset - local.offset) < 1e-12 && std::abs(compliance.rate) < 1e-12)
-  {
-    // Reuse the already checked held configuration; observation and contact
-    // checks continue outside this generator at every navigation update.
-    accepted = true;
-    interaction->reconcileReference(true, false, local.offset);
-  }
-  else
-  {
-    const bool correction_active = compliance.enabled || std::abs(compliance.offset) > 1e-10 ||
-        std::abs(compliance.rate) > 1e-10;
-    const double rate_bound = local.rate_limit * (correction_active ? .5 : 1);
-    const double acceleration_bound = local.acceleration_limit * (correction_active ? .5 : 1);
-    if(rate_bound > 0 && acceleration_bound > 0)
-    {
-      const double goal = std::clamp(requested, -rate_bound, rate_bound) * feed_scale_.minCoeff();
-      // A single candidate per fresh update. Failed feasibility takes the existing
-      // bounded brake; it does not repeat inverse kinematics at four slower speeds.
-      const double rate = local.rate + std::clamp(goal - local.rate, -acceleration_bound * dt, acceleration_bound * dt);
-      const double angle = local.angle + .5 * (local.rate + rate) * dt;
-      const double corrected_rate = rate + compliance.rate;
-      const double offset = compliance.offset;
-      const Eigen::Matrix3d rotation = local.start * roll_yaw::expSO3(Eigen::Vector3d::UnitY() * (angle + offset));
-      roll_yaw::Reference candidate, nominal_candidate;
-      accepted = roll_yaw::localPitchReference(model_, rotation, final_target_.eta, corrected_rate,
-            (corrected_rate - final_target_.body_omega.y()) / dt, limits, candidate, error) &&
-          (candidate.eta - final_target_.eta).cwiseAbs().cwiseQuotient(limits.limits.velocity).maxCoeff() <= dt + 1e-7 &&
-          (candidate.velocity - final_target_.velocity).cwiseAbs().cwiseQuotient(limits.limits.acceleration).maxCoeff() <= dt + 1e-7 &&
-          (candidate.cog_velocity - final_target_.cog_velocity).norm() <= limits.cog_acceleration_limit * dt + 1e-7 &&
-          candidate.velocity.cwiseAbs().cwiseQuotient(limits.limits.velocity).maxCoeff() <= .5 + 1e-9 &&
-          candidate.acceleration.cwiseAbs().cwiseQuotient(limits.limits.acceleration).maxCoeff() <= .5 + 1e-9 &&
-          candidateTrackingAllowed(candidate, limits, dt, error) &&
-          roll_yaw::mechanismBrakingAllowed(model_, candidate, feedback_config_.max_execution_step, limits, error) &&
-          roll_yaw::compliantReference(model_, candidate, candidate, -offset, -compliance.rate,
-              -compliance.acceleration, 0, planning_config_, nominal_candidate, error);
-      if(accepted)
-      {
-        next = candidate; local.angle = angle; local.rate = rate; local.offset = offset;
-        manual_reference_ = nominal_candidate;
-        interaction->reconcileReference(true, false, offset);
-      }
-    }
-    else error = "local pitch Jacobian singularity";
-  }
-  if(!accepted)
-  {
-    if(!v.stopping) hold_reason_ = HoldReason::FEASIBILITY;
-    interaction->reconcileReference(false, false, local.offset);
-    if(!roll_yaw::followMechanism(model_, final_target_, final_target_.eta, dt,
-          feedback_config_.max_execution_step, true, limits, next, error))
-    { faultHold("velocity brake output invalid: " + error); return false; }
-    local.offset = interaction->holdReference(local.offset);
-    if(!roll_yaw::compliantReference(model_, next, next, -local.offset, 0, 0, 0,
-          planning_config_, manual_reference_, error))
-    { faultHold("velocity brake nominal conversion: " + error); return false; }
-    local.start = next.body.linear() * roll_yaw::expSO3(-Eigen::Vector3d::UnitY() * (local.angle + local.offset));
-    local.rate = next.body_omega.y();
-    v.limit = v.stopping ? "pulse/stop: braking" : "recoverable local pitch envelope: " + error;
-  }
-  else
-  {
-    v.limit = local_interaction_hold_ ? "interaction feed hold: " + interaction->diagnostics().admittance_reason_
-        : feed_scale_.minCoeff() < 1 ? "tracking feed scaled; accepted destination retained"
-                                    : "coordinated nominal pitch plus contact correction";
-    if(hold_reason_ == HoldReason::FEASIBILITY) hold_reason_ = HoldReason::NONE;
-  }
-  if(!retarget_pending_) nominal_ = manual_reference_.eta; // Preserve a replacement while the old nominal brakes.
-  reason_ = v.limit;
-  if(pitch_target_.valid && v.active && !v.stopping)
-  {
-    double progress, cross;
-    if(!roll_yaw::taskPitch(pitch_target_.start, local.start * roll_yaw::expSO3(Eigen::Vector3d::UnitY() * local.angle), pitch_target_.progress, progress, cross))
-    { faultHold("body pitch target progress invalid"); return false; }
-    pitch_target_.progress = progress;
-    if(std::abs(pitch_target_.angle - progress) < 1e-5 && std::abs(local.rate) < 1e-5)
-    {
-      // Finish by bounded braking. Retain the stroke frame for subsequent
-      // absolute updates; reference completion is not measured completion.
-      v.requested = 0;
-      v.stopping = true;
-      pitch_target_.complete = true;
-    }
-  }
-  if(v.active && v.stopping && std::abs(local.rate) < 1e-10)
-  {
-    final_target_ = next;
-    pitch_velocity_ = PitchVelocity();
-    if(stop_pending_)
-      completeStop("body-local velocity stopped");
-    else
-    {
-      pitch_pulse_.completed = pitch_pulse_.sequence != 0;
-      manual_tracking_ = false;
-      reason_ = "finite feed complete; holding nominal contact with admittance retained";
-    }
-  }
-  return true;
-}
-
-bool GimbalrotorPerchingNavigator::admitPitchJog(double delta)
-{
-  auto reject = [&](const std::string& why)
-  {
-    reason_ = "body-local pitch rejected: " + why;
-    return false;
-  };
-  if(!std::isfinite(delta))
-    return reject("increment must be finite radians");
-  if(!std::isfinite(body_pitch_jog_max_delta_) || body_pitch_jog_max_delta_ <= 0 ||
-     body_pitch_jog_max_delta_ > M_PI / 180 + 1e-12)
-    return reject("invalid body_pitch_jog_max_delta (positive, at most one degree)");
-  if(std::abs(delta) > body_pitch_jog_max_delta_)
-    return reject("increment exceeds body_pitch_jog_max_delta; use explicit alignment/full request");
-  if(delta == 0)
-  {
-    reason_ = "body-local pitch zero increment: no-op";
-    return true;
-  }
-  if(jog_.active || jog_pending_ || manual_tracking_ || stop_pending_ || pitch_velocity_.active ||
-     prepare_pending_ || connection_pending_ || planner_)
-    return reject("busy; relative jog rejected, not retained");
-  const auto f = feedback();
-  if(!configuration_valid_ || !planning_config_.onlineValid() || !feedback_config_.motionConfigValid() || !lock_valid_ || faulted_ ||
-     !f.hover)
-    return reject("require valid enabled HOVER contact/configuration");
-  if(roll_yaw_pitch_rezero_state_ != RollYawPitchRezeroState::IDLE)
-    return reject("pitch rezero owns reference");
-  std::string error = contactSafetyRejection(f);
-  if(!error.empty())
-    return reject(error);
-  if(!transitionNominalReference()) return reject(reason_);
-  const auto from = manual_reference_;
-  const Eigen::Matrix3d endpoint = from.body.linear() * roll_yaw::expSO3(Eigen::Vector3d::UnitY() * delta);
-  const auto model = model_;
-  const auto config = planning_config_;
-  const auto session = roll_yaw_lock_stamp_.toNSec();
-  if(!jog_worker_->submit([model, config, from, endpoint, session](const std::function<bool()>& cancelled)
-      {
-        JogAdmission result;
-        result.session = session;
-        result.ok = !cancelled() && roll_yaw::inverseOrientation(model, endpoint, from.eta, config,
-                                                                result.goal, result.reason, 16);
-        return result;
-      }))
-    return reject("endpoint admission worker busy; retry after its cancelled work exits");
-  invalidatePlanner();
-  jog_ = PitchJog();
-  jog_.active = true;
-  jog_.session = session;
-  jog_.start = from.body;
-  jog_.endpoint = endpoint;
-  jog_.delta = delta;
-  jog_.phase = "waiting";
-  jog_pending_ = true;
-  reason_ = "body-local pitch queued for endpoint IK from applied pose; previous destination finished";
-  return true;
-}
-void GimbalrotorPerchingNavigator::finishPitchJog(const std::string& phase, const std::string& why)
-{
-  if(!jog_.active)
-    return;
-  jog_.active = false;
-  jog_pending_ = false;
-  jog_worker_->cancel();
-  (void)jog_worker_->take();
-  jog_.phase = phase;
-  const auto f = feedback();
-  double measured_pitch = std::numeric_limits<double>::quiet_NaN(), cross;
-  double endpoint_error = std::numeric_limits<double>::quiet_NaN();
-  if(contactSafetyRejection(f).empty())
-  {
-    roll_yaw::taskPitch(jog_.start.linear(), f.body.linear(), jog_.progress, measured_pitch, cross);
-    endpoint_error = roll_yaw::logSO3(f.body.linear().transpose() * jog_.endpoint).norm();
-  }
-  std_msgs::String ack;
-  ack.data = "action=body_pitch_delta session=" + std::to_string(jog_.session) + " accepted=" + (phase == "rejected" ? "false" : "true") + " phase=" + phase +
-             " applied_pitch_rad=" + std::to_string(jog_.progress) +
-             " measured_pitch_rad=" + std::to_string(measured_pitch) +
-             " measured_endpoint_error_rad=" + std::to_string(endpoint_error) +
-             " measured_goal_reached=" + (std::isfinite(endpoint_error) && endpoint_error <= feedback_config_.goal_tolerance ? "true" : "false") + " reason=" + why;
-  if(phase == "reference_complete")
-    pending_reference_ack_ = ack; // Publish only after the coherent reference commits.
-  else
-    ack_pub_.publish(ack);
-  if(!defer_diagnostics_) last_diagnostics_ = 0;
-}
-void GimbalrotorPerchingNavigator::manualCallback(const geometry_msgs::Vector3StampedConstPtr& msg)
-{
-  if(rejectUnscopedMotion("manual")) return;
-  if(deferRollYawCommand("manual", [this, msg] { manualCallback(msg); }, false)) return;
-
-  const double started = roll_yaw::steadySeconds();
-  std::lock_guard<std::recursive_mutex> l(perchingStateMutex());
-  CallbackTimer timing{manual_wall_, started};
-  if(!lock_valid_ || msg->header.frame_id != "perching_lock_" + std::to_string(roll_yaw_lock_stamp_.toNSec()))
-  {
-    reason_ = "manual rejected: stale/missing base lock identity";
-    publishRollYawDiagnostics();
-    return;
-  }
-  // Compatibility interface for deliberate full nominal targets. Independent
-  // axis topics below are preferred; publisher timestamps are informational.
-  setNominalTarget(Eigen::Vector3d(msg->vector.y, msg->vector.x, msg->vector.z));
-}
-bool GimbalrotorPerchingNavigator::setNominalTarget(const Eigen::Vector3d& target, int changed_axis)
-{
-  // Correction details on the existing status channel let the keyboard reconcile
-  // only the matching request/axis, without waiting or introducing a handshake.
-  auto correction = [&]()
-  {
-    if(changed_axis < 0 || changed_axis > 2 || !lock_valid_)
-      return;
-    const char* axis = changed_axis == 0 ? "alpha" : changed_axis == 1 ? "roll" : "yaw";
-    std::ostringstream detail;
-    detail << std::setprecision(17) << " [axis=" << axis << " lock=" << roll_yaw_lock_stamp_.toNSec()
-           << " requested=" << target[changed_axis] << " accepted=" << nominal_[changed_axis] << "]";
-    reason_ += detail.str();
-  };
-  auto reject = [&](const std::string& why)
-  {
-    reason_ = "manual rejected: " + why;
-    correction();
-    std_msgs::String ack;
-    const char* state = !ownsRollYawTargets() ? "FREE_FLIGHT" : faulted_ ? "FAULT_HOLD"
-                        : !lock_valid_ ? "LOCK_FAILED" : "CONTACT_LOCKED";
-    ack.data = std::string(state) + ": " + reason_;
-    roll_yaw_state_pub_.publish(ack);
-    return false;
-  };
-  if(!lock_valid_ || faulted_ || !feedback().hover)
-    return reject("require valid enabled HOVER contact");
-  if(roll_yaw_pitch_rezero_state_ != RollYawPitchRezeroState::IDLE)
-    return reject("pitch rezero ACTIVE/HOLD; wait ready then final relock");
-  if(!target.allFinite())
-    return reject("nonfinite mechanism target");
-  const auto f = feedback();
-  const auto why = contactSafetyRejection(f);
-  if(!why.empty())
-    return reject(why);
-  if(feedback_waiting_ && (f.body_stamp <= recovery_body_stamp_ || f.joint_stamp <= recovery_joint_stamp_))
-    return reject("awaiting advancing required feedback");
-  const Eigen::Vector3d bounded =
-      target.cwiseMax(planning_config_.limits.lower).cwiseMin(planning_config_.limits.upper);
-  std::string error;
-  if(!feedback_config_.motionConfigValid() || !planning_config_.onlineValid() ||
-     !roll_yaw::mechanismAllowed(model_, bounded, planning_config_, error))
-    return reject(error.empty() ? "invalid online limits/configuration" : error);
-  // Identical absolute refreshes cannot reset clocks, derivatives or ownership.
-  if(manual_tracking_ && !pitch_velocity_.active && !pitch_target_.valid && !jog_.active && !planner_ &&
-     (bounded - nominal_).norm() < 1e-12)
-    return true;
-  const bool needs_stop = pitch_velocity_.active || (planner_ &&
-      (planner_->stage == roll_yaw::Stage::EXECUTING || planner_->stage == roll_yaw::Stage::PRE_ALIGN));
-  if(!needs_stop && !manual_tracking_ && !transitionNominalReference()) return reject(reason_);
-  pitch_target_ = PitchTarget();
-  finishPitchJog("replaced", "new nominal destination accepted");
-  if(needs_stop)
-    stopMotion("braking for accepted replacement");
-  if(manual_tracking_ && (bounded - nominal_).norm() > 1e-12)
-  {
-    std_msgs::String ack;
-    ack.data = "action=mechanism_target session=" + std::to_string(roll_yaw_lock_stamp_.toNSec()) +
-        " phase=replaced remaining_rad=" + std::to_string((nominal_ - final_target_.eta).norm()) +
-        " reason=new_absolute_destination";
-    ack_pub_.publish(ack);
-  }
-  nominal_ = bounded;
-  if(stop_pending_)
-    retarget_pending_ = true;
-  else
-  {
-    invalidatePlanner();
-    body_alignment_valid_ = false;
-    stop_pending_ = retarget_pending_ = false;
-    const bool was_idle = !manual_tracking_;
-    manual_tracking_ = true;
-    // Target changes keep the integration clock and applied derivatives. Starting
-    // a previously idle producer establishes a clock without integrating idle time.
-    if(was_idle || manual_time_ == 0)
-      manual_time_ = f.now;
-  }
-  {
-    std_msgs::String ack;
-    ack.data = "action=mechanism_target session=" + std::to_string(roll_yaw_lock_stamp_.toNSec()) +
-        " accepted=true phase=" + (retarget_pending_ ? "waiting" : "moving") +
-        " remaining_rad=" + std::to_string((nominal_ - final_target_.eta).norm());
-    ack_pub_.publish(ack);
-  }
-  manual_receipt_stamp_ = ros::Time::now();
-  reason_ = retarget_pending_ ? "nominal destination accepted; bounded braking then automatic replacement"
-                            : "manual nominal destination accepted";
-  if((bounded - target).norm() > 1e-10)
-  {
-    correction();
-    std_msgs::String ack;
-    ack.data = "CONTACT_LOCKED: " + reason_;
-    roll_yaw_state_pub_.publish(ack);
-  }
-  publishRollYawDiagnostics();
-  return true;
-}
-
-bool GimbalrotorPerchingNavigator::buildFinalMechanismTarget(roll_yaw::Reference& next, double now)
-{
-  if(planner_)
-  {
-    manual_time_ = now;
-    next = final_target_; // Planner nominal and correction were accepted together.
-    return true;
-  }
-  const double elapsed = now - manual_time_;
-  manual_time_ = now;
-  next = final_target_;
-  if(elapsed == 0) return true;
-  if(feedback_config_.integrationSteps(elapsed) < 0) return false;
-  // Discard unobserved elapsed time. Work and displacement never grow with a
-  // delayed publication, key-repeat backlog, goal distance or lease duration.
-  const double dt = std::min(elapsed, feedback_config_.max_execution_step);
-  subdivisions_ = 1;
-  const auto interaction = interaction_.lock();
-  const bool compliance = interaction && (interaction->diagnostics().admittance_.enabled ||
-      std::abs(interaction->diagnostics().admittance_.offset) > 1e-10 ||
-      std::abs(interaction->diagnostics().admittance_.rate) > 1e-10);
-  if((pitch_velocity_.active && !pitch_velocity_.pending) || (!manual_tracking_ && !stop_pending_ && compliance))
-    return advancePitchVelocity(next, dt, now);
-  return advanceManualReference(next, dt);
-}
-
-roll_yaw::PlanningConfig GimbalrotorPerchingNavigator::onlineLimits() const
-{
-  auto limits = planning_config_;
-  // Half the joint budget is reserved for the C2 interval's derivative hull.
-  // followMechanism uses half of this remaining budget for axis acceleration.
-  limits.limits.acceleration *= .5;
-  const double radius = model_.radiusBound();
-  const auto weights = model_.travelWeights();
-  if(radius > 0)
-  {
-    // Reserve four fifths for connecting-interval curvature/acceleration. Reductions
-    // are derived from geometry and configured physical bounds, not PID tuning.
-    const double speed = .5 * weights.dot(limits.limits.velocity);
-    const double speed_bound = std::min(limits.cog_speed_limit / radius,
-                                       std::sqrt(.2 * limits.cog_acceleration_limit / radius));
-    limits.limits.velocity *= std::min(1.0, speed_bound / speed);
-    const double acceleration = .5 * weights.dot(limits.limits.acceleration);
-    limits.limits.acceleration *= std::min(1.0, .2 * limits.cog_acceleration_limit / (radius * acceleration));
-  }
-  return limits;
-}
-
-bool GimbalrotorPerchingNavigator::candidateTrackingAllowed(
-    const roll_yaw::Reference& candidate, const roll_yaw::PlanningConfig& limits, double dt, std::string& error) const
-{
-  const Eigen::Vector3d travel = (candidate.velocity.array().square() / limits.limits.acceleration.array() +
-      .5 * candidate.velocity.cwiseAbs().array() * feedback_config_.max_execution_step).matrix();
-  // Bound the full applied interval from its start. Triangle inequality
-  // applies to rotations, with signed axis errors checked separately below.
-  Eigen::Vector3d step, lower, upper;
-  if(!roll_yaw::referenceIntervalBounds(model_, final_target_, candidate, dt, planning_config_, step, lower, upper, error))
-    return false;
-  const double angle = model_.travelWeights().dot(travel + step);
-  const double body = roll_yaw::logSO3(measured_.body.linear().transpose() * final_target_.body.linear()).norm();
-  if(body + angle > feedback_config_.orientation_tolerance ||
-     ((candidate.eta - measured_coordinates_).cwiseAbs() + travel).maxCoeff() > feedback_config_.tracking_tolerance ||
-     (lower - measured_coordinates_).cwiseAbs().maxCoeff() > feedback_config_.tracking_tolerance ||
-     (upper - measured_coordinates_).cwiseAbs().maxCoeff() > feedback_config_.tracking_tolerance)
-  { error = "candidate tracking/stopping reserve"; return false; }
-  // Total variation bounds rotations even when a coordinate reverses inside the interval.
-  const double tilt = std::acos(std::clamp(final_target_.body.linear()(2,2), -1.0, 1.0));
-  const double cog_tilt = std::acos(std::clamp(final_target_.cog.linear()(2,2), -1.0, 1.0));
-  if(tilt + angle > limits.max_tilt || cog_tilt + angle > 1.0)
-  { error = "candidate continuous attitude corridor"; return false; }
-  return true;
-}
-
-bool GimbalrotorPerchingNavigator::advanceManualReference(roll_yaw::Reference& next, double dt)
-{
-  if(manual_tracking_)
-  {
-    std::string error;
-    bool accepted = false;
-    const auto limits = onlineLimits();
-    const auto interaction = interaction_.lock();
-    const auto& compliance = interaction->diagnostics().admittance_;
-    roll_yaw::Reference nominal_next;
-    if(!local_interaction_hold_)
-      for(int attempt = 0; attempt < 4 && !accepted; ++attempt)
-      {
-        const Eigen::Vector3d feed = feed_scale_ * std::pow(.5, attempt);
-        const bool nominal_ok = roll_yaw::followMechanism(model_, manual_reference_, nominal_, dt,
-            feedback_config_.max_execution_step, stop_pending_, limits, nominal_next, error, feed);
-        const bool correction = std::abs(compliance.offset) > 1e-12 || std::abs(compliance.rate) > 1e-12 ||
-            std::abs(compliance.acceleration) > 1e-12;
-        if(!correction) next = nominal_next;
-        accepted = nominal_ok && (!correction ||
-            roll_yaw::compliantReference(model_, nominal_next, final_target_, compliance.offset,
-                compliance.rate, compliance.acceleration, dt, limits, next, error)) &&
-            candidateTrackingAllowed(next, limits, dt, error) &&
-            roll_yaw::mechanismBrakingAllowed(model_, next, feedback_config_.max_execution_step, limits, error);
-      }
-    if(accepted)
-    {
-      manual_reference_ = nominal_next;
-      local_pitch_.offset = compliance.offset;
-      local_pitch_.rate = nominal_next.body_omega.y();
-      local_pitch_.start = nominal_next.body.linear();
-      local_pitch_.angle = 0;
-      interaction->reconcileReference(true, false, local_pitch_.offset);
-    }
-    else
-    {
-      hold_reason_ = HoldReason::FEASIBILITY;
-      reason_ = "bounded braking; accepted destination pending: " + error;
-      interaction->reconcileReference(false, false, local_pitch_.offset);
-      if(!roll_yaw::followMechanism(model_, final_target_, final_target_.eta, dt,
-            feedback_config_.max_execution_step, true, limits, next, error))
-      {
-        faultHold("cannot generate valid manual braking/holding output: " + error);
-        return false;
-      }
-      // The bounded fallback may move the applied reference. Retain the
-      // accepted displacement and remove it from the new nominal brake pose.
-      interaction->holdReference(local_pitch_.offset);
-      if(!roll_yaw::compliantReference(model_, next, next, -local_pitch_.offset,
-            0, 0, 0, planning_config_, manual_reference_, error))
-      {
-        faultHold("manual brake nominal conversion: " + error);
-        return false;
-      }
-      local_pitch_.start = manual_reference_.body.linear();
-      local_pitch_.angle = 0;
-      local_pitch_.rate = manual_reference_.body_omega.y();
-    }
-    if(accepted)
-    {
-      if(hold_reason_ == HoldReason::FEASIBILITY) hold_reason_ = HoldReason::NONE;
-      reason_ = "advancing accepted destination; remaining_rad=" + std::to_string((nominal_ - manual_reference_.eta).norm());
-    }
-    if(jog_.active)
-    {
-      double cross;
-      roll_yaw::taskPitch(jog_.start.linear(), next.body.linear(), jog_.progress, jog_.progress, cross);
-      const bool moving = (next.eta - final_target_.eta).norm() > 1e-12;
-      if(moving && jog_.phase != "moving")
-      {
-        pending_reference_ack_.data = "action=body_pitch_delta session=" + std::to_string(jog_.session) +
-            " accepted=true phase=moving reason=" + reason_;
-      }
-      jog_.phase = moving ? "moving" : "waiting";
-    }
-    if(manual_reference_.velocity.norm() < 1e-12 && stop_pending_)
-    {
-      final_target_ = next;
-      completeStop("manual braking finished");
-      next = final_target_;
-    }
-    else if(accepted && (manual_reference_.eta - nominal_).norm() < 1e-9 && manual_reference_.velocity.norm() < 1e-9)
-    {
-      manual_tracking_ = false;
-      // The nominal endpoint is complete; the applied correction may still move.
-      reason_ = jog_.active ? "body-local pitch reference complete; measured goal reported separately"
-                            : "manual reference complete; holding contact";
-      if(jog_.active)
-      {
-        double cross;
-        roll_yaw::taskPitch(jog_.start.linear(), next.body.linear(), jog_.progress, jog_.progress, cross);
-        finishPitchJog("reference_complete", reason_);
-      }
-    }
-    return true;
-  }
-  next = final_target_; // idle always holds applied state, never copies a distant nominal
-  return true;
-}
-void GimbalrotorPerchingNavigator::taskCommandCallback(const std_msgs::UInt64ConstPtr& m,
-                                                              const std::string& action)
-{
-  roll_yaw::Request requested;
-  if(action == "prepare")
-  {
-    ros::NodeHandle pn(nh_, "navigation/roll_yaw_perching/request");
-    if(!pn.getParam("pitch_increment", requested.pitch_end) || !pn.getParam("pitch_rate", requested.rate) ||
-       !pn.getParam("pitch_acceleration", requested.acceleration))
-      requested.rate = std::numeric_limits<double>::quiet_NaN();
-  }
-  auto apply = [this, m, action, requested]
-  {
-    requestRollYaw(action, m->data, -1, 0, action == "prepare" ? &requested : nullptr);
-    std_msgs::String ack;
-    ack.data = "action=" + action + " session=" + std::to_string(m->data) +
-               " accepted=" + (last_command_accepted_ ? "true" : "false") + " reason=" + reason_;
-    ack_pub_.publish(ack);
-  };
-  if(deferRollYawCommand("task_" + action, apply,
-                        action == "cancel" || action == "stop" || action == "pause")) return;
-  apply();
-}
-
-roll_yaw::Plan GimbalrotorPerchingNavigator::prepareTrajectory(
-    const roll_yaw::Kinematics& model_snapshot, Eigen::Vector3d initial, const Eigen::Matrix3d& neutral, const roll_yaw::Request& request,
-    const roll_yaw::Reference& measured_start, const roll_yaw::Reference& connection_start, roll_yaw::PlanningConfig& config, std::uint64_t session,
-    const std::shared_ptr<PlanningStatus>& status, double deadline, double consistency,
-    const std::function<bool()>& cancel)
-{
-  const double started = roll_yaw::steadySeconds();
-  config.cancelled = [cancel, started, deadline] { return cancel() || roll_yaw::steadySeconds() - started > deadline; };
-  config.report = [status, last = started, was_validation = false](int i, int n, bool validation) mutable
-  {
-    const double now = roll_yaw::steadySeconds();
-    auto& elapsed = was_validation ? status->validation_seconds : status->solve_seconds;
-    elapsed.store(elapsed.load() + now - last);
-    last = now;
-    was_validation = validation;
-    status->interval = i;
-    status->total = n;
-    status->validating = validation;
-  };
-  const auto model = model_snapshot;
-  // Physical consistency is distinct from the numerical IK tolerance.
-  Eigen::Vector3d reconciled;
-  std::string error;
-  roll_yaw::Plan plan;
-  if(!roll_yaw::inverseOrientation(model, measured_start.body.linear(), initial, config, reconciled, error) ||
-     (reconciled - initial).cwiseAbs().maxCoeff() > consistency)
-    plan.reason = "measured orientation/joints cannot be reconciled within contact tolerance: " + error;
-  else
-  {
-    initial = connection_start.eta;
-    plan = roll_yaw::prepare(model, initial, neutral, request, config);
-  }
-  plan.session = session;
-  plan.goal = request;  // Preserve purpose even when start reconciliation failed.
-  plan.submission = measured_start;
-  plan.applied_start = connection_start;
-  plan.submission_valid = true;
-  if(plan.ok)
-  {
-    roll_yaw::Path connection;
-    std::string why;
-    if(!request.align_only)
-    {
-      if(!roll_yaw::validatedMechanismPath(model, connection_start, initial, config, connection, why))
-      {
-        plan.ok = false;
-        plan.reason = "start connection: " + why;
-      }
-      else
-        plan.align = std::move(connection);
-    }
-  }
-  plan.wall_seconds = roll_yaw::steadySeconds() - started;
-  if(cancel() || plan.wall_seconds > deadline)
-  {
-    plan.ok = false;
-    plan.reason = "offline cancelled/deadline exceeded";
-  }
-  return plan;
-}
-
-void GimbalrotorPerchingNavigator::requestRollYaw(const std::string& action, std::uint64_t session, int axis,
-                                                  double value, const roll_yaw::Request* prepared_request)
-{
-  const roll_yaw::Request requested = prepared_request ? *prepared_request : roll_yaw::Request();
-  const bool request_valid = action != "prepare" || (prepared_request && std::isfinite(requested.rate));
-  std::lock_guard<std::recursive_mutex> l(perchingStateMutex());
-  last_command_accepted_ = false;
-  if(!lock_valid_ || session != roll_yaw_lock_stamp_.toNSec())
-  {
-    reason_ = "stale/missing base lock identity";
-    return;
-  }
-  if(action == "cancel" || action == "stop")
-  {
-    cancelQueuedRollYawCommands("explicit_" + action);
-    last_command_accepted_ = true;
-    if(roll_yaw_pitch_rezero_state_ == RollYawPitchRezeroState::ACTIVE)
-      failRollYawPitchRezero("operator stopped rezero");
-    else
-      stopMotion("stopped at applied contact reference");
-    if(!defer_diagnostics_) last_diagnostics_ = 0;
-    publishRollYawDiagnostics();
-    return;
-  }
-  // Operator pause is accepted even while physical feedback is unavailable.
-  // Otherwise a queued automatic recovery could undo the user's pause.
-  if(action == "pause")
-  {
-    cancelQueuedRollYawCommands("explicit_pause");
-    if(prepare_pending_)
-    {
-      stopMotion("explicit pause cancelled unfinished preparation");
-      last_command_accepted_ = true;
-    }
-    else if(planner_)
-    {
-      last_command_accepted_ = planner_->command("pause", session);
-      if(last_command_accepted_)
-        connection_pending_ = false;
-      reason_ = planner_->reason;
-    }
-    else
-    {
-      stopMotion("explicit operator pause");
-      last_command_accepted_ = true;
-    }
-    publishRollYawDiagnostics();
-    return;
-  }
-  if(stop_pending_)
-  {
-    reason_ = "stopping, retry; command not queued";
-    return;
-  }
-  if(!planning_configuration_valid_)
-  {
-    reason_ = "invalid offline planning configuration";
-    return;
-  }
-  if(faulted_ || roll_yaw_pitch_rezero_state_ != RollYawPitchRezeroState::IDLE)
-  {
-    reason_ = "orientation request rejected during fault/setup";
-    return;
-  }
-  const auto rejection = contactSafetyRejection(feedback());
-  if(!rejection.empty())
-  {
-    reason_ = rejection;
-    return;
-  }
-  if(action == "prepare" || action == "body_align")
-  {
-    const bool alignment = action == "body_align";
-    if(prepare_pending_)
-    {
-      reason_ = "worker busy; retry after status changes (request not queued)";
-      return;
-    }
-    if(planner_ && (planner_->stage == roll_yaw::Stage::EXECUTING || planner_->stage == roll_yaw::Stage::PRE_ALIGN))
-    {
-      reason_ = "hold or complete current motion before preparing a cut";
-      return;
-    }
-    if(!request_valid)
-    {
-      reason_ = "require pitch_increment, pitch_rate and pitch_acceleration";
-      return;
-    }
-    roll_yaw::Request request = requested;
-    if(alignment)
-    {
-      request = alignment_request_;
-      if(!body_alignment_valid_)
-      {
-        const Eigen::Matrix3d relative = neutral_.transpose() * feedback().body.linear();
-        request = roll_yaw::Request();
-        request.roll = std::asin(std::clamp(relative(2, 1), -1.0, 1.0));
-        request.yaw = std::atan2(-relative(0, 1), relative(1, 1));
-        request.pitch_start = std::atan2(-relative(2, 0), relative(2, 2));
-      }
-      if(axis == 0)
-        request.yaw = value;
-      else
-        request.roll = value;
-      request.align_only = true;
-    }
-    if(!request.valid())
-    {
-      reason_ = "invalid orientation request (radians, positive rate/acceleration)";
-      return;
-    }
-    const auto f = feedback();
-    roll_yaw::Estimate estimate;
-    if(!model_.estimate(f.body, f.eta, estimate))
-    {
-      reason_ = "invalid measured start";
-      return;
-    }
-    Eigen::Vector3d initial = f.eta;
-    initial[0] = estimate.alpha;
-    roll_yaw::Reference measured_start;
-    measured_start.eta = initial;
-    measured_start.body = f.body;
-    roll_yaw::Reference held_nominal;
-    if(!roll_yaw::mechanismReference(model_, initial, Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero(), held_nominal) ||
-       roll_yaw::logSO3(held_nominal.body.linear().transpose() * f.body.linear()).norm() > feedback_config_.preparation_tolerance)
-    {
-      reason_ = "measured start inconsistent with locked hinge FK";
-      return;
-    }
-    const auto readiness = preparationRejection(f, final_target_);
-    if(!readiness.empty())
-    {
-      reason_ = "prepare waiting: " + readiness;
-      return;
-    }
-    // Noise-tolerant rate and reference-connection gates, not a zero-rate demand.
-    if((initial - final_target_.eta).cwiseAbs().maxCoeff() > feedback_config_.preparation_tolerance ||
-       (!alignment && (f.body_omega.norm() > feedback_config_.settle_body_rate ||
-                       f.joint_rate.tail<2>().norm() > feedback_config_.settle_joint_rate)))
-    {
-      reason_ = "wait for current alignment to track/settle, or hold before preparing";
-      return;
-    }
-    if(pitch_velocity_.active || manual_tracking_ || final_target_.velocity.norm() > 1e-6)
-    {
-      cancelQueuedRollYawCommands("prepare_takeover");
-      stopMotion("prepare requested during manual motion");
-      reason_ = "stopping, retry prepare; not queued";
-      return;
-    }
-    // Prepare from the reached nominal reference. Measurements validate the
-    // applied reference; compliance is composed after nominal path generation.
-    cancelQueuedRollYawCommands("prepare_takeover");
-    if(!transitionNominalReference(request.pitch_end < request.pitch_start ? -1 : 1)) return;
-    const roll_yaw::Reference connection_start = manual_reference_;
-    invalidatePlanner();
-
-    planner_.reset(new roll_yaw::Executor());
-    planner_->config = feedback_config_;
-    planner_->planning = planning_config_;
-    if(!planner_->attach(model_, connection_start, session, f.now) || !planner_->command("prepare", session))
-    {
-      reason_ = planner_->reason;
-      invalidatePlanner();
-      return;
-    }
-    // Cut R0 is nominal; measured body pose remains feedback only.
-    const Eigen::Matrix3d neutral = alignment ? neutral_ : Eigen::Matrix3d(connection_start.body.linear());
-    planner_->plan.goal = request;
-    planner_->plan.neutral = neutral;
-    planner_->plan.session = session;
-    planner_->planned_pitch = request.pitch_start;
-    planner_->task.reset(request.pitch_start);
-    // Model, measured/applied starts and generation are captured under the state lock.
-    const auto model_snapshot = planning_model_;
-    const auto config = planning_config_;
-    const double consistency = feedback_config_.preparation_tolerance;
-    pending_generation_ = producer_generation_;
-    prepare_started_ = roll_yaw::steadySeconds();
-    prepare_result_ = "pending";
-    ++plan_id_;
-    planning_status_ = std::make_shared<PlanningStatus>();
-    const auto status = planning_status_;
-    const double deadline = prepare_deadline_;
-    prepare_pending_ = prepare_worker_->submit(
-        [model_snapshot, initial, neutral, request, measured_start, connection_start, config = roll_yaw::PlanningConfig(config),
-         session, status, deadline, consistency](const std::function<bool()>& cancel) mutable
-        {
-          return prepareTrajectory(*model_snapshot, initial, neutral, request, measured_start, connection_start, config,
-                                   session, status, deadline, consistency, cancel);
-        });
-    if(!prepare_pending_)
-    {
-      planner_->hold("planner worker busy/cancelling; retry prepare");
-    }
-    else
-    {
-      planner_->reason = "JOB_ACCEPTED: preparing; motion not yet accepted";
-    }
-    last_command_accepted_ = prepare_pending_;
-  }
-  else if(!planner_)
-  {
-    reason_ = "no prepared path; prepare first";
-    return;
-  }
-  else
-  {
-    if((action == "start" && planner_->stage != roll_yaw::Stage::READY) ||
-       (action == "resume" && planner_->stage != roll_yaw::Stage::PAUSED))
-    {
-      reason_ = "start requires measured READY; resume requires PAUSED; wait/retry (not queued)";
-      return;
-    }
-    if(action == "start")
-    {
-      if(!planner_->plan.ok || planner_->plan.cut.knots.empty())
-      {
-        reason_ = "prepare first";
-        return;
-      }
-      if((planner_->target.eta - planner_->plan.cut.knots.front().eta).norm() > 1e-9)
-      {
-        stopMotion("applied prepared start changed; prepare again");
-        return;
-      }
-    }
-    if(action == "start" || action == "resume")
-    {
-      const auto current = feedback();
-      const auto ready_error = preparationRejection(current, final_target_);
-      if(!ready_error.empty())
-      {
-        reason_ = "motion waiting: " + ready_error;
-        return;
-      }
-      const auto interaction = interaction_.lock();
-      if(!interaction || !interaction->motionAllowed(interactionInput(current)))
-      {
-        reason_ = "motion denied: required motion feedback unavailable";
-        return;
-      }
-    }
-    last_command_accepted_ = planner_->command(action, session);
-    if(action == "start" && last_command_accepted_)
-      body_alignment_valid_ = false;
-  }
-  reason_ = planner_->reason;
-  publishRollYawDiagnostics();
-}
-std::string GimbalrotorPerchingNavigator::preparationTrackingRejection(const roll_yaw::Feedback& f, const roll_yaw::Reference& held) const
-{
-  auto why = contactSafetyRejection(f);
-  if(!why.empty())
-    return why;
-  roll_yaw::Estimate e;
-  if(!model_.estimate(f.body, f.eta, e))
-    return "passive estimate unavailable";
-  Eigen::Vector3d q = f.eta;
-  q[0] = e.alpha;
-  if((q - held.eta).cwiseAbs().maxCoeff() > feedback_config_.preparation_tolerance ||
-     roll_yaw::logSO3(f.body.linear().transpose() * held.body.linear()).norm() > feedback_config_.preparation_tolerance)
-    return "current measured-to-applied preparation tracking allowance";
-  return "";
-}
-
-std::string GimbalrotorPerchingNavigator::preparationRejection(const roll_yaw::Feedback& f, const roll_yaw::Reference& held) const
-{
-  const auto why = preparationTrackingRejection(f, held);
-  if(!why.empty())
-    return why;
-  const auto& c = feedback_config_;
-  const auto& w = preparation_stats_;
-  if(f.body_omega.norm() >= c.settle_body_rate || f.joint_rate.tail<2>().norm() >= c.settle_joint_rate)
-    return "quiet window current rate exceeds bound";
-  if(!w.complete)
-    return "quiet window coverage: " + w.status;
-  if(w.body_rms >= c.settle_body_rate || w.joint_rms >= c.settle_joint_rate)
-    return "quiet window RMS rate exceeds bound";
-  if(w.body_mean >= c.settle_mean_rate || w.joint_mean >= c.settle_mean_rate)
-    return "quiet window mean rate exceeds bound";
-  if(!preparation_ready_)
-    return "quiet window current rate/coverage unavailable";
-  return "";
-}
-void GimbalrotorPerchingNavigator::advancePreparedConnection()
-{
-  if(!connection_pending_ || !planner_)
-    return;
-  const auto f = feedback();
-  if(!planner_->plan.ok || planner_->stage != roll_yaw::Stage::CONTACT_LOCKED || pending_generation_ != producer_generation_ ||
-     !planner_->submissionMatches(planner_->plan, f, planner_->target))
-  {
-    connection_pending_ = false;
-    planner_->plan = roll_yaw::Plan();
-    planner_->hold("prepared connection identity changed; prepare again");
-    if(!transitionNominalReference()) faultHold(reason_);
-    return;
-  }
-  if(roll_yaw::steadySeconds() - connection_wait_started_ > feedback_config_.settle_timeout)
-  {
-    connection_pending_ = false;
-    planner_->plan = roll_yaw::Plan();
-    planner_->hold("prepared connection live-readiness timeout; prepare again");
-    if(!transitionNominalReference()) faultHold(reason_);
-    return;
-  }
-  const auto why = preparationRejection(f, final_target_);
-  if(!why.empty())
-  {
-    planner_->reason = "prepared, waiting for live readiness: " + why;
-    return;
-  }
-  connection_pending_ = false;
-  if(planner_->command("align", roll_yaw_lock_stamp_.toNSec()))
-  {
-    if(planner_->plan.goal.align_only)
-    {
-      alignment_request_ = planner_->plan.goal;
-      body_alignment_valid_ = true;
-    }
-    planner_->reason = "PLAN_READY: geometric connection moving; wait measured READY";
-  }
-  else
-  {
-    planner_->plan = roll_yaw::Plan();
-    planner_->hold("prepared connection denied; prepare again");
-    if(!transitionNominalReference()) faultHold(reason_);
-  }
-}
-bool GimbalrotorPerchingNavigator::attachRollYawInteraction(
-    const std::shared_ptr<aerial_robot_control::RollYawInteraction>& interaction,
-    const std::function<void(const aerial_robot_control::RollYawInteractionInput&)>& initialize)
-{
-  std::lock_guard<std::recursive_mutex> l(perchingStateMutex());
-  if(perching_configuration_ != PerchingConfiguration::ROLL_YAW || !interaction_.expired())
-    return false;
-  initialize(interactionInput(feedback()));
-  interaction_ = interaction;
-  publishRollYawDiagnostics();
-  return true;
-}
-
-void GimbalrotorPerchingNavigator::withRollYawInteraction(
-    const std::function<void(const aerial_robot_control::RollYawInteractionInput&)>& call, bool publish_diagnostics,
-    const std::string& key)
-{
-  if(deferRollYawCommand("interaction_" + key,
-      [this, call, publish_diagnostics, key] { withRollYawInteraction(call, publish_diagnostics, key); })) return;
-
-  std::lock_guard<std::recursive_mutex> l(perchingStateMutex());
-  if(auto interaction = interaction_.lock())
-  {
-    call(interactionInput(feedback()));
-    if(publish_diagnostics)
-      publishRollYawDiagnostics();
-  }
-}
-
-bool GimbalrotorPerchingNavigator::rollYawReferenceActive() const
-{
-  std::lock_guard<std::recursive_mutex> lock(perchingStateMutex());
-  return ownsRollYawTargets() && lock_valid_ && !faulted_ && !feedback_waiting_ && navi_state_ == HOVER_STATE;
-}
-
-aerial_robot_control::RollYawInteractionInput GimbalrotorPerchingNavigator::interactionInput(
-    const roll_yaw::Feedback& f) const
-{
-  const bool tracking =
-      roll_yaw::logSO3(f.body.linear().transpose() * final_target_.body.linear()).norm() < feedback_config_.orientation_tolerance &&
-      (f.eta.tail<2>() - final_target_.eta.tail<2>()).cwiseAbs().maxCoeff() < feedback_config_.tracking_tolerance;
-  // Completion refers to the nominal producer, including its brake. Enabled
-  // compliance may still move the effective reference while nominal pitch holds.
-  const bool nominal_held = !pitch_velocity_.active && !manual_tracking_ && !retarget_pending_ &&
-      !jog_.active && !jog_pending_ && !prepare_pending_ && !connection_pending_ &&
-      roll_yaw_pitch_rezero_state_ == RollYawPitchRezeroState::IDLE &&
-      (local_pitch_.valid ? std::abs(local_pitch_.rate) < 1e-5 : final_target_.velocity.norm() < 1e-5);
-  return {model_, feedback_config_, planning_config_, f, planner_ ? &planner_->plan : nullptr,
-          planner_ ? planner_->stage : roll_yaw::Stage::FREE_FLIGHT, stop_pending_ || (planner_ && planner_->stopping()), lock_valid_,
-          planner_ ? planner_->nominal_progress : 0, planner_ ? planner_->relief_available : 0,
-          synchronization_tolerance_, last_body_message_stamp_, last_joint_message_stamp_,
-          roll_yaw_lock_stamp_.toNSec(), producer_generation_, roll_, yaw_, world_, body_frame_, roll_yaw_prefix_,
-          dynamics_factory_, dynamics_snapshot_current_,
-          [this](const roll_yaw::Feedback& sample) { return contactSafetyRejection(sample); },
-          [this](const roll_yaw::Feedback& sample) { return preparationRejection(sample, final_target_); },
-          !pitch_velocity_.active && !manual_tracking_ && final_target_.velocity.norm() < 1e-5,
-          preparation_ready_ && f.body_omega.norm() < feedback_config_.settle_body_rate &&
-          f.joint_rate.tail<2>().norm() < feedback_config_.settle_joint_rate && tracking,
-          pitch_velocity_.active && !pitch_velocity_.stopping
-              ? (pitch_target_.valid ? roll_yaw::pitchTargetRate(pitch_target_.angle, pitch_target_.progress, pitch_target_.rate)
-                                     : pitch_velocity_.requested) : 0,
-          manual_time_ > 0 ? std::clamp(f.now - manual_time_, 0.0, feedback_config_.max_execution_step) : 0,
-          .5 * local_pitch_.rate_limit, .5 * local_pitch_.acceleration_limit,
-          nominal_held, !faulted_ && !feedback_waiting_ && model_check_.available &&
-          last_body_message_stamp_ == f.body_stamp && last_joint_message_stamp_ == f.joint_stamp &&
-          (planner_ ? preparationTrackingRejection(f, final_target_).empty() : tracking),
-          model_check_.available && !model_check_.valid};
-}
-
-void GimbalrotorPerchingNavigator::resetComplianceSession()
-{
-  local_pitch_ = LocalPitch();
-  manual_reference_ = final_target_;
-  local_interaction_hold_ = local_resisting_load_ = false;
-  if(auto interaction = interaction_.lock())
-    interaction->resetComplianceSession();
-}
-
-bool GimbalrotorPerchingNavigator::transitionNominalReference(double direction)
-{
-  const auto interaction = interaction_.lock();
-  if(!interaction) return false;
-  const auto& state = interaction->diagnostics().admittance_;
-  roll_yaw::Reference nominal;
-  std::string error;
-  // Remove the accepted correction, including its transported derivatives.
-  // This is a coordinate conversion, not a commanded reference step.
-  if(!roll_yaw::compliantReference(model_, final_target_, final_target_, -state.offset,
-        -state.rate, -state.acceleration, 0, planning_config_, nominal, error))
-  {
-    reason_ = "nominal reference conversion unavailable: " + error;
-    return false;
-  }
-  manual_reference_ = nominal;
-  local_pitch_ = LocalPitch();
-  local_pitch_.valid = true;
-  local_pitch_.start = nominal.body.linear();
-  local_pitch_.rate = nominal.body_omega.y();
-  local_pitch_.offset = state.offset;
-  interaction->referenceDirection(direction);
-  return true;
-}
-
-void GimbalrotorPerchingNavigator::resetArticulatedSession(const std::string& reason)
-{
-  if(auto interaction = interaction_.lock())
-    interaction->resetArticulatedSession(interactionInput(feedback()), reason);
-}
-
-bool GimbalrotorPerchingNavigator::articulatedLoadValid(const roll_yaw::Feedback& f) const
-{
-  if(auto interaction = interaction_.lock())
-    return interaction->articulatedLoadValid(interactionInput(f), f);
-  return false;
-}
-
-void GimbalrotorPerchingNavigator::updateInteraction(const roll_yaw::Feedback& f)
-{
-  if(auto interaction = interaction_.lock())
-  {
-    if(!planner_)
-    {
-      if(!local_pitch_.valid)
-      {
-        // Establish the decomposition before proposing this update's scalar
-        // step, so a first correction is applied rather than absorbed unseen.
-        const auto& state = interaction->diagnostics().admittance_;
-        local_pitch_.valid = true;
-        local_pitch_.offset = state.offset;
-        local_pitch_.start = final_target_.body.linear() *
-            roll_yaw::expSO3(-Eigen::Vector3d::UnitY() * state.offset);
-        local_pitch_.rate = final_target_.body_omega.y() - state.rate;
-      }
-      // Share one physical pitch budget between nominal feed and compliance.
-      // Compute its tangent once; the follower reuses these bounds below.
-      local_pitch_.rate_limit = local_pitch_.acceleration_limit = 0;
-      Eigen::Matrix3d j;
-      if(model_.jacobian(final_target_.eta, j))
-      {
-        const auto limits = onlineLimits();
-        Eigen::JacobiSVD<Eigen::Matrix3d> svd(j, Eigen::ComputeFullU | Eigen::ComputeFullV);
-        if(svd.singularValues().minCoeff() >= limits.min_singular_value)
-        {
-          const Eigen::Vector3d tangent = svd.solve(Eigen::Vector3d::UnitY());
-          double rate = std::numeric_limits<double>::infinity(), acceleration = rate;
-          for(int i = 0; i < 3; ++i) if(std::abs(tangent[i]) > 1e-9)
-          {
-            rate = std::min(rate, .5 * limits.limits.velocity[i] / std::abs(tangent[i]));
-            acceleration = std::min(acceleration, .25 * limits.limits.acceleration[i] / std::abs(tangent[i]));
-          }
-          local_pitch_.rate_limit = rate;
-          local_pitch_.acceleration_limit = acceleration;
-        }
-      }
-    }
-    const auto out = interaction->updateInteraction(interactionInput(f), f);
-    if(!planner_ && out.updated)
-    {
-      local_interaction_hold_ = out.interaction_hold;
-      local_resisting_load_ = out.resisting_load;
-    }
-    if(planner_ && out.updated)
-    {
-      planner_->relief = out.relief;
-      planner_->relief_limited = std::abs(local_pitch_.offset) >= out.relief_angle_limit - 1e-8;
-      planner_->interaction_hold = out.interaction_hold;
-      planner_->resisting_load = out.resisting_load;
-      planner_->relief_enabled = out.relief_enabled;
-      planner_->relief_angle_limit = out.relief_angle_limit;
-      planner_->relief_rate_limit = out.relief_rate_limit;
-      planner_->relief_acceleration_limit = out.relief_acceleration_limit;
-    }
-  }
-}
-
-void GimbalrotorPerchingNavigator::resetRollYawPitchRezeroState()
-{
-  roll_yaw_pitch_rezero_state_ = RollYawPitchRezeroState::IDLE;
-  roll_yaw_pitch_rezero_ready_ = roll_yaw_pitch_rezero_failed_ = false;
-  rezero_frozen_.setZero();
-  rezero_started_ = rezero_stable_since_ = rezero_alpha_ = 0;
-  rezero_previous_pitch_ = rezero_previous_time_ = rezero_measured_rate_ = roll_yaw_rezero_feedback_dt_ = 0;
-  rezero_rate_valid_ = false;
-}
-void GimbalrotorPerchingNavigator::rollYawPitchRezeroCallback(const std_msgs::EmptyConstPtr& msg)
-{
-  if(deferRollYawCommand("rezero", [this, msg] { rollYawPitchRezeroCallback(msg); }, true)) return;
-
-  std::lock_guard<std::recursive_mutex> l(perchingStateMutex());
-  const auto f = feedback();
-  if(!lock_valid_ || faulted_ || !f.hover || !rezero_configuration_valid_ ||
-     roll_yaw_pitch_rezero_state_ != RollYawPitchRezeroState::IDLE)
-  {
-    reason_ = "pitch rezero rejected: require valid enabled HOVER contact, configuration and IDLE";
-    publishRollYawDiagnostics();
-    return;
-  }
-  const auto why = contactSafetyRejection(f);
-  if(!why.empty())
-  {
-    reason_ = "pitch rezero rejected: " + why;
-    publishRollYawDiagnostics();
-    return;
-  }
-  if(pitch_velocity_.active || stop_pending_ || manual_tracking_ ||
-     (planner_ && (planner_->stage == roll_yaw::Stage::EXECUTING || planner_->stage == roll_yaw::Stage::PRE_ALIGN)))
-  {
-    cancelQueuedRollYawCommands("rezero_takeover");
-    stopMotion("pitch rezero takeover");
-    reason_ = "pitch rezero waiting for stop; retry (not queued)";
-    publishRollYawDiagnostics();
-    return;
-  }
-  roll_yaw::Kinematics model = model_;
-  Eigen::Vector3d frozen = f.eta;
-  frozen[0] = 0;
-  roll_yaw::Reference held;
-  if(!model.lock(f.body, frozen) ||
-     !roll_yaw::mechanismReference(model, frozen, Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero(), held))
-  {
-    reason_ = "pitch rezero rejected: invalid measured body/joint capture";
-    publishRollYawDiagnostics();
-    return;
-  }
-  cancelQueuedRollYawCommands("rezero_capture");
-  pitch_velocity_ = PitchVelocity();
-  finishPitchJog("cancelled", "contact reset/relock");
-  jog_ = PitchJog();
-  invalidatePlanner();
-  resetRollYawPitchRezeroState();
-  manual_tracking_ = false;
-  manual_time_ = 0;
-  stop_pending_ = false;
-  body_alignment_valid_ = false;
-  resetComplianceSession();
-  resetArticulatedSession("pitch rezero recaptured model coordinates; awaiting coherent dynamics sample");
-  contact_body_stamp_ = contact_joint_stamp_ = -1;
-  model_ = std::move(model);
-  if(auto interaction = interaction_.lock())
-    interaction->captureModel(interactionInput(feedback()));
-  final_target_ = held;
-  nominal_ = rezero_frozen_ = frozen;
-  rezero_started_ = rezero_previous_time_ = f.body_stamp;
-  double roll, yaw;
-  tf::Matrix3x3(tfQuaternion(f.body.linear())).getRPY(roll, rezero_previous_pitch_, yaw);
-  roll_yaw_pitch_rezero_state_ = RollYawPitchRezeroState::ACTIVE;
-  reason_ = "pitch rezero ACTIVE: signed measured-feedback control, active roll/yaw frozen";
-  publishRollYawDiagnostics();
-}
-void GimbalrotorPerchingNavigator::updateRollYawBodyPitchFeedback()
-{
-  rezero_rate_valid_ = false;
-  roll_yaw_rezero_feedback_dt_ = 0;
-  const auto f = feedback();
-  if(!roll_yaw::feedbackRejection(f, feedback_config_, planning_config_).empty())
-  {
-    rezero_previous_time_ = 0;
-    return;
-  }
-  double roll, pitch, yaw;
-  tf::Matrix3x3(tfQuaternion(f.body.linear())).getRPY(roll, pitch, yaw);
-  if(rezero_previous_time_ > 0)
-  {
-    roll_yaw_rezero_feedback_dt_ = f.body_stamp - rezero_previous_time_;
-    if(roll_yaw_rezero_feedback_dt_ > 0 && roll_yaw_rezero_feedback_dt_ <= .1)
-    {
-      rezero_measured_rate_ = std::remainder(pitch - rezero_previous_pitch_, 2 * M_PI) / roll_yaw_rezero_feedback_dt_;
-      rezero_rate_valid_ = std::isfinite(rezero_measured_rate_);
-    }
-  }
-  rezero_previous_pitch_ = pitch;
-  rezero_previous_time_ = f.body_stamp;
-}
-void GimbalrotorPerchingNavigator::failRollYawPitchRezero(const std::string& why)
-{
-  invalidatePlanner();
-  roll_yaw_pitch_rezero_state_ = RollYawPitchRezeroState::HOLD;
-  roll_yaw_pitch_rezero_ready_ = false;
-  roll_yaw_pitch_rezero_failed_ = true;
-  rezero_stable_since_ = 0;
-  reason_ = "pitch rezero failed: " + why + "; holding last valid pose and frozen joints";
-  previous_failure_ = reason_;
-  ROS_WARN_STREAM("[RollYaw] " << reason_);
-}
-bool GimbalrotorPerchingNavigator::verifyRollYawPitchRezeroFrozenJoints()
-{
-  const auto f = feedback();
-  const auto why = roll_yaw::feedbackRejection(f, feedback_config_, planning_config_);
-  if(!why.empty())
-  {
-    if(!roll_yaw_pitch_rezero_failed_)
-      failRollYawPitchRezero(why);
-    return false;
-  }
-  if(std::abs(std::remainder(f.eta[1] - rezero_frozen_[1], 2 * M_PI)) > rezero_roll_tolerance_ ||
-     std::abs(std::remainder(f.eta[2] - rezero_frozen_[2], 2 * M_PI)) > rezero_yaw_tolerance_)
-  {
-    if(!roll_yaw_pitch_rezero_failed_)
-      failRollYawPitchRezero("active roll/yaw moved outside frozen-joint tolerance");
-    return false;
-  }
-  return true;
-}
-void GimbalrotorPerchingNavigator::updateRollYawPitchRezeroCommand()
-{
-  const auto f = feedback();
-  const double elapsed = f.now - rezero_started_;
-  if(!std::isfinite(elapsed) || elapsed < 0 || roll_yaw_rezero_feedback_dt_ < 0 || roll_yaw_rezero_feedback_dt_ > .5)
-    return failRollYawPitchRezero("invalid or discontinuous time");
-  if(elapsed > rezero_timeout_)
-    return failRollYawPitchRezero("timeout before measured stabilization");
-  double roll, pitch, yaw;
-  tf::Matrix3x3(tfQuaternion(f.body.linear())).getRPY(roll, pitch, yaw);
-  const double error = std::remainder(rezero_pitch_ - pitch, 2 * M_PI);
-  if(rezero_rate_valid_ && std::abs(error) <= rezero_tolerance_ &&
-     std::abs(rezero_measured_rate_) <= rezero_rate_tolerance_)
-  {
-    if(rezero_stable_since_ == 0)
-      rezero_stable_since_ = f.body_stamp;
-    if(f.body_stamp - rezero_stable_since_ >= rezero_stable_duration_)
-    {
-      roll_yaw_pitch_rezero_state_ = RollYawPitchRezeroState::HOLD;
-      roll_yaw_pitch_rezero_ready_ = true;
-      roll_yaw_pitch_rezero_failed_ = false;
-      reason_ = "pitch rezero ready-HOLD: measured pitch/rate stable; request final relock";
-      return;
-    }
-  }
-  else
-    rezero_stable_since_ = 0;
-  if(!std::isfinite(roll_yaw_rezero_feedback_dt_) || roll_yaw_rezero_feedback_dt_ <= 0)
-    return;
-  // Exact multilink signed error/rate law. Alpha rotates about R_WP * axis_,
-  // including the URDF's approximately pi mounting yaw; never world Euler Y.
-  const double rate = rezero_sign_ * std::clamp(rezero_kp_ * error, -rezero_rate_, rezero_rate_);
-  const double alpha =
-      std::clamp(rezero_alpha_ + rate * std::min(roll_yaw_rezero_feedback_dt_, .1), -rezero_travel_, rezero_travel_);
-  Eigen::Vector3d q = rezero_frozen_;
-  q[0] = alpha;
-  roll_yaw::Reference next;
-  std::string why;
-  if(!roll_yaw::mechanismAllowed(model_, q, planning_config_, why) ||
-     !roll_yaw::mechanismReference(model_, q, Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero(), next))
-    return failRollYawPitchRezero("invalid/limited passive hinge target: " + why);
-  // Reject a sign/geometry combination that drives measured pitch away from the
-  // goal. This is a local forward response check, not an endpoint IK/controller.
-  Eigen::Vector3d lo = rezero_frozen_, hi = rezero_frozen_;
-  roll_yaw::Estimate estimate;
-  if(!model_.estimate(f.body, f.eta, estimate))
-    return failRollYawPitchRezero("invalid hinge estimate");
-  lo[0] = estimate.alpha - 1e-5;
-  hi[0] = estimate.alpha + 1e-5;
-  Eigen::Isometry3d b0, g0, b1, g1;
-  if(!model_.evaluate(lo, b0, g0) || !model_.evaluate(hi, b1, g1))
-    return failRollYawPitchRezero("invalid hinge response FK");
-  const double slope =
-      (std::asin(std::clamp(-b1.linear()(2, 0), -1.0, 1.0)) - std::asin(std::clamp(-b0.linear()(2, 0), -1.0, 1.0))) /
-      2e-5;
-  if(std::abs(error) > rezero_tolerance_ && rezero_sign_ * slope <= 1e-6)
-    return failRollYawPitchRezero("configured rezero sign does not reduce pitch error about this physical hinge");
-  final_target_ = next;
-  rezero_alpha_ = alpha;
-}
-void GimbalrotorPerchingNavigator::applyRollYawPitchRezeroTarget()
-{
-  const bool frozen_valid = verifyRollYawPitchRezeroFrozenJoints();
-  if(roll_yaw_pitch_rezero_state_ == RollYawPitchRezeroState::ACTIVE && frozen_valid)
-    updateRollYawPitchRezeroCommand();
-  nominal_ = final_target_.eta;
-  nominal_[1] = rezero_frozen_[1];
-  nominal_[2] = rezero_frozen_[2];
-}
-void GimbalrotorPerchingNavigator::commandRollYawBaselinkPose(const roll_yaw::Reference& r)
-{
-  const Eigen::Matrix3d relative = r.cog.linear().transpose() * r.body.linear();
-  setSynchronizedBaselinkRotationRelativeToCog(tfQuaternion(relative));
-  double roll, pitch, yaw;
-  tf::Matrix3x3(tfQuaternion(r.cog.linear())).getRPY(roll, pitch, yaw);
-  setXyControlMode(POS_CONTROL_MODE);
-  setTargetPos(tfVector(r.cog.translation()));
-  setTargetVel(tfVector(r.cog_velocity));
-  setTargetAcc(tfVector(r.cog_acceleration));
-  setTargetRPY(tf::Vector3(roll, pitch, yaw));
-  setTargetOmega(tfVector(r.cog_omega));
-  // PoseLinearController rotates desired omega, but consumes acceleration in
-  // current CoG axes. Convert here for roll-yaw only, including its PID/input
-  // wrench estimate as well as the FC reference feedforward.
-  Eigen::Matrix3d current;
-  tf::matrixTFToEigen(estimator_->getOrientation(Frame::BASELINK, estimate_mode_), current);
-  current = (current * robot_model_->getCogDesireOrientation<Eigen::Matrix3d>().transpose()).eval();
-  setTargetAngAcc(tfVector(roll_yaw::referenceAngularAcceleration(current, r.cog.linear(), r.cog_angular_acceleration)));
-}
-void GimbalrotorPerchingNavigator::publishRollYawJointTarget()
-{
-  sensor_msgs::JointState cmd;
-  cmd.header.stamp = ros::Time::now();
-  cmd.name = {roll_, yaw_};
-  cmd.position = {final_target_.eta[1], final_target_.eta[2]};
-  roll_yaw_joints_pub_.publish(cmd);  // Passive alpha is never an actuator.
-}
-void GimbalrotorPerchingNavigator::applyRollYawTarget()
-{
-  target_applied_this_update_ = true;
-  if(!lock_valid_ || !feedback().hover)
-    return;
-  const auto interaction = interaction_.lock();
-  if(!interaction)
-  {
-    faultHold("roll-yaw interaction controller unavailable");
-    return;
-  }
-  const auto f = feedback();
-  const double elapsed = preparation_clock_ == 0 ? 0 : f.now - preparation_clock_;
-  const bool clock_valid = elapsed >= 0;
-  const bool outage = feedback_config_.integrationSteps(elapsed) < 0;
-  preparation_clock_ = f.now;
-  if(elapsed == 0 && manual_time_ != 0 && !feedback_waiting_)
-  {
-    return; // Paused ROS time is neither an integration step nor a new observation.
-  }
-  if(!clock_valid)
-    resetArticulatedSession("feedback clock moved backwards; awaiting coherent samples");
-  if(!dynamics_snapshot_valid_ && model_check_.available)
-    faultHold("fixed model mismatch; recapture required: " + model_check_.describe());
-  // Raw observation belongs to contact, independently of planner/control faults,
-  // preparation, tracking, stop and compliance. It checks its own physical inputs.
-  const double observer_started = roll_yaw::steadySeconds();
-  if(interaction->articulated())
-    interaction->observeArticulatedSample(interactionInput(f), f);
-  observer_wall_ = roll_yaw::steadySeconds() - observer_started;
-  bool hard_fault = false;
-  const auto why = !model_check_.available ? "model unavailable: " + model_check_.describe() : contactSafetyRejection(f, &hard_fault);
-  if(hard_fault)
-    faultHold(why);
-  const bool recovery_pending = feedback_waiting_ &&
-      (f.body_stamp <= recovery_body_stamp_ || f.joint_stamp <= recovery_joint_stamp_);
-  if(!faulted_ && (!why.empty() || outage || recovery_pending))
-  {
-    if(!feedback_waiting_ || !clock_valid)
-    {
-      hold_reason_ = outage ? HoldReason::CLOCK :
-          (roll_yaw::feedbackStatus(f, feedback_config_, planning_config_) == roll_yaw::FeedbackStatus::READY
-              ? HoldReason::CONTACT : HoldReason::FEEDBACK);
-      recovery_body_stamp_ = f.body_stamp <= f.now + feedback_config_.future_tolerance ? f.body_stamp : 0;
-      recovery_joint_stamp_ = f.joint_stamp <= f.now + feedback_config_.future_tolerance ? f.joint_stamp : 0;
-      if(prepare_pending_)
-      {
-        ++prepare_cancellations_;
-        ++producer_generation_;
-        prepare_worker_->cancel();
-        prepare_pending_ = false;
-        if(planner_)
-        {
-          planner_->plan = roll_yaw::Plan();
-          planner_->hold("coherent preparation start lost; prepare again");
-        }
-      }
-      // Emergency observation hold: no claim of acceleration-continuous stopping.
-      scaleReference(final_target_, 0, 0);
-      roll_yaw::scaleReference(manual_reference_, 0, 0);
-      local_pitch_.rate = 0;
-      if(local_pitch_.valid && interaction) interaction->holdReference(local_pitch_.offset);
-      if(pitch_velocity_.active)
-      {
-        if(!retarget_pending_)
-          nominal_ = manual_reference_.eta;
-      }
-    }
-    if(!why.empty() && model_check_.available &&
-       roll_yaw::feedbackStatus(f, feedback_config_, planning_config_) == roll_yaw::FeedbackStatus::READY)
-      hold_reason_ = HoldReason::CONTACT;
-    if(hold_reason_ == HoldReason::CONTACT && contact_hold_since_ == 0) contact_hold_since_ = f.now;
-    feedback_waiting_ = true;
-    if(pitch_velocity_.active)
-    {
-      pitch_velocity_.clock = f.now;
-      if(!clock_valid)
-        pitch_velocity_.expires = f.now;
-    }
-    manual_time_ = f.now;
-    interaction->waitForFeedback(f.now);
-    preparation_window_.reset();
-    preparation_stats_ = roll_yaw::SettlingStatistics();
-    preparation_ready_ = false;
-    rezero_previous_time_ = rezero_stable_since_ = 0;
-    rezero_rate_valid_ = false;
-    if(roll_yaw_pitch_rezero_state_ == RollYawPitchRezeroState::HOLD && roll_yaw_pitch_rezero_ready_ && !roll_yaw_pitch_rezero_failed_)
-      roll_yaw_pitch_rezero_state_ = RollYawPitchRezeroState::ACTIVE;  // Re-establish measured settling, with the original timeout.
-    if(roll_yaw_pitch_rezero_state_ != RollYawPitchRezeroState::IDLE)
-      roll_yaw_pitch_rezero_ready_ = false;
-    if(roll_yaw_pitch_rezero_state_ == RollYawPitchRezeroState::ACTIVE && f.now - rezero_started_ > rezero_timeout_)
-      failRollYawPitchRezero("timeout while waiting for coherent feedback");
-    reason_ = "holding accepted destination: " + (!why.empty() ? why :
-        outage ? "execution clock outage/discontinuity" : "awaiting advancing body and joint samples");
-    if(planner_)
-    {
-      planner_->applied = final_target_;
-      planner_->applied_valid = true;
-      planner_->waitForFeedback(f.now, reason_);
-      planner_->relief = interaction->holdReference(planner_->applied_relief);
-    }
-    if(stop_pending_ && !retarget_pending_)
-      completeStop("observation hold completed cancellation");
-    return;
-  }
-  if(why.empty() && !faulted_)
-  {
-    // A faster source can change while min(body,joint) repeats. Its excursion
-    // must invalidate quiet history, not disappear before the next joint sample.
-    if(f.body_omega.norm() >= feedback_config_.settle_body_rate ||
-       f.joint_rate.tail<2>().norm() >= feedback_config_.settle_joint_rate)
-      preparation_window_.reset();
-    preparation_stats_ = preparation_window_.observe(
-        std::min(f.body_stamp, f.joint_stamp), {{f.body_omega.x(), f.body_omega.y(), f.body_omega.z()}},
-        {{f.joint_rate[1], f.joint_rate[2]}}, feedback_config_.preparation_quiet_time, feedback_config_.timeout);
-    preparation_ready_ = preparation_stats_.qualifies(
-        feedback_config_.settle_body_rate, feedback_config_.settle_joint_rate, feedback_config_.settle_mean_rate);
-  }
-  else
-  {
-    preparation_window_.reset();
-    preparation_stats_ = roll_yaw::SettlingStatistics();
-    preparation_ready_ = false;
-  }
-  if(feedback_waiting_ && !faulted_)
-  {
-    feedback_waiting_ = false;
-    contact_hold_since_ = 0;
-    hold_reason_ = HoldReason::NONE;
-    manual_time_ = f.now;
-    rezero_previous_time_ = 0;
-    rezero_rate_valid_ = false;
-    roll_yaw_rezero_feedback_dt_ = 0;
-    if(retarget_pending_)
-      completeStop("coherent feedback restored after replacement hold");
-    if(pitch_velocity_.active)
-    {
-      pitch_velocity_.clock = f.now;
-      if(pitch_velocity_.pending)
-        completeStop("coherent feedback restored after velocity takeover hold");
-    }
-    if(!pitch_velocity_.active && !planner_ && roll_yaw_pitch_rezero_state_ == RollYawPitchRezeroState::IDLE)
-    {
-      if(jog_.active && !jog_pending_) manual_tracking_ = true;
-      if(hold_reason_ != HoldReason::FEASIBILITY)
-        reason_ = "coherent advancing feedback restored; accepted destination retained";
-    }
-  }
-  if(!faulted_)
-  {
-    if(roll_yaw_pitch_rezero_state_ != RollYawPitchRezeroState::IDLE)
-      applyRollYawPitchRezeroTarget();
-    else
-    {
-      if(connection_pending_)
-        advancePreparedConnection();
-      if(planner_ && !faulted_)
-      {
-        updateInteraction(f);
-        planner_->applied = final_target_;
-        planner_->applied_valid = true;
-        const auto rollback = planner_->referenceRollback();
-        planner_->tick(f);
-        if(planner_->stage == roll_yaw::Stage::FAULT_HOLD)
-          faultHold("trajectory fault: " + planner_->first_fault);
+        const auto name = wire_coordinates_.find(m.mode);
+        if(name == wire_coordinates_.end() || !coordinate_map_.count(name->second)) why = "unknown coordinate command";
         else
         {
-          const auto& state = interaction->diagnostics().admittance_;
-          const double dt = manual_time_ > 0 ? std::min(f.now - manual_time_, feedback_config_.max_execution_step) : 0;
-          roll_yaw::Reference candidate;
-          std::string error;
-          measured_coordinates_ = f.eta;
-          measured_coordinates_[0] = planner_->measured.alpha;
-          const bool accepted = dt > 0 && roll_yaw::compliantReference(model_, planner_->target,
-              final_target_, state.offset, state.rate, state.acceleration, dt, planning_config_, candidate, error) &&
-              candidateTrackingAllowed(candidate, planning_config_, dt, error) &&
-              roll_yaw::mechanismBrakingAllowed(model_, candidate, feedback_config_.max_execution_step,
-                                               planning_config_, error);
-          if(accepted)
-          {
-            if(hold_reason_ == HoldReason::FEASIBILITY) hold_reason_ = HoldReason::NONE;
-            manual_reference_ = planner_->target;
-            local_pitch_.valid = true;
-            local_pitch_.start = manual_reference_.body.linear();
-            local_pitch_.angle = 0;
-            local_pitch_.rate = manual_reference_.body_omega.y();
-            local_pitch_.offset = state.offset;
-            planner_->applied_relief = state.offset;
-            final_target_ = candidate;
-            interaction->reconcileReference(true, false, state.offset);
-          }
-          else
-          {
-            rollback();
-            interaction->reconcileReference(false, false, local_pitch_.offset);
-            planner_->reference_updated = false;
-            if(dt > 0)
-            {
-              hold_reason_ = HoldReason::FEASIBILITY;
-              planner_->reason = "corrected target infeasible; last feasible reference retained: " + error;
-            }
-          }
-          if(!retarget_pending_) nominal_ = planner_->target.eta;
-          reason_ = planner_->reason;
-        }
-      }
-      roll_yaw::Estimate contact;
-      if(!planner_ && model_.estimate(f.body, f.eta, contact))
-      {
-        Eigen::Vector3d measured_q = f.eta;
-        measured_q[0] = contact.alpha;
-        measured_coordinates_ = measured_q;
-        tracking_error_ = final_target_.eta - measured_q;
-        body_tracking_error_ = roll_yaw::logSO3(f.body.linear().transpose() * final_target_.body.linear()).norm();
-        Eigen::Isometry3d reachable;
-        if(!model_.evaluateBody(measured_q, reachable))
-        { faultHold("measured reachable body FK invalid"); return; }
-        // Rotation residual in reachable-body axes; never subtract error norms.
-        contact_rotation_residual_ = roll_yaw::logSO3(reachable.linear().transpose() * f.body.linear());
-        const auto limits = onlineLimits();
-        const Eigen::Array3d speed = final_target_.velocity.cwiseAbs().array();
-        braking_reserve_ = (speed.square() / limits.limits.acceleration.array() +
-            .5 * speed * feedback_config_.max_execution_step).matrix();
-        auto scale = [&](double used, double hard)
-        {
-          return roll_yaw::trackingFeedScale(used, hard, feedback_config_.soft_tracking_fraction);
-        };
-        const double body_scale = scale(body_tracking_error_ + model_.travelWeights().dot(braking_reserve_),
-                                        feedback_config_.orientation_tolerance);
-        for(int i = 0; i < 3; ++i)
-        {
-          const bool reducing = tracking_error_[i] * (nominal_[i] - final_target_.eta[i]) < 0;
-          feed_scale_[i] = std::min(body_scale, reducing ? 1.0 :
-              scale(std::abs(tracking_error_[i]) + braking_reserve_[i], feedback_config_.tracking_tolerance));
-        }
-        // This is a current diagnostic, not a latch. Candidate checks below use
-        // actual rotations plus a conservative continuous stopping envelope.
-        tracking_hold_ = feed_scale_.maxCoeff() == 0;
-        if(feed_scale_.minCoeff() < 1)
-        {
-          hold_reason_ = HoldReason::TRACKING;
-          reason_ = "tracking feed scaled; accepted destination retained";
-        }
-        else if(hold_reason_ == HoldReason::TRACKING)
-          hold_reason_ = HoldReason::NONE;
-      }
-      if(!planner_) updateInteraction(f);
-      roll_yaw::Reference next;
-      if(!faulted_ && buildFinalMechanismTarget(next, f.now))
-      {
-        final_target_ = next;
-        if(stop_pending_ && planner_ && planner_->stage == roll_yaw::Stage::COMPLETED_HOLD)
-        {
-          completeStop("trajectory braking finished");
-        }
-        if(planner_ && planner_->plan.ok)
-        {
-          double residual;
-          roll_yaw::taskPitch(roll_yaw::cuttingOrientation(planner_->plan.neutral, planner_->plan.goal, 0, 0, 0).rotation,
-                    final_target_.body.linear(), control_pitch_, control_pitch_, residual);
+          const int index = coordinate_map_.at(name->second);
+          if(m.value < model_.lower[index] || m.value > model_.upper[index]) why = "coordinate outside limits";
+          else coordinateCommand(index, m.value);
         }
       }
     }
-  }
-  if(!roll_yaw::poseValid(final_target_.body) || !roll_yaw::poseValid(final_target_.cog))
-  {
-    faultHold("invalid controller reference");
-    return;
-  }
-}
-void GimbalrotorPerchingNavigator::updateRollYaw()
-{
-  const double update_started = roll_yaw::steadySeconds();
-  std::lock_guard<std::recursive_mutex> l(perchingStateMutex());
-  const double state_acquired = roll_yaw::steadySeconds();
-  RollYawDispatchScope dispatch(this);
-  defer_diagnostics_ = true;
-  roll_yaw::workCounters() = roll_yaw::WorkCounters();
-  subdivisions_ = 0;
-  pending_reference_ack_.data.clear();
-  observer_wall_ = 0;
-  captureRollYawInputs();
-  if(lock_valid_ && dynamics_snapshot_check_) model_check_ = dynamics_snapshot_check_();
-  dynamics_snapshot_valid_ = lock_valid_ && dynamics_snapshot_check_ && model_check_.valid;
-  drainRollYawCommands();
-  if(auto plan = prepare_worker_->take())
-  {
-    const bool expected = prepare_pending_;
-    prepare_pending_ = false;
-    prepare_wall_ = plan->wall_seconds;
-    if(expected)
-      prepare_result_ = plan->reason;
-    if(expected && planner_ && pending_generation_ == producer_generation_ && lock_valid_ && !faulted_)
-    {
-      if(plan->session != roll_yaw_lock_stamp_.toNSec())
-        faultHold("invalid prepare worker session");
-      else if(!planner_->submissionMatches(*plan, feedback(), planner_->target))
-      {
-        planner_->hold("applied start changed during prepare; prepare again");
-        planner_->plan = roll_yaw::Plan();
-        if(!transitionNominalReference()) faultHold(reason_);
-      }
-      else if(planner_->accept(std::move(*plan)))
-      {
-        planner_->applied_relief = local_pitch_.offset;
-        connection_pending_ = true;
-        connection_wait_started_ = roll_yaw::steadySeconds();
-        advancePreparedConnection();
-      }
-      reason_ = planner_->reason;
-      prepare_result_ = reason_;
-      std_msgs::String result_ack;
-      result_ack.data = "action=prepare_result session=" + std::to_string(roll_yaw_lock_stamp_.toNSec()) +
-                        " accepted=" + (planner_->plan.ok ? "true" : "false") + " phase=" +
-                        (connection_pending_                   ? "waiting"
-                         : planner_->stage == roll_yaw::Stage::PRE_ALIGN ? "moving"
-                                                               : "failed") +
-                        " plan_ready=" + (planner_->plan.ok ? "true" : "false") +
-                        " motion_active=" + (planner_->stage == roll_yaw::Stage::PRE_ALIGN ? "true" : "false") +
-                        " reason=" + reason_;
-      ack_pub_.publish(result_ack);
-    }
-  }
-  if(auto result = jog_worker_->take())
-  {
-    if(jog_pending_ && jog_.active && result->session == roll_yaw_lock_stamp_.toNSec() && !faulted_)
-    {
-      jog_pending_ = false;
-      if(!result->ok) finishPitchJog("rejected", "endpoint admission: " + result->reason);
-      else
-      {
-        nominal_ = result->goal;
-        manual_tracking_ = true;
-        manual_time_ = feedback().now;
-        jog_.phase = "waiting";
-        reason_ = "endpoint admitted; waiting for feasible bounded follower step";
-        std_msgs::String ack;
-        ack.data = "action=body_pitch_delta session=" + std::to_string(jog_.session) +
-            " accepted=true phase=waiting reason=" + reason_;
-        ack_pub_.publish(ack);
-      }
-    }
-  }
-  const auto applied = final_target_;
-  const auto saved_velocity = pitch_velocity_;
-  const auto saved_pitch_target = pitch_target_;
-  const auto saved_pulse = pitch_pulse_;
-  const auto saved_local_pitch = local_pitch_;
-  const auto saved_manual_reference = manual_reference_;
-  const auto saved_jog = jog_;
-  const auto saved_rezero = rezero_alpha_;
-  const auto saved_rezero_state = roll_yaw_pitch_rezero_state_;
-  const bool saved_rezero_ready = roll_yaw_pitch_rezero_ready_;
-  const auto saved_nominal = nominal_;
-  const bool saved_tracking = manual_tracking_, saved_stop = stop_pending_;
-  const bool saved_retarget = retarget_pending_;
-  auto* const saved_planner = planner_.get();
-  const auto rollback_planner = planner_ ? planner_->referenceRollback() : std::function<void()>();
-  const double reference_started = roll_yaw::steadySeconds();
-  const auto interaction = interaction_.lock();
-  if(interaction && interaction->articulated() && (!lock_valid_ || !feedback().hover))
-    interaction->invalidateArticulated(interactionInput(feedback()), "requires a valid attached HOVER session");
-  if(force_landing_flag_ && ownsRollYawTargets())
-    selectPerchingMode(perching_geometry::Mode::NORMAL, false);
-  if(lock_valid_ && perchingSession().lock_stamp != roll_yaw_lock_stamp_)
-    faultHold("base lock identity replaced");
-  updateRollYawBodyPitchFeedback();
-  target_applied_this_update_ = false;
-  updateCommonPerching();
-  // Roll-yaw owns coherent body/joint output throughout an enabled lock.
-  if(lock_valid_ && !target_applied_this_update_)
-    applyRollYawTarget();
-  if(interaction)
-    interaction->publishArticulatedLoad(interactionInput(feedback())); // Independent of diagnostic throttling/subscribers.
-  // No model generation exists in RobotModel (including setExtraModuleMap).
-  // Recheck the exact signature before commit; all intermediate users share
-  // the first check. No tree/inertia map is copied at control frequency.
-  if(lock_valid_ && dynamics_snapshot_check_) model_check_ = dynamics_snapshot_check_();
-  dynamics_snapshot_valid_ = lock_valid_ && dynamics_snapshot_check_ && model_check_.valid;
-  if(lock_valid_ && !dynamics_snapshot_valid_)
-  {
-    final_target_ = applied;
-    if(model_check_.available)
-      faultHold("fixed model mismatch at commit: " + model_check_.describe());
-    else
-    {
-      roll_yaw::scaleReference(final_target_, 0, 0);
-      roll_yaw::scaleReference(manual_reference_, 0, 0);
-      local_pitch_.rate = 0;
-      if(local_pitch_.valid && interaction) interaction->holdReference(local_pitch_.offset);
-      feedback_waiting_ = true;
-      recovery_body_stamp_ = measured_.body_stamp;
-      recovery_joint_stamp_ = measured_.joint_stamp;
-      manual_time_ = feedback().now;
-      reason_ = "model temporarily unavailable at commit: " + model_check_.describe();
-    }
-  }
-  reference_wall_ = roll_yaw::steadySeconds() - reference_started - observer_wall_;
-  const double publication_started = roll_yaw::steadySeconds();
-  {
-    const double wait_started = roll_yaw::steadySeconds();
-    std::lock_guard<std::mutex> input_lock(input_mutex_);
-    const double lock_started = roll_yaw::steadySeconds();
-    input_lock_wait_ += lock_started - wait_started;
-    auto current = inputs_.measured_;
-    current.now = ros::Time::now().toSec();
-    current.hover = navi_state_ == HOVER_STATE && !force_landing_flag_;
-    current.valid = inputs_.joint_valid_ && inputs_.body_valid_ &&
-                    std::abs(current.joint_stamp - current.body_stamp) <= synchronization_tolerance_;
-    // Normal observation advancement and ordinary target refresh do not cancel
-    // work. Only an urgent owner event or actual loss of eligibility does.
-    bool commit_hard_fault = false;
-    const auto commit_rejection = lock_valid_ ? contactSafetyRejection(current, &commit_hard_fault) : std::string();
-    commit_feedback_valid_ = commit_rejection.empty();
-    if(commit_hard_fault)
-    {
-      final_target_ = applied;
-      faultHold(commit_rejection);
-    }
-    const bool preempted = urgent_sequence_ != calculation_sequence_;
-    const bool overrun = roll_yaw::steadySeconds() - update_started > feedback_config_.max_execution_gap;
-    if(lock_valid_ && !faulted_ && (preempted || !commit_feedback_valid_ || overrun))
-    {
-      ++preempted_updates_;
-      pending_reference_ack_.data.clear();
-      final_target_ = applied;
-      if(!faulted_)
-      {
-        pitch_velocity_ = saved_velocity;
-        pitch_target_ = saved_pitch_target;
-        pitch_pulse_ = saved_pulse;
-        local_pitch_ = saved_local_pitch;
-        manual_reference_ = saved_manual_reference;
-        if(interaction) interaction->reconcileReference(false, false, local_pitch_.offset);
-        jog_ = saved_jog;
-        nominal_ = saved_nominal;
-        manual_tracking_ = saved_tracking;
-        stop_pending_ = saved_stop;
-        retarget_pending_ = saved_retarget;
-        rezero_alpha_ = saved_rezero;
-        if(!roll_yaw_pitch_rezero_failed_)
-        {
-          roll_yaw_pitch_rezero_state_ = saved_rezero_state;
-          roll_yaw_pitch_rezero_ready_ = saved_rezero_ready;
-        }
-        if(planner_ && planner_.get() == saved_planner) rollback_planner();
-      }
-      // Emergency observation/preemption hold discards this interval, including
-      // derivatives. The next update consumes stop/reset before any feeding.
-      roll_yaw::scaleReference(final_target_, 0, 0);
-      roll_yaw::scaleReference(manual_reference_, 0, 0);
-      local_pitch_.rate = 0;
-      if(local_pitch_.valid && interaction) interaction->holdReference(local_pitch_.offset);
-      if(pitch_velocity_.active)
-      {
-        pitch_velocity_.clock = current.now;
-        if(!retarget_pending_) nominal_ = manual_reference_.eta;
-      }
-      if(roll_yaw_pitch_rezero_state_ != RollYawPitchRezeroState::IDLE && !roll_yaw_pitch_rezero_failed_)
-      {
-        roll_yaw_pitch_rezero_ready_ = false;
-        if(roll_yaw_pitch_rezero_state_ == RollYawPitchRezeroState::HOLD)
-          roll_yaw_pitch_rezero_state_ = RollYawPitchRezeroState::ACTIVE;
-      }
-      manual_time_ = current.now;
-      feedback_waiting_ = true;
-      recovery_body_stamp_ = current.body_stamp;
-      recovery_joint_stamp_ = current.joint_stamp;
-      hold_reason_ = overrun ? HoldReason::CLOCK : HoldReason::FEEDBACK;
-      reason_ = preempted ? "holding applied reference: pending stop/session change"
-                : overrun ? "holding accepted destination: execution overrun; interval discarded"
-                          : "holding accepted destination: feedback invalid at commit";
-      if(planner_)
-      {
-        planner_->applied = final_target_;
-        planner_->applied_valid = true;
-        planner_->waitForFeedback(current.now, reason_);
-        if(interaction) planner_->relief = interaction->holdReference(planner_->applied_relief);
-      }
-    }
-    if(lock_valid_ && current.hover && roll_yaw::poseValid(final_target_.body) &&
-       roll_yaw::poseValid(final_target_.cog))
-    {
-      commandRollYawBaselinkPose(final_target_);
-      publishRollYawJointTarget();
-      const double wall = roll_yaw::steadySeconds();
-      publication_period_ = publication_stamp_ > 0 ? wall - publication_stamp_ : 0;
-      publication_stamp_ = wall;
-    }
-    input_lock_held_ += roll_yaw::steadySeconds() - lock_started;
-  }
-  if(!faulted_ && !pending_reference_ack_.data.empty()) ack_pub_.publish(pending_reference_ack_);
-  pending_reference_ack_.data.clear();
-  publication_wall_ = roll_yaw::steadySeconds() - publication_started;
-  defer_diagnostics_ = false;
-  const double diagnostic_started = roll_yaw::steadySeconds();
-  publishRollYawDiagnostics();
-  diagnostic_wall_ = roll_yaw::steadySeconds() - diagnostic_started;
-  navigation_wall_ = roll_yaw::steadySeconds() - update_started;
-  completed_stamp_ = ros::Time::now().toSec();
-  ++completed_updates_;
-  completed_work_ = roll_yaw::workCounters();
-  completed_reference_wall_ = reference_wall_;
-  completed_observer_wall_ = observer_wall_;
-  completed_diagnostic_wall_ = diagnostic_wall_;
-  completed_publication_wall_ = publication_wall_;
-  completed_lock_wait_ = input_lock_wait_;
-  completed_lock_held_ = input_lock_held_;
-  completed_state_lock_wait_ = state_acquired - update_started;
-  completed_state_lock_held_ = roll_yaw::steadySeconds() - state_acquired;
-  completed_subdivisions_ = subdivisions_;
-  if(navigation_wall_ > .025) ++overruns_;
-}
-void GimbalrotorPerchingNavigator::publishRollYawDiagnostics()
-{
-  if(defer_diagnostics_) return;
-
-  const auto interaction = interaction_.lock();
-  if(!interaction)
-    return; // The controller registers after both plugin initializers have run.
-  const auto& interaction_diagnostic = interaction->diagnostics();
-  using InteractionSource = aerial_robot_control::RollYawInteraction::InteractionSource;
-  const auto f = feedback();
-  const double now = roll_yaw::steadySeconds();
-  const std::string transition = !ownsRollYawTargets()                          ? "FREE_FLIGHT"
-                                 : faulted_                                        ? "FAULT_HOLD"
-                                 : roll_yaw_pitch_rezero_state_ == RollYawPitchRezeroState::ACTIVE ? "PITCH_REZERO_ACTIVE"
-                                 : roll_yaw_pitch_rezero_state_ == RollYawPitchRezeroState::HOLD   ? "PITCH_REZERO_HOLD"
-                                 : planner_                                        ? roll_yaw::stageName(planner_->stage)
-                                                                                   : "CONTACT_LOCKED";
-  const bool changed = transition != last_status_;
-  if(changed)
-  {
-    if(faulted_)
-      ROS_ERROR_STREAM("[RollYaw] " << transition << ": " << previous_failure_);
-    else
-      ROS_INFO_STREAM("[RollYaw] " << transition << ": " << reason_);
-    last_status_ = transition;
-  }
-  if(!changed && now - last_diagnostics_ < .2)
-    return;
-  last_diagnostics_ = now;
-  if(lock_valid_)
-    ROS_INFO_STREAM_THROTTLE(2.0, "[RollYaw] " << transition << ": " << reason_ << "; " << interaction_diagnostic.admittance_reason_);
-  std_msgs::UInt64 session;
-  session.data = lock_valid_ ? roll_yaw_lock_stamp_.toNSec() : 0;
-  session_pub_.publish(session);
-  std_msgs::Bool flag;
-  flag.data = roll_yaw_pitch_rezero_state_ == RollYawPitchRezeroState::ACTIVE;
-  rezero_active_pub_.publish(flag);
-  flag.data = roll_yaw_pitch_rezero_ready_;
-  rezero_ready_pub_.publish(flag);
-  flag.data = roll_yaw_pitch_rezero_failed_;
-  rezero_failed_pub_.publish(flag);
-  const char* state = !ownsRollYawTargets()                          ? "FREE_FLIGHT"
-                      : !lock_valid_                                    ? "LOCK_FAILED"
-                      : roll_yaw_pitch_rezero_failed_                            ? "PITCH_REZERO_FAILED"
-                      : faulted_                                        ? "FAULT_HOLD"
-                      : roll_yaw_pitch_rezero_state_ == RollYawPitchRezeroState::ACTIVE ? "PITCH_REZERO_ACTIVE"
-                      : roll_yaw_pitch_rezero_state_ == RollYawPitchRezeroState::HOLD   ? "PITCH_REZERO_HOLD"
-                      : planner_                                        ? roll_yaw::stageName(planner_->stage)
-                                                                        : "CONTACT_LOCKED";
-  std_msgs::String status;
-  status.data = std::string(state) + ": " + reason_;
-  if((faulted_ || roll_yaw_pitch_rezero_failed_) && !previous_failure_.empty() && previous_failure_ != reason_)
-    status.data += "; hold cause: " + previous_failure_;
-  status.data += " jog_active=" + std::to_string(jog_.active ? 1 : 0) + " jog_phase=" + jog_.phase;
-  roll_yaw_state_pub_.publish(status);
-  if(lock_valid_)
-  {
-    geometry_msgs::Vector3Stamped angles;
-    angles.header.stamp = ros::Time::now();
-    angles.header.frame_id = "perching_lock_" + std::to_string(roll_yaw_lock_stamp_.toNSec());
-    // Effective configured/URDF intersection from snapshotModel(). Wire order
-    // matches nominal_angles [roll, alpha, yaw], not internal [alpha, roll, yaw].
-    const auto& limits = planning_config_.limits;
-    angles.vector.x = limits.lower[1];
-    angles.vector.y = limits.lower[0];
-    angles.vector.z = limits.lower[2];
-    position_lower_pub_.publish(angles);
-    angles.vector.x = limits.upper[1];
-    angles.vector.y = limits.upper[0];
-    angles.vector.z = limits.upper[2];
-    position_upper_pub_.publish(angles);
-    angles.vector.x = nominal_[1];
-    angles.vector.y = nominal_[0];
-    angles.vector.z = nominal_[2];
-    nominal_pub_.publish(angles);
-    angles.vector.x = final_target_.eta[1];
-    angles.vector.y = final_target_.eta[0];
-    angles.vector.z = final_target_.eta[2];
-    angles_pub_.publish(angles);
-    std_msgs::Float64 pitch;
-    pitch.data = nominal_[0];
-    pitch_pub_.publish(pitch);
-    nav_msgs::Odometry body;
-    body.header.stamp = ros::Time::now();
-    body.header.frame_id = world_;
-    body.child_frame_id = body_frame_;
-    body.pose.pose = poseMsg(final_target_.body);
-    tf::vector3TFToMsg(tfVector(final_target_.body_omega), body.twist.twist.angular);
-    reference_pub_.publish(body);
-    body.header.stamp.fromSec(f.body_stamp);
-    body.pose.pose = poseMsg(f.body);
-    tf::vector3TFToMsg(tfVector(f.body_omega), body.twist.twist.angular);
-    measured_pub_.publish(body);
-    body.header.stamp = ros::Time::now();
-    body.child_frame_id = "desired_cog";
-    body.pose.pose = poseMsg(final_target_.cog);
-    tf::vector3TFToMsg(tfVector(final_target_.cog_omega), body.twist.twist.angular);
-    tf::vector3TFToMsg(tfVector(final_target_.cog.linear().transpose() * final_target_.cog_velocity),
-                       body.twist.twist.linear);
-    cog_pub_.publish(body);
-    if(roll_yaw::feedbackStatus(f, feedback_config_, planning_config_) == roll_yaw::FeedbackStatus::READY)
-      model_.estimate(f.body, f.eta, measured_contact_);
   }
   std::ostringstream out;
-  out << std::setprecision(12) << "eta=[passive alpha, active roll, active yaw]; units=rad,m,s; state=" << state
-      << " lock=" << session.data << " reason=[" << reason_ << "]"
-      << " nominal=" << nominal_.transpose() << " applied=" << final_target_.eta.transpose()
-      << " measured_active=" << f.eta.tail<2>().transpose() << " measured_alpha=" << measured_contact_.alpha
-      << " joint_age=" << f.now - f.joint_stamp << " body_age=" << f.now - f.body_stamp << " joint_failure=["
-      << joint_failure_ << "] body_failure=[" << body_failure_ << "]"
-      << " pivot_error=" << measured_contact_.pivot_error << " hinge_residual=" << measured_contact_.hinge_residual
-      << " rezero_alpha=" << rezero_alpha_ << " rezero_pitch=" << rezero_previous_pitch_
-      << " rezero_pitch_rate=" << rezero_measured_rate_ << " rezero_rate_valid=" << rezero_rate_valid_
-      << " rezero_sign=" << rezero_sign_ << " manual_receipt=" << manual_receipt_stamp_.toSec()
-      << " ignored_body_stamps=" << body_ignored_stamps_ << " ignored_joint_stamps=" << joint_ignored_stamps_;
-  out << " pivot_limit=" << feedback_config_.pivot_tolerance << " hinge_limit=" << feedback_config_.hinge_tolerance
-      << " first_fault=[" << previous_failure_ << "] admittance=[" << interaction_diagnostic.admittance_reason_ << "]";
-  if(planner_ && !planner_->plan.goal.align_only)
-    out << " phase_s=" << planner_->progress << " planned_pitch=" << planner_->planned_pitch
-        << " measured_pitch=" << planner_->task.raw << " measured_progress_rad=" << planner_->task.current
-        << " original_goal=" << planner_->plan.goal.pitch_end << " goal_error=" << planner_->goal_error
-        << " control_pitch=" << control_pitch_ << " goal_reached=" << planner_->goal_reached;
-  std_msgs::String detail;
-  detail.data = out.str();
-  details_pub_.publish(detail);
-  diagnostic_msgs::DiagnosticArray array;
-  array.header.stamp = ros::Time::now();
-  diagnostic_msgs::DiagnosticStatus diagnostic;
-  diagnostic.name = "gimbalrotor/roll_yaw_perching";
-  diagnostic.hardware_id = "perching_lock_" + std::to_string(session.data);
-  diagnostic.level = faulted_ ? diagnostic_msgs::DiagnosticStatus::ERROR
-                     : (feedback_waiting_ || hold_reason_ != HoldReason::NONE ||
-                        (lock_valid_ && !contactSafetyRejection(f).empty()) || prepare_pending_ ||
-                        (planner_ && planner_->progress_lag))
-                         ? diagnostic_msgs::DiagnosticStatus::WARN
-                         : diagnostic_msgs::DiagnosticStatus::OK;
-  diagnostic.message = std::string(state) + ": " + reason_;
-  auto field = [&](const std::string& name, const auto& value)
-  {
-    if constexpr(std::is_floating_point_v<std::decay_t<decltype(value)>>)
-      if(!std::isfinite(value))
-        return;
-    diagnostic_msgs::KeyValue item;
-    item.key = name;
-    std::ostringstream text;
-    text << std::setprecision(17) << value;
-    item.value = text.str();
-    diagnostic.values.push_back(std::move(item));
-  };
-  const double nan = std::numeric_limits<double>::quiet_NaN();
-  field("lock_id", session.data);
-  field("session_id", session.data);
-  field("plan_id", plan_id_);
-  field("producer_generation", producer_generation_);
-  field("first_fault", previous_failure_);
-  field("feedback_waiting", feedback_waiting_);
-  field("hold_reason", static_cast<int>(hold_reason_)); // NONE, FEEDBACK, CONTACT, CLOCK, TRACKING, FEASIBILITY
-  field("tracking_hold", tracking_hold_);
-  {
-    std::lock_guard<std::mutex> input_lock(input_mutex_);
-    field("queued_commands", pending_commands_.size());
-    field("queue_head", pending_commands_.empty() ? "none" : pending_commands_.front().key);
-  }
-  field("contact_hold_duration_s", contact_hold_since_ > 0 ? f.now - contact_hold_since_ : 0);
-  field("model_check", model_check_.valid ? "valid" : model_check_.describe());
-  for(int i = 0; i < 3; ++i)
-  {
-    field("feed_scale_" + std::to_string(i), feed_scale_[i]);
-    field("measured_coordinate_" + std::to_string(i), measured_coordinates_[i]);
-    field("contact_rotation_residual_" + std::to_string(i), contact_rotation_residual_[i]);
-  }
-  field("stopping", stop_pending_);
-  field("motion_epoch", motion_identity_.epoch);
-  field("motion_source", motion_identity_.source);
-  field("motion_sequence", motion_identity_.sequence);
-  field("body_pitch_target_valid", pitch_target_.valid);
-  field("body_pitch_target_frame", pitch_target_.frame);
-  field("body_pitch_target_rad", pitch_target_.angle);
-  field("body_pitch_target_progress_rad", pitch_target_.progress);
-  field("body_pitch_target_reference_complete", pitch_target_.complete && !pitch_velocity_.active);
-  const double pitch_target_error = pitch_target_.valid && pitch_target_.frame_valid && contactSafetyRejection(f).empty()
-      ? roll_yaw::logSO3((pitch_target_.start * roll_yaw::expSO3(Eigen::Vector3d::UnitY() * pitch_target_.angle)).transpose() *
-                        f.body.linear()).norm() : nan;
-  field("body_pitch_target_measured_error_rad", pitch_target_error);
-  field("body_pitch_target_measured_goal_reached", pitch_target_.complete && !pitch_velocity_.active &&
-        std::isfinite(pitch_target_error) && pitch_target_error <=
-        std::min(feedback_config_.goal_tolerance, std::max(1e-5, .1 * std::abs(pitch_target_.angle))));
-  field("manual_callback_wall_s", manual_wall_);
-  const bool jog_valid = lock_valid_ && jog_.session == roll_yaw_lock_stamp_.toNSec() && jog_.session != 0;
-  double jog_measured = nan, jog_cross = nan, jog_error = nan;
-  if(jog_valid && contactSafetyRejection(f).empty())
-  {
-    if(!roll_yaw::taskPitch(jog_.start.linear(), f.body.linear(), jog_.progress, jog_measured, jog_cross))
-      jog_measured = nan;
-    else
-      jog_error = roll_yaw::logSO3(f.body.linear().transpose() * jog_.endpoint).norm();
-  }
-  field("pulse_sequence", pitch_pulse_.sequence);
-  field("pulse_complete", pitch_pulse_.completed);
-  field("local_pitch_nominal_rad", local_pitch_.valid ? local_pitch_.angle : nan);
-  field("body_pitch_velocity_active", pitch_velocity_.active);
-  field("body_pitch_velocity_pending", pitch_velocity_.pending);
-  field("body_pitch_velocity_requested_rad_s", pitch_velocity_.requested);
-  field("body_pitch_velocity_applied_rad_s", lock_valid_ ? final_target_.body_omega.y() : nan);
-  field("body_pitch_velocity_remaining_s", pitch_velocity_.active ? std::max(0.0, pitch_velocity_.expires - f.now) : 0);
-  field("body_pitch_velocity_limit", pitch_velocity_.limit);
-  field("body_pitch_jog", jog_.active);
-  field("body_pitch_jog_phase", jog_.phase);
-  field("body_pitch_jog_route", "manual_endpoint_ik");
-  field("body_pitch_jog_admission_wall_s", jog_admission_wall_);
-  field("body_pitch_jog_delta_rad", jog_valid ? jog_.delta : nan);
-  field("body_pitch_jog_progress_rad", jog_valid ? jog_.progress : nan);
-  field("body_pitch_jog_measured_pitch_rad", jog_measured);
-  field("body_pitch_jog_measured_endpoint_error_rad", jog_error);
-  field("body_pitch_jog_measured_goal_reached", jog_.phase == "reference_complete" &&
-      std::isfinite(jog_error) && jog_error <= feedback_config_.goal_tolerance);
-  field("body_pitch_jog_max_delta_rad", body_pitch_jog_max_delta_);
-  field("prepared_connection_pending", connection_pending_);
-  double alignment_error = nan;
-  if(planner_ && planner_->plan.ok && planner_->plan.goal.align_only && contactSafetyRejection(f).empty())
-    alignment_error =
-        roll_yaw::logSO3(f.body.linear().transpose() * planner_->plan.align.desired(planner_->plan.align.duration()).rotation)
-            .norm();
-  field("alignment_endpoint_error_rad", alignment_error);
-  field("geometry_prepared", planner_ && planner_->plan.ok);
-  field("cut_duration_s", planner_ && planner_->plan.ok ? planner_->plan.cut.duration() : nan);
-  field("time_scale", planner_ && planner_->plan.ok ? std::pow(2.0, planner_->plan.scale_attempt) : nan);
-  field("saw_proxy_valid", planning_config_.saw_point_valid);
-  field("saw_proxy_drop_m", planner_ && planner_->plan.ok ? planner_->plan.proxy_drop : nan);
-  field("body_alignment_pending", prepare_pending_ && planner_ && planner_->plan.goal.align_only);
-  field("body_alignment_pending_yaw_rad",
-        prepare_pending_ && planner_ && planner_->plan.goal.align_only ? planner_->plan.goal.yaw : nan);
-  field("body_alignment_pending_roll_rad",
-        prepare_pending_ && planner_ && planner_->plan.goal.align_only ? planner_->plan.goal.roll : nan);
-  field("body_alignment_yaw_rad", body_alignment_valid_ ? alignment_request_.yaw : nan);
-  field("body_alignment_roll_rad", body_alignment_valid_ ? alignment_request_.roll : nan);
-  field("prepare_count", plan_id_);
-  field("prepare_cancellations", prepare_cancellations_);
-  field("prepare_result", prepare_result_);
-  field("prepare_generation", pending_generation_);
-  field("preparation_ready", preparation_ready_);
-  field("preparation_window_s", preparation_stats_.observed);
-  field("prepare_pending", prepare_pending_);
-  field("prepare_elapsed_s", prepare_pending_ ? now - prepare_started_ : prepare_wall_);
-  field("prepare_solve_wall_s", planning_status_->solve_seconds.load());
-  field("prepare_validation_wall_s", planning_status_->validation_seconds.load());
-  field("prepare_deadline_s", prepare_deadline_);
-  field("prepare_interval", planning_status_->interval.load());
-  field("prepare_intervals", planning_status_->total.load());
-  field("prepare_validating", planning_status_->validating.load());
-  field("body_stamp_s", f.body_stamp);
-  field("joint_stamp_s", f.joint_stamp);
-  field("body_age_s", f.now - f.body_stamp);
-  field("joint_age_s", f.now - f.joint_stamp);
-  field("body_receipt_age_s", f.now - body_receipt_);
-  field("joint_receipt_age_s", f.now - joint_receipt_);
-  field("feedback_skew_s", std::abs(f.body_stamp - f.joint_stamp));
-  field("feedback_skew_limit_s", synchronization_tolerance_);
-  field("body_invalid_messages", body_invalid_messages_);
-  field("joint_invalid_messages", joint_invalid_messages_);
-  field("last_body_message_stamp_s", last_body_message_stamp_);
-  field("last_joint_message_stamp_s", last_joint_message_stamp_);
-  field("feedback_timeout_s", feedback_config_.timeout);
-  field("body_ignored_stamps", body_ignored_stamps_);
-  field("joint_ignored_stamps", joint_ignored_stamps_);
-  field("body_failure", body_failure_);
-  field("joint_failure", joint_failure_);
-  field("pivot_error_m", lock_valid_ ? measured_contact_.pivot_error : nan);
-  field("pivot_limit_m", feedback_config_.pivot_tolerance);
-  field("hinge_residual_rad", lock_valid_ ? measured_contact_.hinge_residual : nan);
-  field("hinge_limit_rad", feedback_config_.hinge_tolerance);
-  field("contact_model_warning", lock_valid_ &&
-        (measured_contact_.pivot_error > feedback_config_.pivot_tolerance ||
-         measured_contact_.hinge_residual > feedback_config_.hinge_tolerance));
-  field("effective_body_tracking_error_rad",
-        lock_valid_ ? roll_yaw::logSO3(f.body.linear().transpose() * final_target_.body.linear()).norm() : nan);
-  field("effective_body_tracking_limit_rad", feedback_config_.orientation_tolerance);
-  field("effective_joint_tracking_error_rad",
-        lock_valid_ ? (f.eta.tail<2>() - final_target_.eta.tail<2>()).cwiseAbs().maxCoeff() : nan);
-  field("effective_joint_tracking_limit_rad", feedback_config_.tracking_tolerance);
-  const bool goal_valid = planner_ && planner_->plan.goal.valid() && !planner_->plan.goal.align_only;
-  const bool measured_task_valid = goal_valid && planner_->task.valid && !faulted_ &&
-                                   f.now - planner_->task.stamp <= feedback_config_.timeout &&
-                                   contactSafetyRejection(f).empty();
-  const bool raw_load_valid = articulatedLoadValid(f);
-  const bool fresh_torque = interaction_diagnostic.interaction_valid_ && interaction_diagnostic.interaction_stamp_ > 0 && !faulted_ && !feedback_waiting_ &&
-                            f.now - interaction_diagnostic.interaction_stamp_ >= -feedback_config_.future_tolerance &&
-                            interaction_diagnostic.interaction_receipt_ > 0 && now >= interaction_diagnostic.interaction_receipt_ &&
-                            f.now - interaction_diagnostic.interaction_stamp_ <= feedback_config_.timeout &&
-                            now - interaction_diagnostic.interaction_receipt_ <= feedback_config_.timeout &&
-                            (interaction_diagnostic.interaction_source_ != InteractionSource::ARTICULATED_MOMENTUM || raw_load_valid);
-  field("goal_valid", goal_valid);
-  field("original_goal_rad", goal_valid ? planner_->plan.goal.pitch_end : nan);
-  field("planned_pitch_rad", goal_valid ? planner_->planned_pitch : nan);
-  field("nominal_phase_s", planner_ ? planner_->nominal_progress : nan);
-  field("effective_phase_s", planner_ && std::abs(planner_->applied_relief) < 1e-10 ? planner_->progress : nan);
-  field("phase_speed", planner_ ? planner_->phaseSpeed() : nan);
-  field("resisting_load", planner_ ? planner_->resisting_load
-      : fresh_torque && pitch_velocity_.active && !pitch_velocity_.stopping && local_resisting_load_);
-  field("relief_limit_saturated", planner_ ? planner_->relief_limited
-      : local_pitch_.valid && interaction_diagnostic.admittance_.config.valid() &&
-        std::abs(local_pitch_.offset) >= interaction_diagnostic.admittance_.config.angle_limit - 1e-8);
-  field("measured_task_valid", measured_task_valid);
-  field("measured_pitch_rad", measured_task_valid ? planner_->task.raw : nan);
-  field("filtered_pitch_rad", measured_task_valid ? planner_->task.filtered : nan);
-  field("physical_progress_rad", measured_task_valid ? planner_->task.current : nan);
-  field("maximum_progress_rad", measured_task_valid ? planner_->task.distance : nan);
-  field("cross_track_rad", measured_task_valid ? planner_->task.cross_track : nan);
-  field("goal_error_rad", measured_task_valid ? planner_->goal_error : nan);
-  field("goal_orientation_error_rad", measured_task_valid ? planner_->goal_orientation_error : nan);
-  field("control_pitch_rad", goal_valid ? control_pitch_ : nan);
-  field("path_end_commanded", planner_ && planner_->path_end_commanded);
-  field("goal_reached", planner_ && planner_->goal_reached);
-  field("goal_pending", goal_valid && !planner_->goal_reached);
-  field("progress_lag", planner_ && planner_->progress_lag);
-  field("reference_lead_rad", feedback_config_.reference_lead);
-  field("goal_tolerance_rad", feedback_config_.goal_tolerance);
-  field("current_body_rate_rad_s", body_valid_ ? f.body_omega.norm() : nan);
-  field("current_joint_rate_rad_s", joint_valid_ ? f.joint_rate.tail<2>().norm() : nan);
-  field("settling_valid", planner_ && planner_->settling.complete);
-  field("settling_elapsed_s", planner_ ? planner_->settling_elapsed : nan);
-  field("settling_window_s", planner_ ? planner_->settling.observed : nan);
-  field("settling_body_rms_rad_s", planner_ && planner_->settling.complete ? planner_->settling.body_rms : nan);
-  field("settling_joint_rms_rad_s", planner_ && planner_->settling.complete ? planner_->settling.joint_rms : nan);
-  field("settling_body_mean_rad_s", planner_ && planner_->settling.complete ? planner_->settling.body_mean : nan);
-  field("settling_joint_mean_rad_s", planner_ && planner_->settling.complete ? planner_->settling.joint_mean : nan);
-  field("settling_body_limit_rad_s", feedback_config_.settle_body_rate);
-  field("settling_joint_limit_rad_s", feedback_config_.settle_joint_rate);
-  field("settling_mean_limit_rad_s", feedback_config_.settle_mean_rate);
-  field("settling_timeout_s", feedback_config_.settle_timeout);
-  field("admittance_enabled", interaction_diagnostic.admittance_.enabled);
-  field("admittance_input_usable", fresh_torque);
-  field("admittance_filter_reacquiring", interaction_diagnostic.admittance_.filter_reacquiring);
-  field("admittance_reference_held", faulted_ || feedback_waiting_ || hold_reason_ == HoldReason::FEASIBILITY ||
-        (planner_ ? planner_->interaction_hold : local_interaction_hold_));
-  field("admittance_configured", interaction_diagnostic.interaction_configured_ && interaction_diagnostic.admittance_.config.valid());
-  field("admittance_quiet", interaction->quietContact(interactionInput(f)));
-  field("admittance_hold_eligible", interaction->heldContact(interactionInput(f)));
-  field("tare_collecting", interaction_diagnostic.tare_requested_);
-  field("tare_request_sequence", interaction_diagnostic.tare_request_sequence_);
-  field("enable_request_sequence", interaction_diagnostic.enable_request_sequence_);
-  field("admittance_enable_requested", interaction_diagnostic.enable_requested_);
-  field("admittance_status", interaction_diagnostic.admittance_reason_);
-  field("contact", interaction_diagnostic.admittance_.contact);
-  field("baseline_ready", interaction_diagnostic.admittance_.baseline_ready);
-  field("baseline_samples", interaction_diagnostic.admittance_.samples);
-  field("tare_generation", interaction_diagnostic.tare_generation_);
-  field("bias_Nm", interaction_diagnostic.admittance_.baseline_ready ? interaction_diagnostic.admittance_.bias : nan);
-  field("task_torque_valid", fresh_torque);
-  field("task_torque_Nm", fresh_torque ? interaction_diagnostic.interaction_torque_ : nan);
-  field("torque_stamp_s", interaction_diagnostic.interaction_stamp_);
-  field("interaction_source", interaction_diagnostic.interaction_source_name_);
-  field("legacy_wrench_topic", interaction_diagnostic.interaction_topic_);
-  field("articulated_ready", raw_load_valid);
-  field("articulated_status", interaction_diagnostic.interaction_source_ != InteractionSource::ARTICULATED_MOMENTUM
-                                  ? "not selected: " + interaction_diagnostic.interaction_source_name_
-                                  : interaction->observerReady() && !raw_load_valid
-                                        ? "cached sample no longer current/physically valid: " + interaction_diagnostic.articulated_reason_
-                                        : interaction_diagnostic.articulated_reason_);
-  field("generalized_external_load_valid", raw_load_valid);
-  field("articulated_model_assumption", "captured internal gimbal geometry; gimbal motion/coupling dynamics omitted");
-  std::string gimbal_names;
-  for(const auto& name : rotor_gimbal_joints_)
-    gimbal_names += (gimbal_names.empty() ? "" : ",") + name;
-  field("reduced_model_rotor_gimbal_joints", gimbal_names);
-  field("joint_effort_contract", interaction_diagnostic.effort_contract_);
-  field("joint_effort_source", interaction_diagnostic.effort_source_);
-  field("joint_effort_producer", interaction_diagnostic.effort_producer_);
-  field("joint_effort_topic", interaction_diagnostic.effort_topic_);
-  field("joint_effort_source_valid", interaction_diagnostic.effort_source_valid_);
-  field("generalized_coordinate_order", "alpha," + roll_ + "," + yaw_);
-  field("generalized_load_stamp_s", interaction->observerStamp());
-  field("observer_rates_ready", interaction_diagnostic.observer_rates_ready_);
-  field("observer_rate_residual_rad_s", interaction_diagnostic.angular_rate_residual_);
-  field("observer_gyro_disagreement_x_rad_s", interaction_diagnostic.observer_gyro_disagreement_.x());
-  field("observer_gyro_disagreement_y_rad_s", interaction_diagnostic.observer_gyro_disagreement_.y());
-  field("observer_gyro_disagreement_z_rad_s", interaction_diagnostic.observer_gyro_disagreement_.z());
-  field("observer_worker_wall_s", interaction_diagnostic.articulated_worker_wall_);
-  field("observer_worker_tree_calls", interaction_diagnostic.articulated_worker_tree_calls_);
-  field("generalized_load_age_s", interaction->observerStamp() > 0 ? f.now - interaction->observerStamp() : nan);
-  for(int i = 0; i < 3; ++i)
-    field("generalized_external_load_Nm_" + std::to_string(i), raw_load_valid ? interaction->observerLoad()[i] : nan);
-  field("interaction_frame", interaction_diagnostic.interaction_frame_);
-  field("interaction_point", interaction_diagnostic.interaction_point_);
-  field("interaction_sign", interaction_diagnostic.interaction_sign_);
-  field("interaction_scale", interaction_diagnostic.interaction_scale_);
-  field("torque_age_s", interaction_diagnostic.interaction_stamp_ > 0 ? f.now - interaction_diagnostic.interaction_stamp_ : nan);
-  field("reference_torque_Nm", interaction_diagnostic.admittance_.config.reference_torque);
-  field("filtered_contact_torque_Nm", interaction_diagnostic.admittance_.baseline_ready ? interaction_diagnostic.admittance_.filtered : nan);
-  const double effective_offset = local_pitch_.valid ? local_pitch_.offset : nan;
-  field("effective_offset_rad", effective_offset);
-  field("offset_rad", interaction_diagnostic.admittance_.offset);
-  field("offset_rate_rad_s", interaction_diagnostic.admittance_.rate);
-  field("offset_acceleration_rad_s2", interaction_diagnostic.admittance_.acceleration);
-  // All completed_* timings/counters describe the preceding completed update.
-  field("navigation_wall_s", navigation_wall_);
-  field("completed_update_sequence", completed_updates_);
-  field("completed_update_stamp_s", completed_stamp_);
-  field("timing_scope", "previous_completed_update");
-  field("completed_state_lock_wait_s", completed_state_lock_wait_);
-  field("completed_state_lock_held_s", completed_state_lock_held_);
-  field("completed_input_lock_wait_s", completed_lock_wait_);
-  field("completed_input_lock_held_s", completed_lock_held_);
-  field("completed_reference_wall_s", completed_reference_wall_);
-  field("completed_nonlinear_validation_wall_s", completed_work_.nonlinear_validation_wall);
-  field("completed_observer_wall_s", completed_observer_wall_);
-  field("completed_diagnostic_wall_s", completed_diagnostic_wall_);
-  field("completed_publication_wall_s", completed_publication_wall_);
-  field("completed_subdivisions", completed_subdivisions_);
-  field("completed_fast_model_evaluations", completed_work_.fast_model);
-  field("completed_body_chain_evaluations", completed_work_.body_fk);
-  field("completed_dynamics_full_tree_traversals", completed_work_.full_tree);
-  field("navigation_over_25ms_count", overruns_);
-  field("preempted_updates", preempted_updates_);
-  field("joint_callback_lock_wait_s", joint_callback_wait_);
-  field("body_callback_lock_wait_s", body_callback_wait_);
-  field("joint_callback_queue_age_s", joint_queue_age_);
-  field("joint_samples_coalesced_by_update", coalesced_joint_samples_);
-  field("transport_queue_loss", "not_measured; coalescing_is_not_transport_loss");
-  field("feedback_valid_at_snapshot", snapshot_feedback_valid_);
-  field("feedback_valid_at_commit", commit_feedback_valid_);
-  field("joint_command_publication_period_s", publication_period_);
-  field("accepted_destination_pending", manual_tracking_ || retarget_pending_ || pitch_velocity_.active ||
-        (planner_ && (planner_->stage == roll_yaw::Stage::PRE_ALIGN ||
-                      (planner_->stage == roll_yaw::Stage::EXECUTING && !planner_->path_end_commanded))));
-  field("body_tracking_error_rad", body_tracking_error_);
-  for(int axis = 0; axis < 3; ++axis)
-  {
-    field("tracking_error_rad_" + std::to_string(axis), tracking_error_[axis]);
-    field("braking_reserve_rad_" + std::to_string(axis), braking_reserve_[axis]);
-  }
-  array.status.push_back(std::move(diagnostic));
-  status_pub_.publish(array);
-  geometry_msgs::Vector3Stamped plot;
-  plot.header = array.header;
-  plot.header.frame_id = "perching_lock_" + std::to_string(session.data);
-  plot.vector.x = goal_valid ? planner_->planned_pitch : nan;
-  plot.vector.y = measured_task_valid ? planner_->task.raw : nan;
-  plot.vector.z = goal_valid ? control_pitch_ : nan;
-  if(goal_valid && measured_task_valid &&
-     std::isfinite(plot.vector.x) && std::isfinite(plot.vector.y) && std::isfinite(plot.vector.z))
-    task_pub_.publish(plot);
-  plot.vector.x = interaction_diagnostic.admittance_.offset;
-  plot.vector.y = interaction_diagnostic.admittance_.rate;
-  plot.vector.z = fresh_torque ? interaction_diagnostic.interaction_torque_ : nan;
-  if(fresh_torque && std::isfinite(plot.vector.x) && std::isfinite(plot.vector.y) && std::isfinite(plot.vector.z))
-    compliance_pub_.publish(plot);
+  out << std::setprecision(17) << "action=motion session=" << m.session << " epoch=" << m.epoch << " source=" << m.source
+      << " sequence=" << m.sequence << " mode=" << int(m.mode) << " accepted=" << (why.empty() ? "true" : "false")
+      << " motion_epoch=" << motion_.epoch << " accepted_value=" << m.value << " reason=" << why;
+  std_msgs::String ack; ack.data = out.str(); ack_pub_.publish(ack);
+  last_motion_request_ = msg; last_motion_ack_ = ack;
+  publishDiagnostics();
 }
-}  // namespace aerial_robot_navigation
-PLUGINLIB_EXPORT_CLASS(aerial_robot_navigation::GimbalrotorPerchingNavigator,
-                       aerial_robot_navigation::BaseNavigator);
+
+perching_servo::Sample GimbalrotorPerchingNavigator::servoSample() const
+{
+  perching_servo::Sample s;
+  s.now = ros::Time::now().toSec(); s.hover = navi_state_ == HOVER_STATE;
+  Sample measured;
+  s.model_valid = model_valid_ && observation(measured);
+  if(!s.model_valid || !coordinate_map_.count(positioning_joint_)) return s;
+  const int i = coordinate_map_.at(positioning_joint_);
+  s.joint_stamp = measured.stamp; s.q = measured.q[i]; s.qdot = measured.rate[i];
+  s.body = perching_geometry::toKdl(measured.body); s.angular_speed = measured.omega.norm();
+  s.pitch_rate = perching_servo::pitchRate(s.body, KDL::Vector(measured.omega.x(), measured.omega.y(), measured.omega.z()));
+  return s;
+}
+bool GimbalrotorPerchingNavigator::servoModel(double value, KDL::Frame& contact, KDL::Vector& cog) const
+{
+  if(nominal_.size() == 0 || !coordinate_map_.count(positioning_joint_)) return false;
+  Vector q = nominal_; q[coordinate_map_.at(positioning_joint_)] = value;
+  Pose bc; Eigen::Vector3d center;
+  if(!model_.bodyContact(q, bc, center)) return false;
+  contact = perching_geometry::toKdl(bc); cog = KDL::Vector(center.x(), center.y(), center.z());
+  return true;
+}
+
+void GimbalrotorPerchingNavigator::planCommand(const std::string& action, std::uint64_t session)
+{
+  std::string error;
+  if(!perching_locked_ || session != session_) error = "invalid contact session";
+  else if(action == "stop" || action == "cancel")
+  { stopMotion(); prepared_motion_ = paused_ = false; }
+  else if(action == "pause")
+  {
+    if(!prepared_motion_) error = "no prepared motion";
+    else
+    {
+      paused_destination_ = destination_; paused_body_destination_ = body_destination_; paused_phase_ = phase_;
+      stopMotion(); paused_ = true; phase_ = "PAUSED";
+    }
+  }
+  else if(action == "resume")
+  {
+    if(!paused_ || !nominalHeld() || !motionFeedbackValid()) error = "pause must finish braking before resume";
+    else
+    { destination_ = paused_destination_; body_destination_ = paused_body_destination_; paused_ = false; phase_ = paused_phase_; }
+  }
+  else if(action == "prepare")
+  {
+    if(!nominalHeld() || !trackingHeld() || !motionFeedbackValid() || !motion_.source.empty()) error = "prepare requires unowned held motion feedback";
+    else
+    {
+      ros::NodeHandle request(nh_, "navigation/perching/request");
+      double yaw = 0, roll = 0, start = 0, increment = .34906585;
+      request.param("yaw", yaw, yaw); request.param("roll", roll, roll); request.param("pitch_start", start, start);
+      request.param("pitch_increment", increment, increment);
+      Model::State state; Vector goal, end;
+      model_.evaluate(nominal_, state);
+      const Eigen::Matrix3d desired = state.body.linear() * perching_geometry::expSO3(Eigen::Vector3d::UnitZ() * yaw) *
+          perching_geometry::expSO3(Eigen::Vector3d::UnitX() * roll) * perching_geometry::expSO3(Eigen::Vector3d::UnitY() * start);
+      if(!model_.orient(nominal_, desired, moving_, goal) || !model_.pitch(goal, increment, moving_, end) ||
+          !model_.allowed(goal, max_tilt_, min_body_pitch_, max_body_pitch_) || !model_.allowed(end, max_tilt_, min_body_pitch_, max_body_pitch_))
+        error = "requested orientation/pitch is infeasible";
+      else
+      {
+        rezero_ready_ = false; destination_ = goal; prepared_increment_ = increment; prepared_motion_ = true; body_target_valid_ = false;
+        velocity_active_ = stopping_ = paused_ = false; phase_ = "PRE_ALIGN";
+      }
+    }
+  }
+  else if(action == "start")
+  {
+    if(!prepared_motion_ || phase_ != "READY" || !nominalHeld() || !trackingHeld() || !motionFeedbackValid()) error = "start requires measured READY";
+    else bodyPitchCommand(prepared_increment_, rate_limit_, body_frame_id_ + 1);
+  }
+  std_msgs::String ack;
+  ack.data = "action=" + action + " session=" + std::to_string(session) + " accepted=" + (error.empty() ? "true" : "false") + " reason=" + error;
+  ack_pub_.publish(ack); publishDiagnostics();
+}
+
+void GimbalrotorPerchingNavigator::workflowCommand(const std::string& action)
+{
+  if(positioning_)
+  {
+    auto s = servoSample();
+    if(perching_locked_ && applied_pitch_offset_ != 0)
+    {
+      Sample measured; Vector nominal; Model::State state;
+      if(observation(measured) && model_.pitch(measured.q, -applied_pitch_offset_, moving_, nominal) && model_.evaluate(nominal, state))
+        s.body = perching_geometry::toKdl(state.body);
+    }
+    if(action == "confirm_detached_zero") servo_.armZero(s);
+    else if(action == "pitch_rezero") servo_.rezero(s);
+    else if(action == "relock") servo_.relock(s);
+    else if(action == "freeze") servo_.freeze(s);
+    else if(action == "unfreeze") servo_.unfreeze(s);
+    else if(action == "prepare_unperch") servo_.prepare(s);
+    else if(action == "confirm_released") servo_.released(s);
+    else if(action == "recover") servo_.recover(s);
+    status_ = servo_.status;
+    return;
+  }
+  if(action != "pitch_rezero" || !motionFeedbackValid() || !nominalHeld()) return;
+  rezero_active_ = true; rezero_ready_ = rezero_failed_ = false;
+  rezero_started_ = ros::Time::now().toSec(); rezero_stable_since_ = 0; rezero_origin_ = nominal_[0];
+  destination_ = nominal_; body_target_valid_ = velocity_active_ = false;
+}
+
+void GimbalrotorPerchingNavigator::advanceNominal(double dt)
+{
+  proposed_ = nominal_; proposed_rate_ = nominal_rate_; proposed_progress_ = body_progress_; proposed_body_rate_ = body_rate_;
+  previous_servo_ = servo_;
+  const double now = ros::Time::now().toSec();
+  if(!trackingHeld())
+  {
+    proposed_rate_.setZero(); proposed_body_rate_ = 0;
+    proposal_valid_ = true; status_ = "nominal held for tracking; compliant recovery remains eligible";
+    return;
+  }
+  if(positioning_)
+  {
+    servo_.tick(servoSample(), dt);
+    proposed_[coordinate_map_.at(positioning_joint_)] = servo_.q_target;
+    double pivot, hinge;
+    if(!model_.estimate(perching_geometry::fromKdl(servo_.target), proposed_, pivot, hinge)) return;
+    const Vector goal = proposed_;
+    followCoordinates(goal, dt); destination_ = goal; status_ = servo_.status;
+  }
+  else if(rezero_active_)
+  {
+    const double pitch = std::asin(std::clamp(-measured_.body.linear()(2, 0), -1.0, 1.0));
+    const double error = rezero_target_ - pitch;
+    const bool held = (measured_.q.tail(active_joints_.size()) - nominal_.tail(active_joints_.size())).cwiseAbs().maxCoeff() <= hold_tolerance_;
+    if(!held || now - rezero_started_ > rezero_timeout_)
+    { rezero_active_ = false; rezero_failed_ = true; status_ = "rezero feedback/timeout hold"; return; }
+    const double rate = rezero_sign_ * std::clamp(rezero_kp_ * error, -rezero_rate_, rezero_rate_);
+    proposed_[0] = std::clamp(nominal_[0] + rate * dt, rezero_origin_ - rezero_range_, rezero_origin_ + rezero_range_);
+    const Vector goal = proposed_;
+    followCoordinates(goal, dt); destination_ = goal;
+    if(std::abs(error) <= rezero_tolerance_ && measured_.omega.norm() <= rezero_rate_tolerance_)
+    {
+      if(rezero_stable_since_ == 0) rezero_stable_since_ = now;
+      if(now - rezero_stable_since_ >= rezero_stable_duration_) { rezero_active_ = false; rezero_ready_ = true; }
+    }
+    else rezero_stable_since_ = 0;
+  }
+  else if(body_target_valid_ || velocity_active_ || std::abs(body_rate_) > 1e-9)
+  {
+    if(velocity_active_ && now >= velocity_expires_) { velocity_active_ = false; stopping_ = true; }
+    const double error = body_destination_ - body_progress_;
+    double goal_rate = velocity_active_ ? velocity_command_ :
+        (body_target_valid_ && !stopping_ ? std::clamp(error / .5, -body_rate_limit_, body_rate_limit_) : 0);
+    const double change = acceleration_limit_ * dt;
+    proposed_body_rate_ = std::clamp(goal_rate, body_rate_ - change, body_rate_ + change);
+    if(std::abs(proposed_body_rate_) < 1e-8) proposed_body_rate_ = 0;
+    const double step = .5 * (body_rate_ + proposed_body_rate_) * dt;
+    if(!model_.pitch(nominal_, step, moving_, proposed_)) { status_ = "body pitch direction unavailable"; return; }
+    proposed_progress_ = body_progress_ + step;
+    proposed_rate_ = (proposed_ - nominal_) / dt;
+    destination_ = nominal_;
+  }
+  else followCoordinates(destination_, dt);
+  proposal_valid_ = model_.allowed(proposed_, max_tilt_, min_body_pitch_, max_body_pitch_);
+  if(!proposal_valid_) status_ = "nominal proposal outside mechanism/body bounds";
+}
+
+void GimbalrotorPerchingNavigator::followCoordinates(const Vector& goal, double dt)
+{
+  for(int i = 0; i < nominal_.size(); ++i)
+  {
+    const double error = goal[i] - nominal_[i];
+    const double desired = stopping_ ? 0 : std::clamp(error / .5, -model_.velocity[i], model_.velocity[i]);
+    proposed_rate_[i] = std::clamp(desired, nominal_rate_[i] - .5 * model_.acceleration[i] * dt,
+                                 nominal_rate_[i] + .5 * model_.acceleration[i] * dt);
+    if(std::abs(proposed_rate_[i]) < 1e-8) proposed_rate_[i] = 0;
+    proposed_[i] = nominal_[i] + .5 * (nominal_rate_[i] + proposed_rate_[i]) * dt;
+  }
+}
+
+bool GimbalrotorPerchingNavigator::candidateAllowed(const Vector& q, double dt) const
+{
+  if(!model_.allowed(q, max_tilt_, min_body_pitch_, max_body_pitch_)) return false;
+  if(applied_stamp_ == 0) return true;
+  if(dt <= 0) return (q - applied_).norm() < 1e-8;
+  const Vector rate = (q - applied_) / dt;
+  if((rate.cwiseAbs().array() > model_.velocity.array() + 1e-6).any() ||
+      ((rate - applied_rate_).cwiseAbs().array() > model_.acceleration.array() * dt + 1e-5).any()) return false;
+  Model::State state;
+  if(!model_.evaluate(q, state)) return false;
+  const Eigen::Vector3d velocity = (state.cog.translation() - applied_state_.cog.translation()) / dt;
+  return velocity.norm() <= cog_speed_limit_ + 1e-6 &&
+      (velocity - reference_velocity_).norm() <= cog_acceleration_limit_ * dt + 1e-5;
+}
+
+bool GimbalrotorPerchingNavigator::applyPerchingReference(double pitch_offset, double rate, double acceleration)
+{
+  if(!perching_locked_)
+  {
+    // Explicit detached-zero hold owns only the named servo, before a contact
+    // exists. It still publishes from the controller's single output phase.
+    if(!positioning_ || !servo_.zero_hold_armed || !servo_.feedback(servoSample())) return false;
+    sensor_msgs::JointState command;
+    command.header.stamp = ros::Time::now(); command.name = {positioning_joint_};
+    command.position = {servo_.q_target}; joints_pub_.publish(command);
+    return true;
+  }
+  if(!articulated())
+  {
+    perching_geometry::Pose pose;
+    const tf::Vector3 nominal_position = getTargetPos();
+    if(!std::isfinite(pitch_offset) || std::abs(active_pitch_delta_ + pitch_offset / arc_pitch_sign_) > max_pitch_delta_ ||
+       !perchingAdmittanceTarget(lock_stamp_, pitch_offset, nominal_position, pose))
+    {
+      if(rigid_applied_valid_)
+      {
+        double r, p, y; tf::Matrix3x3(rigid_applied_pose_.orientation).getRPY(r, p, y);
+        setTargetPos(rigid_applied_pose_.position); setTargetRPY(tf::Vector3(r, p, y));
+      }
+      return false;
+    }
+    double roll, pitch, yaw;
+    tf::Matrix3x3(pose.orientation).getRPY(roll, pitch, yaw);
+    if(perching_mode_ == perching_geometry::Mode::NORMAL)
+    { roll = reference_locked_rpy_.x(); yaw = reference_locked_rpy_.z(); }
+    setTargetPos(pose.position); setTargetRPY(tf::Vector3(roll, pitch, yaw));
+    applied_pitch_offset_ = pitch_offset; applied_offset_rate_ = rate;
+    rigid_applied_pose_ = pose; rigid_applied_pose_.orientation = tf::createQuaternionFromRPY(roll, pitch, yaw); rigid_applied_valid_ = true;
+    return true;
+  }
+  const double now = ros::Time::now().toSec();
+  if(applied_stamp_ == now) return false;
+  const bool fresh = motionFeedbackValid();
+  const Vector& nominal = proposal_valid_ && fresh ? proposed_ : nominal_;
+  Vector candidate;
+  bool accepted = fresh && std::isfinite(pitch_offset) && std::isfinite(rate) && std::isfinite(acceleration) &&
+      model_.pitch(nominal, pitch_offset, moving_, candidate) && candidateAllowed(candidate, cycle_dt_);
+  Model::State state;
+  if(accepted) accepted = model_.evaluate(candidate, state);
+  if(accepted)
+  {
+    const bool derivative = applied_stamp_ > 0 && cycle_dt_ > 0;
+    Eigen::Vector3d velocity = Eigen::Vector3d::Zero(), omega = Eigen::Vector3d::Zero();
+    if(derivative)
+    {
+      velocity = (state.cog.translation() - applied_state_.cog.translation()) / cycle_dt_;
+      omega = perching_geometry::logSO3(applied_state_.cog.linear().transpose() * state.cog.linear()) / cycle_dt_;
+      applied_rate_ = (candidate - applied_) / cycle_dt_;
+    }
+    reference_acceleration_ = derivative ? Eigen::Vector3d((velocity - reference_velocity_) / cycle_dt_) : Eigen::Vector3d::Zero();
+    reference_angular_acceleration_ = derivative ? Eigen::Vector3d((omega - reference_omega_) / cycle_dt_) : Eigen::Vector3d::Zero();
+    reference_velocity_ = velocity; reference_omega_ = omega;
+    applied_ = candidate; applied_state_ = state; applied_pitch_offset_ = pitch_offset; applied_offset_rate_ = rate;
+    if(proposal_valid_)
+    {
+      nominal_ = proposed_; nominal_rate_ = proposed_rate_;
+      body_progress_ = proposed_progress_; body_rate_ = proposed_body_rate_;
+      if(body_target_valid_ || velocity_active_ || stopping_) destination_ = nominal_;
+      if(stopping_ && std::abs(body_rate_) < 1e-8 && nominal_rate_.norm() < 1e-8)
+      { stopping_ = false; body_destination_ = body_progress_; destination_ = nominal_; }
+    }
+    applied_stamp_ = now;
+  }
+  else
+  {
+    // Nominal and compliance both roll back to the same last accepted reference.
+    // A true feedback loss holds; raw observation remains independent.
+    if(positioning_ && proposal_valid_) servo_ = previous_servo_;
+    reference_velocity_.setZero(); reference_acceleration_.setZero(); reference_omega_.setZero(); reference_angular_acceleration_.setZero();
+    applied_rate_.setZero(); nominal_rate_.setZero(); body_rate_ = 0;
+    status_ = fresh ? "coordinated reference rejected; holding last feasible output" : "waiting for motion feedback";
+  }
+  proposal_valid_ = false;
+  publishApplied();
+  return accepted;
+}
+
+void GimbalrotorPerchingNavigator::publishApplied()
+{
+  double roll, pitch, yaw;
+  tf::Matrix3x3(tfQuaternion(applied_state_.cog.linear())).getRPY(roll, pitch, yaw);
+  setXyControlMode(POS_CONTROL_MODE);
+  setTargetPos(tfVector(applied_state_.cog.translation())); setTargetRPY(tf::Vector3(roll, pitch, yaw));
+  setTargetVel(tfVector(reference_velocity_)); setTargetAcc(tfVector(reference_acceleration_));
+  setTargetOmega(tfVector(reference_omega_));
+  Eigen::Matrix3d current;
+  tf::matrixTFToEigen(estimator_->getOrientation(Frame::COG, estimate_mode_), current);
+  setTargetAngAcc(tfVector(current.transpose() * applied_state_.cog.linear() * reference_angular_acceleration_));
+  sensor_msgs::JointState command;
+  command.header.stamp = ros::Time::now(); command.name = active_joints_;
+  for(int i = 1; i < applied_.size(); ++i) command.position.push_back(applied_[i]);
+  joints_pub_.publish(command);
+}
+
+void GimbalrotorPerchingNavigator::retireCorrection()
+{
+  // Explicit calibration resets the core while retaining a feasible physical
+  // reference. Retire the current nominal plan at that pose, including its sign.
+  if(!perching_locked_) return;
+  if(articulated())
+  {
+    nominal_ = destination_ = proposed_ = applied_;
+    nominal_rate_.setZero(); body_rate_ = 0; body_target_valid_ = velocity_active_ = stopping_ = false;
+    proposed_rate_.setZero(); proposal_valid_ = prepared_motion_ = paused_ = rezero_active_ = false;
+    if(positioning_ && servo_.ownsPose())
+    {
+      servo_.q_target = servo_.q_goal = applied_[coordinate_map_.at(positioning_joint_)];
+      servo_.alpha_goal = servo_.alpha;
+      servo_.target = perching_geometry::toKdl(applied_state_.body);
+      servo_.reference = perching_servo::arc(servo_.target, servo_.pivot, servo_.axis, -servo_.alpha);
+      KDL::Frame contact;
+      KDL::Vector cog;
+      if(servoModel(servo_.q_target, contact, cog))
+      { servo_.contact = servo_.target * contact; servo_.cog = cog; }
+      if(servo_.stage == perching_servo::Stage::PITCH_REZERO_ACTIVE)
+        servo_.stage = perching_servo::Stage::CONTACT_LOCKED_PRE_REZERO;
+    }
+  }
+  else active_pitch_delta_ += applied_pitch_offset_ / arc_pitch_sign_;
+  applied_pitch_offset_ = applied_offset_rate_ = 0;
+}
+
+double GimbalrotorPerchingNavigator::pitchAccelerationLimit() const
+{
+  Vector tangent;
+  if(!model_.pitchTangent(nominal_, moving_, tangent)) return 0;
+  double limit = std::numeric_limits<double>::infinity();
+  for(int i = 0; i < tangent.size(); ++i)
+    if(std::abs(tangent[i]) > 1e-8)
+    {
+      const double nominal_acceleration = cycle_dt_ > 0 && proposal_valid_ ?
+          std::abs(proposed_rate_[i] - nominal_rate_[i]) / cycle_dt_ : 0;
+      // Reserve curvature/FK margin; final joint and CoG bounds are still checked.
+      limit = std::min(limit, .5 * std::max(0.0, model_.acceleration[i] - nominal_acceleration) / std::abs(tangent[i]));
+    }
+  return std::isfinite(limit) ? limit : 0;
+}
+
+bool GimbalrotorPerchingNavigator::taskAxisIsCogPitch() const
+{
+  if(!articulated()) return true;
+  const Eigen::Vector3d axis = applied_state_.cog.linear().transpose() * applied_state_.body.linear().col(1);
+  return std::abs(axis.dot(Eigen::Vector3d::UnitY())) > 1 - 1e-6;
+}
+void GimbalrotorPerchingNavigator::publishDiagnostics()
+{
+  if(!articulated()) return;
+  const bool feedback = motionFeedbackValid();
+  const bool held = nominalHeld() && feedback && trackingHeld();
+  if(held && phase_ == "EXECUTING") phase_ = "COMPLETED_HOLD";
+  if(held && phase_ == "PRE_ALIGN") phase_ = "READY";
+  std_msgs::UInt64 id; id.data = session_; session_pub_.publish(id); id.data = motion_.epoch; epoch_pub_.publish(id);
+  diagnostic_msgs::DiagnosticArray array; array.header.stamp = ros::Time::now();
+  diagnostic_msgs::DiagnosticStatus diagnostic; diagnostic.name = nh_.getNamespace() + "/" + status_name_;
+  const std::string stage = !perching_locked_ ? "FREE_FLIGHT" : rezero_failed_ ? "PITCH_REZERO_FAILED" :
+      rezero_active_ ? "PITCH_REZERO_ACTIVE" : rezero_ready_ ? "PITCH_REZERO_HOLD" : prepared_motion_ ? phase_ : "CONTACT_LOCKED";
+  diagnostic.message = stage + ": " + status_; diagnostic.level = feedback || !perching_locked_ ? 0 : 1;
+  auto values = admittance_diagnostics_;
+  auto value = [&](const std::string& key, auto data) { std::ostringstream s; s << std::setprecision(17) << data; values[key] = s.str(); };
+  value("session_id", session_); value("motion_epoch", motion_.epoch); value("motion_source", motion_.source);
+  value("motion_sequence", motion_.sequence); value("stopping", stopping_); value("feedback_valid", feedback);
+  value("body_pitch_target_valid", body_target_valid_); value("body_pitch_target_frame", body_frame_id_);
+  value("body_pitch_target_rad", body_destination_); value("body_pitch_target_progress_rad", body_progress_);
+  value("body_pitch_target_reference_complete", body_target_valid_ && held);
+  value("body_pitch_velocity_active", velocity_active_); value("body_pitch_velocity_limit", rate_limit_);
+  value("admittance_hold_eligible", held); value("effective_offset_rad", applied_pitch_offset_);
+  value("hold_reason", status_); value("pivot_error", pivot_error_); value("hinge_residual", hinge_error_);
+  for(const auto& item : values) { diagnostic_msgs::KeyValue v; v.key = item.first; v.value = item.second; diagnostic.values.push_back(v); }
+  array.status.push_back(diagnostic); status_pub_.publish(array);
+  auto boolean = [&](const std::string& key, bool data) { std_msgs::Bool m; m.data = data; bool_pubs_.at(key).publish(m); };
+  auto number = [&](const std::string& key, double data) { std_msgs::Float64 m; m.data = data; number_pubs_.at(key).publish(m); };
+  boolean("model_valid", model_valid_); boolean("contact_valid", perching_locked_ && feedback); boolean("feedback_valid", feedback);
+  const auto s = servoSample();
+  const bool active = positioning_ ? servo_.stage == perching_servo::Stage::PITCH_REZERO_ACTIVE : rezero_active_;
+  const bool ready = positioning_ ? servo_.rezeroReady(s) : rezero_ready_;
+  const bool failed = positioning_ ? servo_.stage == perching_servo::Stage::FAULT_HOLD && !servo_.rezero_completed : rezero_failed_;
+  for(const auto& prefix : {std::string(""), std::string("pitch_")})
+  { boolean(prefix + "rezero_active", active); boolean(prefix + "rezero_ready", ready); boolean(prefix + "rezero_failed", failed); }
+  boolean("servo_frozen", positioning_ && servo_.stage == perching_servo::Stage::PASSIVE_CUTTING);
+  boolean("cutting_enabled", positioning_ && servo_.stage == perching_servo::Stage::PASSIVE_CUTTING && feedback);
+  if(perching_locked_)
+  {
+    number("body_pitch", std::asin(std::clamp(-measured_.body.linear()(2, 0), -1.0, 1.0)));
+    number("body_pitch_rate", measured_.omega.y()); number("pivot_error", pivot_error_);
+    number("lock_generation", positioning_ ? servo_.generation : session_);
+    number("passive_alpha_cmd", positioning_ ? servo_.alpha : nominal_[0]); number("passive_alpha_measured", measured_.q[0]);
+    number("passive_pitch_delta", nominal_[0]); number("cut_alpha_min", servo_.alpha_min); number("cut_alpha_max", servo_.alpha_max);
+    if(positioning_)
+    {
+      const int i = coordinate_map_.at(positioning_joint_);
+      number("servo_measured", measured_.q[i]); number("servo_target_nominal", nominal_[i]); number("servo_hold_error", measured_.q[i] - nominal_[i]);
+    }
+    const auto primary = coordinate_map_.find(manual_coordinate_);
+    bool secondary_held = feedback;
+    if(primary != coordinate_map_.end())
+    {
+      const int i = primary->second;
+      number("pitch_joint_measured", measured_.q[i]); number("pitch_joint_nominal", destination_[i]); number("pitch_joint_final", applied_[i]);
+      number("pitch_joint_hold_error", measured_.q[i] - nominal_[i]);
+      for(int j = 1; j < nominal_.size(); ++j) if(j != i)
+      {
+        number("secondary_joint_measured", measured_.q[j]); number("secondary_joint_nominal", destination_[j]);
+        number("secondary_joint_hold_error", measured_.q[j] - nominal_[j]);
+        secondary_held &= std::abs(measured_.q[j] - nominal_[j]) <= hold_tolerance_ && std::abs(measured_.rate[j]) <= .05;
+      }
+    }
+    const double now = array.header.stamp.toSec();
+    if(!secondary_held) secondary_stable_since_ = 0;
+    else if(secondary_stable_since_ == 0) secondary_stable_since_ = now;
+    boolean("secondary_settled", secondary_held && now - secondary_stable_since_ >= .3);
+    nav_msgs::Odometry pose; pose.header = array.header; pose.header.frame_id = world_; pose.child_frame_id = body_frame_;
+    pose.pose.pose = poseMessage(applied_state_.body); reference_pub_.publish(pose);
+    pose.header.stamp.fromSec(measured_.stamp); pose.pose.pose = poseMessage(measured_.body); measured_pub_.publish(pose);
+    pose.header = array.header; pose.header.frame_id = world_; pose.pose.pose = poseMessage(applied_state_.cog); cog_pub_.publish(pose);
+    geometry_msgs::PoseStamped target; target.header = array.header; target.header.frame_id = world_;
+    target.pose = poseMessage(applied_state_.body); body_pose_pub_.publish(target);
+    auto angles = [&](ros::Publisher& publisher, const Vector& q)
+    {
+      if(wire_angles_.size() != 3) return;
+      geometry_msgs::Vector3Stamped m; m.header = array.header; m.header.frame_id = "perching_lock_" + std::to_string(session_);
+      m.vector.x = q[coordinate_map_.at(wire_angles_[0])]; m.vector.y = q[coordinate_map_.at(wire_angles_[1])]; m.vector.z = q[coordinate_map_.at(wire_angles_[2])];
+      publisher.publish(m);
+    };
+    angles(nominal_pub_, destination_); angles(angles_pub_, applied_); angles(lower_pub_, model_.lower); angles(upper_pub_, model_.upper);
+  }
+  std_msgs::String state;
+  if(positioning_)
+  {
+    std::ostringstream out;
+    out << std::setprecision(17) << name(servo_.stage) << "|" << servo_.generation << "|" << s.now << "|" << s.q << "|"
+        << servo_.q_target << "|" << perching_servo::pitch(s.body) << "|" << servo_.alpha << "|" << servo_.measuredAlpha(s) << "|"
+        << servo_.alpha_min << "|" << servo_.alpha_max << "|" << feedback << "|0|" << pivot_error_ << "|" << servo_.zero_hold_armed << "|" << servo_.status;
+    state.data = out.str();
+  }
+  else state.data = stage + ": " + status_;
+  state_pub_.publish(state);
+}
+
+PLUGINLIB_EXPORT_CLASS(aerial_robot_navigation::GimbalrotorPerchingNavigator, aerial_robot_navigation::BaseNavigator)

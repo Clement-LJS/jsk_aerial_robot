@@ -34,7 +34,9 @@ namespace aerial_robot_control
     rpy_gain_pub_ = nh_.advertise<spinal::RollPitchYawTerms>("rpy/gain", 1);
     torque_allocation_matrix_inv_pub_ = nh_.advertise<spinal::TorqueAllocationMatrixInv>("torque_allocation_matrix_inv", 1);
     gimbal_dof_pub_ = nh_.advertise<std_msgs::UInt8>("gimbal_dof", 1);
-    roll_yaw_input_pub_ = nh_.advertise<geometry_msgs::WrenchStamped>("perching/roll_yaw/command_wrench_estimate", 1);
+    std::string command_wrench_topic;
+    nh_.param<std::string>("controller/command_wrench_topic", command_wrench_topic, "perching/command_wrench_estimate");
+    command_wrench_pub_ = nh_.advertise<geometry_msgs::WrenchStamped>(command_wrench_topic, 1);
   }
 
   void GimbalrotorController::reset()
@@ -102,16 +104,17 @@ void GimbalrotorController::controlCore()
     // using the total PID result (including its accumulated hover support). Estimate the BODY rotor
     // resultant about the instantaneous CoG. FC torque/rotor telemetry is absent;
     // this is an input estimate, never a measured wrench or net external wrench.
-    if(!underactuate_ && gimbal_calc_in_fc_ && roll_yaw_input_pub_.getNumSubscribers()) {
+    if(!underactuate_ && command_wrench_pub_.getNumSubscribers()) {
       Eigen::Matrix3d rotation; tf::matrixTFToEigen(uav_rot, rotation);
       const Eigen::Vector3d force = rotation * (robot_model_->getMass() * target_wrench_acc_cog.head<3>());
-      const Eigen::Vector3d torque = rotation * (inertia * target_wrench_acc_cog.tail<3>() + gyro);
+      const Eigen::Vector3d torque = rotation * (inertia * target_wrench_acc_cog.tail<3>() +
+          (gimbal_calc_in_fc_ ? gyro : Eigen::Vector3d::Zero()));
       if(force.allFinite() && torque.allFinite()) {
         geometry_msgs::WrenchStamped msg;
         msg.header.stamp.fromSec(estimator_->getImuLatestTimeStamp()); msg.header.frame_id="world";
         msg.wrench.force.x=force.x(); msg.wrench.force.y=force.y(); msg.wrench.force.z=force.z();
         msg.wrench.torque.x=torque.x(); msg.wrench.torque.y=torque.y(); msg.wrench.torque.z=torque.z();
-        roll_yaw_input_pub_.publish(msg);
+        command_wrench_pub_.publish(msg);
       }
     }
     

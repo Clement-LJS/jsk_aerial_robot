@@ -20,29 +20,14 @@
 #include <vector>
 #include <array>
 #include <deque>
-#include <atomic>
 #include <chrono>
-#include <condition_variable>
 #include <memory>
 #include <mutex>
-#include <thread>
-#include <exception>
-#include <urdf_model/joint.h>
 
 // Geometry and target-provider contracts
 
 namespace perching_geometry
 {
-// URDF configuration only. KDL pose()/getFrameToTip() mutate joint caches even
-// through const references and must not be used to inspect a live FK tree.
-struct JointGeometry
-{
-  std::string parent, child;
-  int type;
-  std::array<double, 10> values;
-};
-JointGeometry jointGeometry(const urdf::Joint& joint);
-
 enum class Mode
 {
   DISABLED,
@@ -161,103 +146,36 @@ public:
 };
 }  // namespace perching_geometry
 
-// Specialized passive-alpha / active-roll / active-yaw geometry.
-
 namespace perching_geometry
 {
-// Add an already aggregated link and its attached extra modules in root axes.
-// Callers retain their own FK validation and minimum-mass policy.
+Eigen::Vector3d logSO3(const Eigen::Matrix3d& r);
+Eigen::Matrix3d expSO3(const Eigen::Vector3d& v);
+bool rotationValid(const Eigen::Matrix3d& r);
+bool poseValid(const Eigen::Isometry3d& p);
+Eigen::Isometry3d fromKdl(const KDL::Frame& f);
+KDL::Frame toKdl(const Eigen::Isometry3d& p);
 void accumulateLinkInertia(KDL::RigidBodyInertia& total, const KDL::Frame& frame, const std::string& link,
                            const KDL::RigidBodyInertia& inertia, const std::map<std::string, KDL::Segment>& extra);
-}  // namespace perching_geometry
-
-namespace roll_yaw
+struct MotionIdentity
 {
-// Thread-local accounting: workers and main-loop samples never contend.
-struct WorkCounters
-{
-  std::uint64_t fast_model = 0, body_fk = 0, full_tree = 0;
-  double nonlinear_validation_wall = 0;
-};
-WorkCounters& workCounters();
-
-using Vec = Eigen::Vector3d;
-using Mat = Eigen::Matrix3d;
-using Pose = Eigen::Isometry3d;
-Vec logSO3(const Mat& r);
-Mat expSO3(const Vec& v);
-bool rotationValid(const Mat& r);
-bool poseValid(const Pose& p);
-Pose fromKdl(const KDL::Frame& f);
-
-// Exact first/second directional derivatives of a rigid transform.
-struct TransformJet
-{
-  Pose pose = Pose::Identity();
-  Mat rotation_rate = Mat::Zero(), rotation_acceleration = Mat::Zero();
-  Vec velocity = Vec::Zero(), acceleration = Vec::Zero();
-};
-using CogDerivatives = std::function<bool(const Vec&, const Vec&, const Vec&, TransformJet&)>;
-
-// Inertia-weighted CoG reconstruction from a copied articulated model. relative
-// is R_GB, exactly RobotModel::getCogDesireOrientation(), not principal axes.
-std::function<bool(const Vec&, Pose&)> articulatedCogModel(KDL::Tree tree, KDL::JntArray joints,
-                                                           std::map<std::string, KDL::RigidBodyInertia> inertia,
-                                                           std::map<std::string, KDL::Segment> extra, std::string base,
-                                                           KDL::Rotation relative, unsigned roll_index,
-                                                           unsigned yaw_index, CogDerivatives* derivatives = nullptr, double* radius = nullptr);
-
-struct Estimate
-{
-  double alpha = 0, pivot_error = 0, hinge_residual = 0;
-};
-// B=base_link, C=contact link, P=calibrated physical hinge, G=controller CoG.
-// The callback supplies articulated T_BG, including the model's CoG orientation
-// convention (not an inertia eigenvector frame). It must own an immutable snapshot.
-class Kinematics
-{
-public:
-  bool configure(const KDL::Chain& body_contact, const std::string& roll, const std::string& yaw,
-                 const Pose& contact_pivot, const Vec& axis, std::function<bool(const Vec&, Pose&)> body_cog,
-                 std::string& error, CogDerivatives derivatives = {}, double cog_radius = 0);
-  bool bodyPivot(const Vec& eta, Pose& bp) const;
-  bool lock(const Pose& measured_body, const Vec& measured_eta);
-  bool evaluateBody(const Vec& eta, Pose& body) const;
-  bool evaluate(const Vec& eta, Pose& body, Pose& cog) const;
-  bool derivatives(const Vec&, const Vec&, const Vec&, TransformJet& body, TransformJet& cog) const;
-  // Triangle bounds over the product of hinge, inverse contact chain and mass groups.
-  Vec travelWeights() const { return Vec(1, 3, 3); }
-  double radiusBound() const { return radius_bound_; }
-  bool analyticDerivatives() const { return bool(cog_derivatives_); }
-  bool jacobian(const Vec& eta, Mat& j) const;
-  bool numericalJacobian(const Vec& eta, Mat& j, double h = 1e-6) const;
-  bool estimate(const Pose& body, const Vec& measured_eta, Estimate& result) const;
-  const Pose& pivotLock() const
+  std::uint64_t epoch = 1, sequence = 0;
+  std::string source;
+  std::string rejection(std::uint64_t e, const std::string& s, std::uint64_t n, bool claim = false) const
   {
-    return lock_;
+    if(e != epoch) return "cancelled motion epoch";
+    if(s.empty() || s.size() > 128 || n == 0 ||
+       s.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-") != std::string::npos)
+      return "invalid motion identity";
+    if(!claim && !source.empty() && source != s) return "another source owns motion; claim after nominal motion finishes";
+    if(source == s && n <= sequence) return "old motion sequence";
+    return "";
   }
-  bool locked() const
-  {
-    return locked_;
-  }
-
-private:
-  KDL::Chain chain_;
-  Pose cp_ = Pose::Identity(), lock_ = Pose::Identity();
-  Vec axis_ = Vec::UnitY();
-  std::function<bool(const Vec&, Pose&)> cog_;
-  CogDerivatives cog_derivatives_;
-  double radius_bound_ = 0;
-  bool configured_ = false, locked_ = false;
+  void accept(const std::string& s, std::uint64_t n) { source = s; sequence = n; }
+  void revoke() { ++epoch; source.clear(); sequence = 0; }
 };
-}  // namespace roll_yaw
 
-// Pitch-only geometry and state machine
-
-// Single-pitch mechanism geometry and state. The navigator serializes calls
-// with its common perching mutex.
-
-namespace pitch_only
+}
+namespace perching_servo
 {
 constexpr double unknown = std::numeric_limits<double>::quiet_NaN();
 enum class Stage
@@ -337,7 +255,7 @@ struct Config
   double rezero_pitch_tolerance = .0349066, rezero_rate_tolerance = .05, rezero_timeout = 5;
   double passive_min = -.5235988, passive_max = .5235988, passive_rate = .1745329;
   double body_pitch_min = -.5235988, body_pitch_max = .5235988;
-  KDL::Vector pivot_offset{.21049, -.014, .0205}, hinge_axis{0, 1, 0};
+  KDL::Vector pivot_offset{0, 0, 0}, hinge_axis{0, 1, 0};
 
   bool valid() const;
 };
@@ -421,7 +339,7 @@ private:
   double stable_since = 0, start = 0;
   double rezero_stable_since = 0;
 };
-}  // namespace pitch_only
+}  // namespace perching_servo
 
 // Wrench operations
 
@@ -435,491 +353,3 @@ Eigen::Matrix<double, 6, 1> rotateWrench(const Eigen::Matrix3d& rotation, const 
 Eigen::Vector3d shiftMoment(const Eigen::Vector3d& moment, const Eigen::Vector3d& source_minus_target,
                             const Eigen::Vector3d& force);
 }  // namespace perching_dynamics
-
-namespace roll_yaw
-{
-// Generalized work per radian of signed body-local pitch progress. Wrench and
-// its reference point are world expressed; includes fixed-pivot translation.
-bool pathInteractionTorque(const Kinematics&, const Eigen::Vector3d& eta, double direction, double min_singular,
-                           const Eigen::Vector3d& force_world, const Eigen::Vector3d& moment_world,
-                           const Eigen::Vector3d& point_world, double& torque);
-}  // namespace roll_yaw
-
-// Trajectory execution and settling
-
-namespace roll_yaw
-{
-// Signed continuous Y twist, with a full swing residual. Quaternion hemisphere
-// changes disappear through nearest-2pi unwrapping; a 180-degree swing is invalid.
-bool taskPitch(const Eigen::Matrix3d& pre, const Eigen::Matrix3d& body, double previous, double& pitch,
-               double& cross_track);
-
-struct TaskProgress
-{
-  // distance retains the historical reporting API; current/upper_distance govern motion.
-  double raw = 0, filtered = 0, distance = 0, current = 0, upper_distance = 0, cross_track = 0, stamp = 0;
-  bool valid = false;
-  void reset(double start);
-  bool observe(const Eigen::Matrix3d& pre, const Eigen::Matrix3d& body, double time, double start, double end,
-               double filter_time, double tolerance);
-};
-
-struct SettlingStatistics
-{
-  bool complete = false;
-  double observed = 0, body_rms = 0, joint_rms = 0, body_mean = 0, joint_mean = 0;
-  double body_current = 0, joint_current = 0;
-  std::string status = "collecting fresh window";
-
-  bool qualifies(double body_limit, double joint_limit, double mean_limit) const;
-};
-
-// Executor-local numerical history; no ROS callbacks or planner-worker state.
-// Body XYZ and active roll/yaw are separate vector groups; passive alpha is excluded.
-class SettlingWindow
-{
-public:
-  void reset();
-
-  SettlingStatistics observe(double now, const std::array<double, 3>& body, const std::array<double, 2>& joint,
-                             double window, double max_gap);
-
-private:
-  struct Sample
-  {
-    double time;
-    std::array<double, 5> rate;
-  };
-  std::deque<Sample> samples_;
-  double window_ = 0;
-  SettlingStatistics last_;
-};
-
-struct Limits
-{
-  Eigen::Vector3d lower = Eigen::Vector3d::Constant(-1.57079632679), upper = Eigen::Vector3d::Constant(1.57079632679);
-  Eigen::Vector3d velocity = Eigen::Vector3d(.15, .1, .1), acceleration = Eigen::Vector3d(.1, .1, .1);
-  bool valid() const;
-};
-struct Request
-{
-  double yaw = 0, roll = 0, pitch_start = 0, pitch_end = 0, rate = .03, acceleration = .02;
-  bool align_only = false;
-  bool body_pitch_jog = false;  // legacy offline library request; navigator small jogs bypass prepare()
-  bool valid() const;
-};
-struct PlanningConfig
-{
-  Limits limits;
-  double min_singular_value = .05;
-  Eigen::Vector3d saw_point = Eigen::Vector3d::Zero();  // fixed point in controlled body frame, from URDF
-  bool saw_point_valid = false;
-  double dt = .02, max_tilt = .2, orientation_tolerance = .003, rate_tolerance = .01;
-  double alignment_rate = .04, alignment_acceleration = .02, max_duration = 180;
-  double cog_speed_limit = .1, cog_acceleration_limit = .2;
-  int scaling_attempts = 5;
-  // Worker-local cooperative budget/progress hooks; never call into navigation.
-  std::function<bool()> cancelled;
-  std::function<void(int, int, bool)> report;
-  bool mechanismValid() const;
-  bool onlineValid() const;
-  bool valid() const;
-};
-struct Desired
-{
-  Eigen::Matrix3d rotation = Eigen::Matrix3d::Identity();
-  Eigen::Vector3d omega = Eigen::Vector3d::Zero(), acceleration = Eigen::Vector3d::Zero();
-};
-// Cosine velocity ramps, constant feed, cosine deceleration; C2 angle profile.
-class Stroke
-{
-public:
-  Stroke(double distance, double rate, double acceleration);
-  double duration() const
-  {
-    return 2 * ramp_ + feed_;
-  }
-  void sample(double t, double& angle, double& rate, double& acceleration) const;
-
-private:
-  double distance_, sign_, speed_, ramp_, feed_;
-};
-Desired cuttingOrientation(const Eigen::Matrix3d& neutral, const Request&, double theta, double rate,
-                           double acceleration);
-struct Knot
-{
-  double t = 0;
-  Eigen::Vector3d eta = Eigen::Vector3d::Zero(), velocity = Eigen::Vector3d::Zero(),
-                  acceleration = Eigen::Vector3d::Zero();
-};
-struct Reference
-{
-  double t = 0, orientation_error = 0;
-  Eigen::Vector3d eta = Eigen::Vector3d::Zero(), velocity = Eigen::Vector3d::Zero(),
-                  acceleration = Eigen::Vector3d::Zero();
-  Eigen::Isometry3d body = Eigen::Isometry3d::Identity(), cog = Eigen::Isometry3d::Identity();
-  Desired desired;
-  Eigen::Vector3d body_omega = Eigen::Vector3d::Zero(), body_acceleration = Eigen::Vector3d::Zero();
-  Eigen::Vector3d cog_velocity = Eigen::Vector3d::Zero(), cog_acceleration = Eigen::Vector3d::Zero();
-  Eigen::Vector3d cog_omega = Eigen::Vector3d::Zero(), cog_angular_acceleration = Eigen::Vector3d::Zero();
-};
-struct Path
-{
-  std::vector<Knot> knots;
-  std::function<Desired(double)> desired;
-  // Conservative cumulative joint variation from Bernstein derivative hulls.
-  std::vector<Eigen::Vector3d> travel;
-  double duration() const
-  {
-    return knots.empty() ? 0 : knots.back().t;
-  }
-};
-struct Plan
-{
-  bool ok = false;
-  std::uint64_t session = 0;
-  int scale_attempt = 0;
-  std::string reason;
-  Request goal;
-  Eigen::Matrix3d neutral = Eigen::Matrix3d::Identity();
-  double wall_seconds = 0;
-  Kinematics model;
-  Path align, cut;
-  Reference submission, applied_start;
-  bool submission_valid = false;
-  Reference measured_start;
-  bool measured_start_valid = false;  // measured READY for diagnostics, not plan identity
-  double proxy_drop = 0;              // world Z start minus end, metres; origin is not tooth contact
-};
-bool cachePathTravel(Path&);
-Eigen::Vector3d pathTravel(const Path&, double);
-void scaleReference(Reference&, double speed, double acceleration);
-bool samplePath(const Kinematics&, const Path&, double time, Reference&);
-// Shared mechanism validation and articulated FK.
-bool mechanismAllowed(const Kinematics&, const Eigen::Vector3d&, const PlanningConfig&, std::string&);
-bool mechanismReference(const Kinematics&, const Eigen::Vector3d&, const Eigen::Vector3d&, const Eigen::Vector3d&,
-                        Reference&);
-bool referenceAllowed(const Reference&, const PlanningConfig&, std::string&);
-// One bounded double-integrator step; braking retains the accepted destination.
-// The caller caps elapsed ROS time and commits only a validated interval.
-bool followMechanism(const Kinematics&, const Reference&, const Eigen::Vector3d& goal,
-                     double dt, double integration_step, bool brake, const PlanningConfig&, Reference&, std::string&, const Vec& feed = Vec::Ones());
-bool referenceIntervalBounds(const Kinematics&, const Reference&, const Reference&, double dt,
-                             const PlanningConfig&, Vec& travel, Vec& lower, Vec& upper, std::string&);
-bool mechanismBrakingAllowed(const Kinematics&, const Reference&, double integration_step, const PlanningConfig&, std::string&);
-// Short online local-Y continuation. Cubic scalar velocity preserves both
-// endpoint rates and accelerations; its analytic integral right-multiplies R_wb.
-// A zero end_rate/end_acceleration is a bounded braking continuation, not a goal.
-struct LocalPitchSegment
-{
-  Reference start;
-  double duration = 0, end_rate = 0, end_acceleration = 0;
-};
-bool localPitchReference(const Kinematics&, const Eigen::Matrix3d&, const Eigen::Vector3d& seed,
-                         double rate, double acceleration, const PlanningConfig&, Reference&, std::string&);
-bool sampleLocalPitch(const Kinematics&, const LocalPitchSegment&, double time, const PlanningConfig&,
-                      Reference&, std::string&);
-bool localPitchAllowed(const Kinematics&, const LocalPitchSegment&, double until, const PlanningConfig&,
-                       std::string&);
-// Cheap manual construction; automatic connections must use the validated helper.
-bool validatedMechanismPath(const Kinematics&, const Reference&, const Eigen::Vector3d&, const PlanningConfig&, Path&,
-                            std::string&);
-bool mechanismPath(const Kinematics&, const Reference&, const Eigen::Vector3d&, const PlanningConfig&, Path&,
-                   std::string&);
-bool inverseOrientation(const Kinematics&, const Eigen::Matrix3d&, const Eigen::Vector3d& seed, const PlanningConfig&,
-                        Eigen::Vector3d&, std::string&, int iterations = 40);
-Plan prepare(const Kinematics&, const Eigen::Vector3d& initial, const Eigen::Matrix3d& neutral, const Request&,
-             const PlanningConfig&);
-
-enum class Stage
-{
-  FREE_FLIGHT,
-  CONTACT_LOCKED,
-  PLANNING,
-  PRE_ALIGN,
-  READY,
-  EXECUTING,
-  PAUSED,
-  COMPLETED_HOLD,
-  FAULT_HOLD
-};
-const char* stageName(Stage);
-struct Feedback
-{
-  double now = 0, joint_stamp = 0, body_stamp = 0;
-  bool hover = false, valid = false;
-  std::string invalid_reason;
-  Eigen::Isometry3d body = Eigen::Isometry3d::Identity();
-  Eigen::Vector3d eta = Eigen::Vector3d::Zero(), joint_rate = Eigen::Vector3d::Zero(),
-                  body_omega = Eigen::Vector3d::Zero();
-};
-struct ExecutionConfig
-{
-  double synchronization_tolerance = .05;
-  double timeout = .15, future_tolerance = .02, pivot_tolerance = .01, hinge_tolerance = .03;
-  double tracking_tolerance = .04, orientation_tolerance = .04, settle_rate = .01, settle_time = .5,
-         settle_timeout = 10;
-  bool settle_use_window = false;
-  double settle_body_rate = .05, settle_joint_rate = .03, settle_mean_rate = .02;
-  bool require_settled_on_enable = false;
-  double max_execution_step = .05;  // numerical integration budget, seconds
-  double max_execution_gap = .15;   // forward outage threshold, seconds; never catch up beyond it
-  double observer_max_interval = .15; // independent momentum-observer sample interval, seconds
-  // -1: outage/invalid clock; 0: paused time; 1..8: bounded integration work.
-  int integrationSteps(double elapsed) const;
-  double soft_tracking_fraction = .6, resume_fraction = .5;
-  double preparation_tolerance = .03, preparation_quiet_time = .3;
-  double reference_lead = .018, progress_filter_time = .15, goal_tolerance = .0087;
-  double progress_timeout = 30;
-  bool governorValid(const PlanningConfig&) const;
-  bool feedbackConfigValid() const;
-  bool motionConfigValid() const;
-  bool settlingValid() const;
-  bool valid() const;
-};
-double trackingFeedScale(double used, double hard, double soft_fraction);
-enum class FeedbackStatus
-{
-  READY,
-  WAITING,
-  FAULT
-};
-FeedbackStatus feedbackStatus(const Feedback&, const ExecutionConfig&, const PlanningConfig&);
-// Shared onboard feedback validation; manual navigation does not instantiate an executor.
-std::string feedbackRejection(const Feedback&, const ExecutionConfig&, const PlanningConfig&);
-class Executor
-{
-public:
-  Stage stage = Stage::FREE_FLIGHT;
-  std::uint64_t session = 0;
-  std::string reason = "free flight";
-  std::string first_fault;
-  ExecutionConfig config;
-  PlanningConfig planning;
-  Kinematics model;
-  Reference target;
-  Estimate measured;
-  Plan plan;
-  double progress = 0, nominal_progress = 0;
-  // Signed local-body pitch correction; composed by navigation after nominal planning.
-  double relief = 0;
-  bool interaction_hold = false, resisting_load = false;
-  bool relief_enabled = false, relief_limited = false;
-  double relief_angle_limit = .0383972, relief_rate_limit = .15, relief_acceleration_limit = .1;
-  double applied_relief = 0, relief_available = 0;
-  double phaseSpeed() const
-  {
-    return speed_;
-  }
-  bool stopping() const
-  {
-    return stopping_;
-  }
-  TaskProgress task;
-  double planned_pitch = 0, goal_error = 0, goal_orientation_error = 0;
-  bool path_end_commanded = false, goal_reached = false, progress_lag = false;
-  bool reference_updated = false;  // this tick accepted a coherent scalar/reference proposal
-  Reference applied;
-  bool applied_valid = false;
-  SettlingStatistics settling;
-  double settling_elapsed = 0;
-  bool owns() const
-  {
-    return stage != Stage::FREE_FLIGHT;
-  }
-  bool feedbackValid(const Feedback&) const;
-  std::string feedbackRejection(const Feedback&) const;
-  bool capture(const Feedback&, const Kinematics&);
-  // Attach an explicit planner to an already captured base lock; do not recapture contact.
-  bool attach(const Kinematics&, const Reference&, std::uint64_t, double now);
-  bool accept(Plan);
-  bool submissionMatches(const Plan&, const Feedback&, const Reference&) const;
-  bool command(const std::string&, std::uint64_t);
-  void tick(const Feedback&);
-  std::function<void()> referenceRollback(); // Fixed-size numerical state; excludes model/plan.
-  void waitForFeedback(double now, const std::string&);
-  void fault(const std::string&);
-  void reset();
-  void hold(const std::string&);
-
-private:
-  void advanceMotion(const Feedback&, double dt);
-  void resetSettling();
-  SettlingWindow settling_window_;
-  double last_time_ = 0, stable_since_ = 0, ready_since_ = 0, speed_ = 1;
-  double lag_since_ = 0, settling_stamp_ = 0, best_forward_ = 0;
-  double recovery_body_stamp_ = 0, recovery_joint_stamp_ = 0;
-  bool governor_hold_ = false, feedback_waiting_ = false, resume_after_feedback_ = false;
-  bool stopping_ = false, cancel_ = false, paused_align_ = false, motion_clock_pending_ = false;
-};
-}  // namespace roll_yaw
-
-// Scalar admittance
-
-namespace roll_yaw
-{
-struct AdmittanceConfig
-{
-  double inertia = .40, damping = 5, stiffness = 4.5, torque_limit = .18, angle_limit = .0383972;
-  double rate_limit = .15, acceleration_limit = .1, reference_torque = 0;
-  double filter_time = .1, on_threshold = .04, off_threshold = .02, on_dwell = .1, off_dwell = .2;
-  int baseline_samples = 80;
-  bool valid() const;
-};
-class PitchAdmittance
-{
-public:
-  AdmittanceConfig config;
-  bool enabled = false, contact = false, baseline_ready = false;
-  double bias = 0, filtered = 0, offset = 0, rate = 0, acceleration = 0;
-  int samples = 0;
-  void reset();
-  // Availability does not own the calibration, correction or consumed timestamp.
-  void inputUnavailable()
-  { input_missing_ = true; filtered = 0; contact = false; on_ = off_ = 0; filter_reacquiring = true; }
-  void restartObservationClock() { stamp_ = 0; input_missing_ = true; }
-  bool filter_reacquiring = true;
-  void observe(double torque, double stamp, bool no_cut, bool bidirectional = true);
-  bool step(double dt, bool input_fresh, bool relief_only = false, double available_relief = -1);
-
-private:
-  bool input_missing_ = false;
-  double sum_ = 0, stamp_ = 0, on_ = 0, off_ = 0;
-};
-// Local constrained reference synthesis; never edits a nominal Path or goal.
-// dt == 0 is only for removing a correction during coordinate conversion;
-// physical pose/derivative limits still apply, temporal step bounds do not.
-bool compliantReference(const Kinematics&, const Reference& nominal, const Reference& previous, double offset,
-                        double rate, double acceleration, double dt, const PlanningConfig&, Reference&, std::string&);
-bool advanceCompliance(const Kinematics&, const Reference& nominal, const Reference& previous, double dt, bool fresh,
-                       const PlanningConfig&, PitchAdmittance&, Reference&, std::string&);
-}  // namespace roll_yaw
-
-// Background worker support
-
-namespace roll_yaw
-{
-inline double steadySeconds()
-{ return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
-
-// A pulse expires even if feedback is held or the sender disappears. Real
-// hardware also uses steady time; paused simulation time must stay paused.
-// Missing roll/pitch feedforward in the angle-only FC command. Yaw already has
-// a host-side command term; measured-rate feedback remains exclusively in FC.
-Eigen::Vector3d referenceFeedforward(const Eigen::Vector3d& rate, const Eigen::Vector3d& acceleration,
-                                    const Eigen::Vector3d& gain, const Eigen::Vector3d& limit);
-Eigen::Vector3d referenceAngularAcceleration(const Eigen::Matrix3d& current, const Eigen::Matrix3d& desired,
-                                             const Eigen::Vector3d& acceleration);
-
-struct PitchPulse
-{
-  std::uint64_t sequence = 0;
-  double expires = 0, wall_expires = 0;
-  bool completed = false;
-  bool expired(double now, double wall, bool simulated) const
-  { return sequence && (now >= expires || (!simulated && wall >= wall_expires)); }
-  bool start(std::uint64_t id, double duration, double now, double wall)
-  {
-    if(!id || id <= sequence || !std::isfinite(duration) || duration <= 0 || duration > 8 ||
-       !std::isfinite(now) || !std::isfinite(wall)) return false;
-    sequence = id; expires = now + duration; wall_expires = wall + duration; completed = false;
-    return true;
-  }
-};
-
-// A stop changes the epoch without changing the physical contact. Old clients
-// must not acquire the new epoch automatically and resume unfinished motion.
-struct MotionIdentity
-{
-  std::uint64_t epoch = 1, sequence = 0;
-  std::string source;
-  std::string rejection(std::uint64_t e, const std::string& s, std::uint64_t n, bool claim = false) const
-  {
-    if(e != epoch) return "cancelled motion epoch";
-    if(s.empty() || s.size() > 128 || n == 0 ||
-       s.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-") != std::string::npos)
-      return "invalid motion identity";
-    if(!claim && !source.empty() && source != s) return "another source owns motion; claim after nominal motion finishes";
-    if(source == s && n <= sequence) return "old motion sequence";
-    return "";
-  }
-  void accept(const std::string& s, std::uint64_t n) { source = s; sequence = n; }
-  void revoke() { ++epoch; source.clear(); sequence = 0; }
-};
-
-// Keep different mechanism axes independent, but never retain a superseded
-// body/velocity mode. Called under the navigator input mutex.
-template<class Command> void replacePendingMotion(std::deque<Command>& pending, const std::string& key)
-{
-  if(key.compare(0, 7, "motion_") != 0) return;
-  const bool axis = key.compare(0, 11, "motion_axis") == 0;
-  for(auto it = pending.begin(); it != pending.end();)
-  {
-    const bool old_motion = it->key.compare(0, 7, "motion_") == 0;
-    const bool other_axis = axis && it->key.compare(0, 11, "motion_axis") == 0 && it->key != key;
-    if(old_motion && !it->urgent && !other_axis) it = pending.erase(it);
-    else ++it;
-  }
-}
-
-inline double pitchTargetRate(double target, double progress, double limit)
-{
-  // A half-second approach horizon leaves the existing bounded velocity
-  // generator responsible for acceleration, tracking and braking limits.
-  return std::clamp((target - progress) / .5, -limit, limit);
-}
-
-// One persistent thread, at most one job/result. Callback methods never wait.
-// Cancellation is cooperative; destruction joins ONLY during plugin shutdown.
-template<class Result> class Worker
-{
-public:
-  using Job=std::function<Result(const std::function<bool()>&)>;
-  Worker():thread_([this]{run();}) {}
-  ~Worker()
-  {
-    // Protect the wait predicate to prevent a lost shutdown notification.
-    { std::lock_guard<std::mutex> l(mutex_); quit_=true; cancel(); }
-    wake_.notify_one(); thread_.join();
-  }
-  Worker(const Worker&)=delete;
-  Worker& operator=(const Worker&)=delete;
-  void cancel() { ++generation_; }
-  bool submit(Job job)
-  {
-    std::unique_lock<std::mutex> l(mutex_,std::try_to_lock);
-    if(!l||busy_||job_||result_) return false;
-    job_=std::move(job); job_generation_=generation_.load(); wake_.notify_one(); return true;
-  }
-  std::unique_ptr<Result> take()
-  {
-    std::unique_lock<std::mutex> l(mutex_,std::try_to_lock);
-    return l?std::move(result_):nullptr;
-  }
-private:
-  void run()
-  {
-    while(!quit_) {
-      Job job; unsigned long generation;
-      {
-        std::unique_lock<std::mutex> l(mutex_);
-        wake_.wait(l,[this]{return quit_||bool(job_);});
-        if(quit_) return;
-        job=std::move(job_); generation=job_generation_; busy_=true;
-      }
-      auto cancelled=[this,generation]{return quit_||generation_.load()!=generation;};
-      std::unique_ptr<Result> result;
-      try { result.reset(new Result(job(cancelled))); }
-      catch(const std::exception& e) { result.reset(new Result()); result->reason=std::string("worker exception: ")+e.what(); }
-      catch(...) { result.reset(new Result()); result->reason="unknown worker exception"; }
-      { std::lock_guard<std::mutex> l(mutex_); busy_=false; if(!cancelled()) result_=std::move(result); }
-    }
-  }
-  std::atomic<bool> quit_{false};
-  std::atomic<unsigned long> generation_{0};
-  unsigned long job_generation_=0;
-  std::mutex mutex_; std::condition_variable wake_; Job job_;
-  std::unique_ptr<Result> result_; bool busy_=false;
-  std::thread thread_;
-};
-}

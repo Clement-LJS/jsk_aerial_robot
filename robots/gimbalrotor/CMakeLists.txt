@@ -57,7 +57,7 @@ add_library(gimbalrotor_controller
   src/control/gimbalrotor_admittance_controller.cpp
   src/control/gimbalrotor_perching_admittance_controller.cpp
   src/control/gimbalrotor_multilink_perching_admittance_controller.cpp)
-target_link_libraries(gimbalrotor_controller gimbalrotor_perching gimbalrotor_robot_model ${catkin_LIBRARIES})
+target_link_libraries(gimbalrotor_controller gimbalrotor_navigation gimbalrotor_perching gimbalrotor_robot_model ${catkin_LIBRARIES})
 
 add_library(gimbalrotor_robot_model
   src/model/gimbalrotor_robot_model.cpp)
@@ -66,13 +66,14 @@ target_link_libraries(gimbalrotor_robot_model ${catkin_LIBRARIES})
 add_library(gimbalrotor_perching
   src/gimbalrotor_perching.cpp
   src/model/gimbalrotor_multilink_perching_model.cpp
-  src/model/gimbalrotor_roll_yaw_dynamics.cpp)
+  src/model/gimbalrotor_serial_model.cpp)
 target_link_libraries(gimbalrotor_perching ${catkin_LIBRARIES})
 
 add_library(gimbalrotor_navigation
   src/gimbalrotor_navigation.cpp
   src/gimbalrotor_perching_navigation.cpp)
 target_link_libraries(gimbalrotor_navigation gimbalrotor_perching gimbalrotor_robot_model ${catkin_LIBRARIES})
+add_dependencies(gimbalrotor_controller ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 add_dependencies(gimbalrotor_navigation ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 
 if(gazebo_FOUND)
@@ -115,3 +116,7 @@ if(CATKIN_ENABLE_TESTING)
   find_package(rostest REQUIRED)
   add_subdirectory(test)
 endif()
+
+install(TARGETS gimbalrotor_controller gimbalrotor_navigation gimbalrotor_perching gimbalrotor_robot_model
+  LIBRARY DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION})
+install(DIRECTORY include/gimbalrotor/ DESTINATION ${CATKIN_PACKAGE_INCLUDE_DESTINATION})

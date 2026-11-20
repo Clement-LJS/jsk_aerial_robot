@@ -1,105 +1,39 @@
-# Fixed-contact capture, manual increments and explicit automatic trajectories. All angles are radians; lengths metres; times seconds.
-# Nominal hinge geometry; physical calibration is not established by this file.
+# Configured coordinates are [alpha, active_joints...]; all geometry except the external hinge comes from URDF.
+# Servo mappings retain the existing hardware IDs/signs. Hinge calibration and tuning require hardware verification.
 controller:
-  # Preserve Spinal attitude feedback and FC-side gimbal/motor allocation.
-  # Host yaw PID consumes target rate; FourAxisCommand has no separate rate field.
   gimbal_calc_in_fc: true
+  command_wrench_topic: perching/roll_yaw/command_wrench_estimate
+  admittance:
+    inertia_pitch: 0.4
+    rot_damping_pitch: 5.0
+    rot_stiffness_pitch: 4.5
+    torque_limit_pitch: 0.18
+    angle_offset_limit_pitch: 0.0383972
+    angular_vel_offset_limit_pitch: 0.15
+    enable_pitch: 1.0
+    torque_ref_pitch: 0.0
+    perching:
+      equilibrium_wrench_required_samples: 80
+      contact_on_threshold: 0.04
+      contact_off_threshold: 0.02
+      contact_on_duration: 0.1
+      contact_off_duration: 0.2
+      pitch_acceleration_limit: 0.1
 navigation:
-  perching_configuration: roll_yaw
   perching_enable: false
-  roll_yaw_perching:
-    # Common base lifecycle: enable/capture -> nominal target -> update/FK -> controller.
-    # Manual targets always mean [passive alpha, active roll, active yaw].
-    # Relative body-Y increments start from applied pose after preceding intent completes.
-    # Ordered jog queue: finish preceding destination, then worker endpoint IK + bounded follower.
-    # Larger commands are rejected; full cuts use request/pitch_increment below.
-    body_pitch_jog_max_delta: 0.0174532925199433 # rad (1 degree); inherited by simulation
-    # body_pitch_velocity is main-body local +Y rad/s, independent of angle jogs.
-    # Each accepted nonzero message renews this ROS-time lifetime; expiry/zero
-    # brakes to hold. Simulation inherits. Script refresh_period_sec must be shorter
-    # than this lease (default lease/4); interval_sec counts experiment duration.
-    body_pitch_velocity_command_duration: 8.0 # seconds, finite and strictly positive
-    prepare_deadline: 120.0 # steady-clock seconds; cooperative cancellation
-    # Execution allowance, not overshoot or hardware-validated tuning.
-    # Limits the nominal feed lead over measured progress.
-    reference_lead: 0.018 # rad, strictly below soft body tracking bound
-    soft_tracking_fraction: 0.6 # continuous slowdown starts here; no manual hysteresis latch
-    resume_fraction: 0.5 # retained for prepared-path governor; manual/velocity feed is memoryless
-    max_execution_step: 0.05 # s; manual/velocity step cap; extra elapsed time is discarded
-    max_execution_gap: 0.15 # s; longer elapsed intervals hold without catch-up
-    observer_max_interval: 0.15 # s; independent implicit momentum-observer sample interval
-    # Source freshness remains feedback_timeout; neither bound changes synchronization.
-    # Ordinary 50–65 ms updates use bounded substeps and one real observation.
-    preparation_tolerance: 0.03 # rad live start consistency; below body/joint tracking allowances
-    preparation_quiet_time: 0.3 # seconds: fresh RMS/current/mean-rate window before prepare
-    progress_filter_time: 0.15
-    goal_tolerance: 0.0087
-    progress_timeout: 30.0
-    admittance:
-      source: articulated_momentum # legacy_wrench remains available; selected at startup/disarmed READY tare
-      # Raw generalized loads start at contact lock: no prepare/tare/admittance enable.
-      # generalized_external_load (JointState effort): [alpha, roll_joint, yaw_joint], N.m.
-      # Require generalized_external_load_valid (Bool) AND a fresh observation stamp.
-      # Invalid/bootstrap periods publish false and no numeric load (a plotting gap).
-      # PlotJuggler: omit /session metadata; never reuse rounded display IDs in commands.
-      # The following wrench mapping applies only when legacy_wrench is selected.
-      # Legacy observer software convention: wrench ON robot, world force/moment
-      # about CoG in N and N.m; not a physically calibrated cutting-force measurement.
-      # Command_wrench_estimate is never used as external cutting resistance.
-      external_wrench_topic: estimated_external_wrench
-      wrench_frame: world # world or body (body header must match body_frame)
-      wrench_point: cog # cog, body, or world_origin; moment is ABOUT this point
-      wrench_sign: 1.0 # Built-in observer: wrench ON robot; resistance -> negative work
-      wrench_scale: 1.0 # Built-in observer software units N, N.m; not physical calibration
-      # Prepare -> READY, remove cutting load, admittance_tare -> baseline_ready,
-      # then perching/admittance_enable=true. Disabling releases gradually.
-      # This sequence gates path compliance only, never raw articulated estimation.
-      # Gains below are provisional, not hardware tuning.
-      inertia: 0.40
-      damping: 5.0
-      stiffness: 4.5
-      torque_limit: 0.18
-      angle_limit: 0.0383972
-      rate_limit: 0.15
-      acceleration_limit: 0.1
-      reference_torque: 0.0
-      filter_time: 0.1
-      on_threshold: 0.04
-      off_threshold: 0.02
-      on_dwell: 0.1
-      off_dwell: 0.2
-      baseline_samples: 80
+  perching:
+    body_pitch_jog_max_delta: 0.0174532925199433
+    body_pitch_velocity_command_duration: 8.0
+    max_execution_step: 0.05
+    max_execution_gap: 0.15
+    observer_max_interval: 0.15
     dynamics:
-      observer_gain: 10.0 # positive, inverse seconds; only articulated_momentum uses this
+      observer_gain: 10.0
       joint_effort:
-        # Existing ServoBridge current-derived nominal joint torques, consumed
-        # directly without another scale/sign conversion or calibration gate.
-        # The producer is resolved internally as servo_bridge in the robot namespace.
         source: servo_bridge_joint_states
-        topic: joint_states # MUST equal roll_yaw_perching/joint_state_topic
-      # Effort shares the angle/rate sample; header and steady receipt age <=
-      # feedback_timeout, future <= future_tolerance, full sample span <=
-      # feedback_sync_tolerance. Duplicate stamps cannot refresh an observation;
-      # backwards/gapped/invalid inputs pause forcing and retain the session tare.
-      # YAML selects supported joint names, sources/topics, gains and limits only.
-      # Different serial order/contact/DOF/task/actuation maps need a code adapter.
-      # Reduced model retains all masses/inertias at the captured internal gimbal
-      # configuration and neglects internal gimbal-motion/coupling dynamics.
-      # Physical rotor gimbals may move normally; no gimbal rate/freshness gate.
-      # The model link-joint API selects roll/yaw; extra link articulations are rejected
-      # at setup. Hand/lock servos and rotor gimbals are not feedback dependencies.
-      # Missing/stale/invalid required inputs still invalidate the estimate.
-      # Generalized N.m residual includes approximation error, not an exact Cartesian wrench.
-      # Rotor spin momentum is omitted. Temporary data/computation failures rebase
-      # observation without erasing a completed tare. New lock/model/source
-      # identities require an explicitly requested unloaded tare.
-    # Enable/capture once, then navigate. Optional intentional setup: z -> ready-HOLD -> b.
-    # Rezero uses only the configured passive hinge, with measured active joints frozen.
+        topic: joint_states
     pitch_rezero_target_pitch: 0.0
     pitch_rezero_kp: 1.0
-    # Same convention as multilink: alpha rotates about contact/pivot +Y.
-    # The mounting yaw (~pi) maps it toward body -Y near zero roll/yaw.
-    # Thus +alpha decreases world body pitch; apply this sign exactly once.
     pitch_rezero_command_sign: -1.0
     pitch_rezero_rate_limit: 0.1745329
     pitch_rezero_max_delta: 0.5235988
@@ -107,73 +41,87 @@ navigation:
     pitch_rezero_rate_tolerance: 0.05
     pitch_rezero_stable_duration: 0.3
     pitch_rezero_timeout: 5.0
-    pitch_rezero_roll_joint_hold_tolerance: 0.02
-    pitch_rezero_yaw_joint_hold_tolerance: 0.02
-    roll_joint: joint_roll
-    yaw_joint: joint_yaw
     contact_link: roll_hand_link
     joint_state_topic: joint_states
     joint_command_topic: joints_ctrl
     body_state_topic: uav/baselink/odom
     world_frame: world
-    # body_frame defaults to the URDF baselink resolved with tf_prefix (beetle: fc).
     debug_prefix: perching/roll_yaw
-
-    # Nominal T_CP relative to roll_hand_link; verify against the hardware pivot.
-    pivot_offset: [0.21049, 0.0, 0.0205]
-    pivot_rpy: [0.0, 0.0, 0.0] # ZYX rotation of P relative to C
-    hinge_axis: [0.0, 1.0, 0.0] # signed UNIT axis expressed in P
-
-    # Coordinate order: [passive alpha, active roll, active yaw].
-    # Active limits are intersected with URDF limits/rates; never widened.
-    position_lower: [-1.2, -1.57079632679, -1.57079632679]
-    position_upper: [1.2, 1.57079632679, 1.57079632679]
-    velocity_caps: [0.15, 0.1, 0.1]
-    acceleration_caps: [0.1, 0.1, 0.1]
-    # Dedicated WORLD body-Z tilt envelope, independent of free-flight limits.
-    # Kinematic planning only; this does not certify physical flight feasibility.
+    pivot_offset:
+    - 0.21049
+    - 0.0
+    - 0.0205
+    pivot_rpy:
+    - 0.0
+    - 0.0
+    - 0.0
+    hinge_axis:
+    - 0.0
+    - 1.0
+    - 0.0
+    position_lower:
+    - -1.2
+    - -1.57079632679
+    - -1.57079632679
+    position_upper:
+    - 1.2
+    - 1.57079632679
+    - 1.57079632679
+    velocity_caps:
+    - 0.15
+    - 0.1
+    - 0.1
+    acceleration_caps:
+    - 0.1
+    - 0.1
+    - 0.1
     body_max_tilt: 0.9
-    planning_dt: 0.02
-    orientation_tolerance: 0.003
-    rate_tolerance: 0.01
-    alignment_rate: 0.04
-    alignment_acceleration: 0.02
-    max_phase_duration: 180.0
-    scaling_attempts: 5
     cog_speed_limit: 0.1
     cog_acceleration_limit: 0.2
-    min_singular_value: 0.05
     feedback_timeout: 0.15
     future_tolerance: 0.02
     feedback_sync_tolerance: 0.05
-    # Model-quality warnings only; finite residuals do not veto observation/motion.
-    # Physical operating limits and essential feedback validity remain enforced.
-    pivot_tolerance: 0.01
-    hinge_residual_tolerance: 0.03
-    # Prepared-path feed/preparation allowances; not fault thresholds for pushes.
     tracking_tolerance: 0.04
     body_tracking_tolerance: 0.04
-    # Automatic orientation endpoints wait for measured settling; manual jogs report reference_complete.
-    # Enable/relock capture current measurements without a zero-rate prerequisite.
-    settle_rate: 0.01 # Legacy strict policy (settle_use_window=false).
-    # Trial hardware bounds: time-weighted RMS/current norms and signed mean-vector norms.
-    # Review on the real robot before deployment; these allow small nonzero motion.
-    settle_use_window: true
-    settle_body_rate: 0.05
-    settle_joint_rate: 0.03
-    settle_mean_rate: 0.02
-    settle_time: 0.5
-    settle_timeout: 10.0
-    # Multilink-style independent absolute Float64 targets under perching/roll_yaw:
-    # alpha_target, roll_target, yaw_target. Each changes only its own nominal.
-    # nominal_angles / target_angles report nominal / applied [roll, alpha, yaw].
-    # Legacy full-vector target accepts that order with frame_id=perching_lock_<ns>.
-    # Remote command stamps are informational; onboard feedback stamps stay checked.
-    # cancel brakes along the applied path, then holds its final reference. manual_pitch_delta and pitch-only uav/nav
-    # remain absolute lock-relative alpha; no per-key lookahead or planning phase.
     request:
-      # Signed controlled-body-local Y increment from fresh measured cut start R0.
-      # R_des(d) = R0 * Ry(d); angle, not linear depth. Proxy sign checked by FK.
       pitch_increment: 0.349065850399
-      pitch_rate: 0.03          # positive magnitude, rad/s; may be time-scaled down
-      pitch_acceleration: 0.02  # positive magnitude, rad/s^2
+      pitch_rate: 0.03
+      pitch_acceleration: 0.02
+    active_joints:
+    - joint_roll
+    - joint_yaw
+    pitch_coordinates:
+    - alpha
+    - joint_roll
+    - joint_yaw
+    manual_coordinate: alpha
+    wire_coordinates:
+      '0': alpha
+      '1': joint_roll
+      '2': joint_yaw
+    wire_angles:
+    - joint_roll
+    - alpha
+    - joint_yaw
+    diagnostic_name: roll_yaw_perching
+    coordinate_topics:
+      perching/roll_yaw/alpha_target: alpha
+      perching/roll_yaw/roll_target: joint_roll
+      perching/roll_yaw/yaw_target: joint_yaw
+    pitch_rate: 0.03
+    pitch_acceleration: 0.02
+  roll_yaw_perching: {}
+servo_controller:
+  joints:
+    controller1:
+      id: 6
+      name: joint_yaw
+      angle_sgn: -1
+      simulation:
+        init_value: 0
+    controller2:
+      id: 7
+      name: joint_roll
+      angle_scale: 0.001534
+      simulation:
+        init_value: 0

@@ -66,7 +66,7 @@ bool MultilinkModel::state(const Eigen::VectorXd& q, GeometryState& s) const
   }
   else
   {
-    // Geometry-only fallback for future adapters; roll-yaw uses analytic columns.
+    // Geometry fallback differentiates every configured generalized coordinate.
     if(!geometry_ || !geometry_(q, s.centers, s.body) || s.centers.size() != links_.size())
       return false;
     s.linear.assign(links_.size(), Eigen::MatrixXd(3, n));
@@ -182,19 +182,19 @@ void ObservationFilter::reset()
   time_constant = tau;
 }
 
-bool ObservationFilter::observe(const Eigen::Vector3d& position, const Eigen::Matrix3d& rotation,
-    const Eigen::Vector3d& measured_gyro, const Eigen::Vector3d& torque,
+bool ObservationFilter::observe(const Eigen::VectorXd& position, const Eigen::Matrix3d& rotation,
+    const Eigen::Vector3d& measured_gyro, const Eigen::VectorXd& torque,
     const Eigen::Matrix<double, 6, 1>& input, double stamp, double max_interval)
 {
-  if(!position.allFinite() || !rotation.allFinite() || !measured_gyro.allFinite() || !torque.allFinite() ||
+  if(position.size() == 0 || position.size() != torque.size() || !position.allFinite() || !rotation.allFinite() || !measured_gyro.allFinite() || !torque.allFinite() ||
      !input.allFinite() || !std::isfinite(stamp) || stamp <= 0 || !std::isfinite(time_constant) ||
      time_constant <= 0 || !std::isfinite(max_interval) || max_interval <= 0) return false;
   if(stamp_ > 0 && stamp <= stamp_) return false;
   const double dt = stamp - stamp_;
-  if(stamp_ == 0 || dt > max_interval)
+  if(stamp_ == 0 || dt > max_interval || q.size() != position.size())
   {
     q = previous_ = position;
-    rate.setZero(); omega.setZero(); gyro = measured_gyro; effort = torque; wrench = input;
+    rate = Eigen::VectorXd::Zero(position.size()); omega.setZero(); gyro = measured_gyro; effort = torque; wrench = input;
     previous_rotation_ = rotation;
     stamp_ = started_ = stamp;
     return false;
@@ -208,7 +208,7 @@ bool ObservationFilter::observe(const Eigen::Vector3d& position, const Eigen::Ma
   // generalized rates nor the unconditioned gyro used by flight feedback.
   const Eigen::Matrix3d transport = rotation.transpose() * previous_rotation_;
   const Eigen::Vector3d measured_rate = transport *
-      roll_yaw::logSO3(previous_rotation_.transpose() * rotation) / dt;
+      perching_geometry::logSO3(previous_rotation_.transpose() * rotation) / dt;
   omega = (1 - weight) * transport * omega + weight * measured_rate;
   gyro = (1 - weight) * transport * gyro + weight * measured_gyro;
   effort += weight * (torque - effort);

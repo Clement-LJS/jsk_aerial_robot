@@ -651,7 +651,7 @@
     <joint name="pitchpipe_joint" type="fixed">
       <child link="passive_hand_link"/>
       <parent link="base_link"/>
-      <origin xyz="-0.05918 0.00025 0.01700" rpy="0 0 3.142"/>
+      <origin xyz="-0.05918 0.00025 0.01700" rpy="0 0 ${pi}"/>
       <axis xyz="0 0 0"/>
     </joint>
   </xacro:if>
@@ -696,16 +696,14 @@
 
 
 
-  <!-- <xacro:if value="$(arg use_yaw_joint)">
+  <xacro:if value="$(arg use_yaw_joint)">
     <joint name="pitchpipe_joint" type="fixed">
       <child link="pitch_pipe_link"/>
       <parent link="base_link"/>
-      <origin xyz="-0.05918 0 0.01700" rpy="0 0 3.142"/>
+      <origin xyz="-0.05918 0 0.01700" rpy="0 0 ${pi}"/>
       <axis xyz="0 0 0"/>
     </joint>
-  </xacro:if>
 
-  <xacro:if value="$(arg use_yaw_joint)">
     <joint name="joint_pitch" type="revolute">
       <limit effort="10.0" lower="${-pi/2}" upper="${pi/2}" velocity="0.1"/>
       <parent link="pitch_pipe_link"/>
@@ -714,20 +712,18 @@
       <axis xyz="0 1 0"/>
       <dynamics damping="0.9" friction="0.05"/>
     </joint>
-  </xacro:if>
 
-  <transmission name="joint_pitch_tran">
-    <type>transmission_interface/SimpleTransmission</type>
-    <joint name="joint_pitch">
-      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
-    </joint>
-    <actuator name="joint_servo_pitch">
-      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
-      <mechanicalReduction>1</mechanicalReduction>
-    </actuator>
-  </transmission>
+    <transmission name="joint_pitch_tran">
+      <type>transmission_interface/SimpleTransmission</type>
+      <joint name="joint_pitch">
+        <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+      </joint>
+      <actuator name="joint_servo_pitch">
+        <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+        <mechanicalReduction>1</mechanicalReduction>
+      </actuator>
+    </transmission>
 
-  <xacro:if value="$(arg use_yaw_joint)">
     <joint name="joint_yaw" type="revolute">
       <limit effort="10.0" lower="${-pi/2}" upper="${pi/2}" velocity="0.1"/>
       <parent link="inter_joint_junction_link"/>
@@ -736,18 +732,19 @@
       <axis xyz="0 0 1"/>
       <dynamics damping="0.9" friction="0.05"/>
     </joint>
+
+    <transmission name="joint_yaw_tran">
+      <type>transmission_interface/SimpleTransmission</type>
+      <joint name="joint_yaw">
+        <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+      </joint>
+      <actuator name="joint_servo_yaw">
+        <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+        <mechanicalReduction>1</mechanicalReduction>
+      </actuator>
+    </transmission>
   </xacro:if>
 
-  <transmission name="joint_yaw_tran">
-    <type>transmission_interface/SimpleTransmission</type>
-    <joint name="joint_yaw">
-      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
-    </joint>
-    <actuator name="joint_servo_yaw">
-      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
-      <mechanicalReduction>1</mechanicalReduction>
-    </actuator>
-  </transmission> -->
 
 
 
@@ -765,17 +762,14 @@
 
 
 
-
-  <!-- <xacro:if value="$(arg use_roll_joint)">
+  <xacro:if value="$(arg use_roll_joint)">
     <joint name="pitchpipe_joint" type="fixed">
       <child link="pitch_pipe_link"/>
       <parent link="base_link"/>
-      <origin xyz="-0.05918 0 0.01700" rpy="0 0 3.142"/>
+      <origin xyz="-0.05918 0 0.01700" rpy="0 0 ${pi}"/>
       <axis xyz="0 0 0"/>
     </joint>
-  </xacro:if>
 
-  <xacro:if value="$(arg use_roll_joint)">
     <joint name="joint_pitch" type="revolute">
       <limit effort="10.0" lower="${-pi/2}" upper="${pi/2}" velocity="0.1"/>
       <parent link="pitch_pipe_link"/>
@@ -784,25 +778,23 @@
       <axis xyz="0 1 0"/>
       <dynamics damping="0.9" friction="0.05"/>
     </joint>
-  </xacro:if>
 
 
 
-  <transmission name="joint_pitch_tran">
-    <type>transmission_interface/SimpleTransmission</type>
-    <joint name="joint_pitch">
-      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
-    </joint>
-    <actuator name="joint_servo_pitch">
-      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
-      <mechanicalReduction>1</mechanicalReduction>
-    </actuator>
-  </transmission>
+    <transmission name="joint_pitch_tran">
+      <type>transmission_interface/SimpleTransmission</type>
+      <joint name="joint_pitch">
+        <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+      </joint>
+      <actuator name="joint_servo_pitch">
+        <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+        <mechanicalReduction>1</mechanicalReduction>
+      </actuator>
+    </transmission>
 
 
 
 
-  <xacro:if value="$(arg use_roll_joint)">
     <joint name="joint_roll" type="revolute">
       <limit effort="10.0" lower="${-pi/2}" upper="${pi/2}" velocity="0.1"/>
       <parent link="roll_joint_asm_link"/>
@@ -811,20 +803,18 @@
       <axis xyz="1 0 0"/>
       <dynamics damping="0.02" friction="0.0"/>
     </joint>
-  </xacro:if> 
 
-  <transmission name="joint_roll_tran">
-    <type>transmission_interface/SimpleTransmission</type>
-    <joint name="joint_roll">
-      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
-    </joint>
-    <actuator name="joint_servo_roll">
-      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
-      <mechanicalReduction>1</mechanicalReduction>
-    </actuator>
-  </transmission> -->
-
-
+    <transmission name="joint_roll_tran">
+      <type>transmission_interface/SimpleTransmission</type>
+      <joint name="joint_roll">
+        <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+      </joint>
+      <actuator name="joint_servo_roll">
+        <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+        <mechanicalReduction>1</mechanicalReduction>
+      </actuator>
+    </transmission>
+  </xacro:if>
 
 
 
@@ -837,17 +827,16 @@
 
 
 
-  <!-- 
+
+
   <xacro:if value="$(arg use_pitch_joint_only)">
     <joint name="pitchpipe_joint" type="fixed">
       <child link="pitch_pipe_link"/>
       <parent link="base_link"/>
-      <origin xyz="-0.05918 0 0.01700" rpy="0 0 3.142"/>
+      <origin xyz="-0.05918 0 0.01700" rpy="0 0 ${pi}"/>
       <axis xyz="0 0 0"/>
     </joint>
-  </xacro:if>
 
-  <xacro:if value="$(arg use_pitch_joint_only)">
     <joint name="joint_pitch_only" type="revolute">
       <limit effort="10.0" lower="${-pi/2}" upper="${pi/2}" velocity="0.1"/>
       <parent link="pitch_pipe_link"/>
@@ -856,20 +845,20 @@
       <axis xyz="0 1 0"/>
       <dynamics damping="0.9" friction="0.05"/>
     </joint>
+
+
+
+    <transmission name="joint_pitch_tran">
+      <type>transmission_interface/SimpleTransmission</type>
+      <joint name="joint_pitch_only">
+        <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+      </joint>
+      <actuator name="joint_servo_pitch">
+        <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+        <mechanicalReduction>1</mechanicalReduction>
+      </actuator>
+    </transmission>
   </xacro:if>
-
-
-
-  <transmission name="joint_pitch_tran">
-    <type>transmission_interface/SimpleTransmission</type>
-    <joint name="joint_pitch_only">
-      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
-    </joint>
-    <actuator name="joint_servo_pitch">
-      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
-      <mechanicalReduction>1</mechanicalReduction>
-    </actuator>
-  </transmission> -->
 
 
 
@@ -883,7 +872,7 @@
     <joint name="pitchpipe_joint" type="fixed">
       <child link="yaw_pipe_link"/>
       <parent link="base_link"/>
-      <origin xyz="-0.05918 0 0.01700" rpy="0 0 3.142"/>
+      <origin xyz="-0.05918 0 0.01700" rpy="0 0 ${pi}"/>
       <axis xyz="0 0 0"/>
     </joint>
   </xacro:if>
@@ -901,6 +890,7 @@
 
 
 
+  <xacro:if value="$(arg use_roll_yaw_joint)">
   <transmission name="joint_yaw_tran">
     <type>transmission_interface/SimpleTransmission</type>
     <joint name="joint_yaw">
@@ -911,6 +901,7 @@
       <mechanicalReduction>1</mechanicalReduction>
     </actuator>
   </transmission>
+  </xacro:if>
 
 
 
@@ -926,6 +917,7 @@
     </joint>
   </xacro:if> 
 
+  <xacro:if value="$(arg use_roll_yaw_joint)">
   <transmission name="joint_roll_tran">
     <type>transmission_interface/SimpleTransmission</type>
     <joint name="joint_roll">
@@ -936,6 +928,7 @@
       <mechanicalReduction>1</mechanicalReduction>
     </actuator>
   </transmission>
+  </xacro:if>
 
 
 

@@ -11,11 +11,11 @@ namespace gazebo
 {
 // An ideal passive contact fixture for Gazebo, not a contact detector. A
 // successful navigator lock attaches the configured hinge to the world. The
-// body and roll/yaw joints remain dynamic; no trajectory is imposed by this plugin.
-class RollYawPerchingContact : public ModelPlugin
+// body and active joints joints remain dynamic; no trajectory is imposed by this plugin.
+class PerchingContact : public ModelPlugin
 {
 public:
-  ~RollYawPerchingContact() override
+  ~PerchingContact() override
   {
     update_.reset();
     if(hinge_) { hinge_->Detach(); hinge_->Fini(); }
@@ -25,25 +25,26 @@ public:
 
   void Load(physics::ModelPtr model,sdf::ElementPtr sdf) override
   {
-    if(!ros::isInitialized()) { gzerr << "RollYaw contact requires gazebo_ros\n"; return; }
+    if(!ros::isInitialized()) { gzerr << "Perching contact requires gazebo_ros\n"; return; }
     model_=model;
     const auto ns=sdf->Get<std::string>("robotNamespace");
     nh_.reset(new ros::NodeHandle(ns)); nh_->setCallbackQueue(&queue_);
-    ros::NodeHandle pn(*nh_,"navigation/roll_yaw_perching");
+    ros::NodeHandle pn(*nh_,"navigation/perching");
     std::string contact,prefix;
-    pn.param<std::string>("contact_link",contact,"roll_hand_link");
-    pn.param<std::string>("debug_prefix",prefix,"perching/roll_yaw");
+    pn.param<std::string>("contact_link",contact,"");
+    pn.param<std::string>("debug_prefix",prefix,"perching");
     pn.param<std::string>("world_frame",world_frame_,"world");
     if(!world_frame_.empty()&&world_frame_.front()=='/') world_frame_.erase(0,1);
     link_=model_->GetLink(contact);
-    ignition::math::Vector3d rpy,lower,upper;
+    ignition::math::Vector3d rpy;
+    std::vector<double> lower, upper;
     if(!link_||!read(pn,"pivot_offset",offset_)||!read(pn,"pivot_rpy",rpy)||
        !read(pn,"hinge_axis",axis_)||std::abs(axis_.Length()-1)>1e-7||
-       !read(pn,"position_lower",lower)||!read(pn,"position_upper",upper)||
-       lower.X()>=0||upper.X()<=0)
-    { ROS_ERROR("[RollYaw Gazebo] Invalid contact link/hinge configuration"); return; }
+       !pn.getParam("position_lower",lower)||!pn.getParam("position_upper",upper)||
+       lower.empty()||upper.size()!=lower.size()||!std::isfinite(lower[0])||!std::isfinite(upper[0])||lower[0]>=0||upper[0]<=0)
+    { ROS_ERROR("[Perching Gazebo] Invalid contact link/hinge configuration"); return; }
     pivot_rotation_=ignition::math::Quaterniond(rpy);
-    lower_=lower.X(); upper_=upper.X();
+    lower_=lower[0]; upper_=upper[0];
     pn.param("pivot_tolerance",tolerance_,0.01);
     if(!std::isfinite(tolerance_)||tolerance_<=0) return;
     status_pub_=nh_->advertise<std_msgs::String>(prefix+"/contact",1,true);
@@ -89,12 +90,12 @@ private:
     { publish("rejected: measured lock does not match physical hinge"); return; }
     hinge_=model_->GetWorld()->Physics()->CreateJoint("revolute",model_);
     if(!hinge_) { publish("rejected: physics engine cannot create hinge"); return; }
-    hinge_->SetName("roll_yaw_passive_contact");
+    hinge_->SetName("perching_passive_contact");
     hinge_->Load(physics::LinkPtr(),link_,ignition::math::Pose3d(offset_,pivot_rotation_));
     hinge_->Init();
     hinge_->SetAxis(0,axis_);
     hinge_->SetLowerLimit(0,lower_); hinge_->SetUpperLimit(0,upper_);
-    publish("attached: passive world hinge; roll/yaw and body remain dynamic");
+    publish("attached: passive world hinge; active joints and body remain dynamic");
   }
   ros::CallbackQueue queue_;
   std::unique_ptr<ros::NodeHandle> nh_;
@@ -111,5 +112,5 @@ private:
   double lower_=0,upper_=0,tolerance_=0.01;
   bool pending_=false,attached_requested_=false;
 };
-GZ_REGISTER_MODEL_PLUGIN(RollYawPerchingContact)
+GZ_REGISTER_MODEL_PLUGIN(PerchingContact)
 }

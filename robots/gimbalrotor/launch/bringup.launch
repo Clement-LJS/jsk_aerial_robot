@@ -67,25 +67,25 @@
    <rosparam file="$(arg config_dir)/Simulation.yaml" command="load" if="$(eval arg('simulation') and not arg('real_machine'))"/>
 
    ###########  Navigation  ###########
-   <param name="navigation/perching_configuration" value="baseline"/>
+   <param name="aerial_robot_control_name" value="aerial_robot_control/gimbalrotor_perching_admittance_controller" if="$(eval arg('airframe') == 'beetle')"/>
    <rosparam file="$(arg config_dir)/NavigationConfig.yaml" command="load" />
+   <rosparam param="navigation/perching/active_joints">[]</rosparam>
    <group if="$(arg roll_yaw_perching)">
-     <param name="navigation/perching_configuration" value="roll_yaw"/>
      <rosparam file="$(arg config_dir)/beetle/RollYawPerching.yaml" command="load"/>
      <rosparam file="$(arg config_dir)/beetle/RollYawPerching_sim.yaml" command="load" if="$(arg simulation)"/>
      <param name="aerial_robot_control_name" value="aerial_robot_control/gimbalrotor_multilink_perching_admittance_controller"/>
    </group>
    <group if="$(arg pitch_only_perching)">
-     <param name="navigation/perching_configuration" value="pitch_only"/>
      <rosparam file="$(arg config_dir)/beetle/PitchOnlyPerching.yaml" command="load"/>
-     <param name="aerial_robot_control_name" value="aerial_robot_control/gimbalrotor_controller"/>
+     <param name="aerial_robot_control_name" value="aerial_robot_control/gimbalrotor_perching_admittance_controller"/>
    </group>
    <group if="$(arg multilink_perching)">
-     <param name="navigation/perching_configuration" value="multilink"/>
      <rosparam file="$(arg config_dir)/$(arg airframe)/MultilinkPerching.yaml" command="load" />
-     <!-- Override after all control YAML loads: mechanism navigation uses ordinary PID. -->
-     <param name="aerial_robot_control_name" value="aerial_robot_control/gimbalrotor_controller" />
+     <!-- All profiles inherit the same perching control core. -->
+     <param name="aerial_robot_control_name" value="aerial_robot_control/gimbalrotor_perching_admittance_controller" />
    </group>
+
+   <rosparam file="$(arg config_dir)/beetle/Perching_sim.yaml" command="load" if="$(eval arg('simulation') and (arg('roll_yaw_perching') or arg('pitch_only_perching') or arg('multilink_perching')))"/>
 
    <!-- Enforce the canonical plugin after profiles, including custom config_dir overrides. -->
    <param name="flight_navigation_plugin_name" value="aerial_robot_navigation/gimbalrotor_perching_navigation"/>
@@ -106,6 +106,7 @@
     <arg name="model_options" value="$(arg pitch_only_model_options) use_pitch_joint_only:=true use_roll_yaw_joint:=false use_roll_joint:=false use_yaw_joint:=false use_hand:=false" if="$(arg pitch_only_perching)"/>
     <arg name="model_options" value="use_roll_yaw_joint:=true use_pitch_joint_only:=false use_roll_joint:=false use_yaw_joint:=false use_hand:=false simulate_roll_yaw_contact:=$(arg simulate_roll_yaw_contact)" if="$(arg roll_yaw_perching)"/>
     <arg name="model_options" value="$(eval 'use_roll_yaw_joint:=false use_pitch_joint_only:=false use_hand:=false use_roll_joint:=' + str(arg('multilink_secondary') == 'roll').lower() + ' use_yaw_joint:=' + str(arg('multilink_secondary') == 'yaw').lower())" if="$(arg multilink_perching)"/>
+    <arg name="model_options" value="use_roll_yaw_joint:=false use_pitch_joint_only:=false use_roll_joint:=false use_yaw_joint:=false use_hand:=true" if="$(eval arg('airframe') == 'beetle' and not (arg('roll_yaw_perching') or arg('pitch_only_perching') or arg('multilink_perching')))"/>
     <arg name="headless" value="$(arg headless)" />
     <arg name="robot_model" value="$(find gimbalrotor)/robots/$(arg airframe)/gimbalrotor.$(arg description_mode).xacro"/>
     <arg name="robot_ns" value="$(arg robot_ns)" />

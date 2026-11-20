@@ -1,263 +1,77 @@
 // -*- mode: c++ -*-
 #pragma once
-
 #include <gimbalrotor/control/gimbalrotor_admittance_controller.h>
-#include <gimbalrotor/gimbalrotor_perching.h>
-
-#include <geometry_msgs/PointStamped.h>
-#include <geometry_msgs/PoseStamped.h>
-#include <geometry_msgs/WrenchStamped.h>
-#include <std_msgs/Bool.h>
-#include <std_msgs/Float64.h>
-
-#include <tf/transform_datatypes.h>
+#include <gimbalrotor/control/gimbalrotor_multilink_perching_observer.h>
+#include <gimbalrotor/gimbalrotor_perching_navigation.h>
+#include <std_msgs/Empty.h>
+#include <deque>
 #include <tf/transform_broadcaster.h>
-
-#include <string>
-#include <mutex>
-#include <cstdint>
 
 namespace aerial_robot_control
 {
-
-class GimbalrotorPerchingAdmittanceController
-  : public GimbalrotorAdmittanceController
+class GimbalrotorPerchingAdmittanceController : public GimbalrotorAdmittanceController
 {
 public:
-  GimbalrotorPerchingAdmittanceController();
-  virtual ~GimbalrotorPerchingAdmittanceController() = default;
-
-  virtual void initialize(
-      ros::NodeHandle nh,
-      ros::NodeHandle nhp,
-      boost::shared_ptr<aerial_robot_model::RobotModel> robot_model,
-      boost::shared_ptr<aerial_robot_estimation::StateEstimator> estimator,
-      boost::shared_ptr<aerial_robot_navigation::BaseNavigator> navigator,
-      double ctrl_loop_rate) override;
-
-  virtual void reset() override;
-
+  void initialize(ros::NodeHandle, ros::NodeHandle, boost::shared_ptr<aerial_robot_model::RobotModel>,
+                  boost::shared_ptr<aerial_robot_estimation::StateEstimator>,
+                  boost::shared_ptr<aerial_robot_navigation::BaseNavigator>, double) override;
+  void reset() override;
 protected:
-  virtual void controlCore() override;
-
-  virtual const char* controllerName() const override
-  {
-    return "GimbalrotorPerchingAdmittanceController";
-  }
-
-  virtual void applyAdmittanceOutputToNavigator(
-      const tf::Vector3& original_target_pos,
-      const tf::Vector3& original_target_rpy,
-      const AdmittanceCoreOutput& output) override;
-
-  virtual Eigen::Matrix<double, 6, 1>
-  getExternalWrenchWorld() const override;
-
+  void controlCore() override;
+  void applyAdmittanceOutputToNavigator(const tf::Vector3&, const tf::Vector3&, const AdmittanceCoreOutput&) override;
+  Eigen::Matrix<double, 6, 1> getExternalWrenchWorld() const override;
+  Eigen::Matrix3d getComplianceToWorldRotation() const override;
+  Eigen::Vector3d angularFeedforward() const override;
+  const char* controllerName() const override { return "GimbalrotorPerchingAdmittanceController"; }
 private:
-  void perchingRosParamInit();
-  void updatePitchIntegralPolicy(PID& pitch_pid, bool suppress_pitch_i_limit);
-  // Called with perching_state_mutex_ held, once per received wrench sequence.
-  void publishPivotWrench(const tf::Vector3& pivot_world, const Eigen::Matrix3d& R_world_constraint,
-                         const ros::Time& stamp, const Eigen::Matrix<double, 6, 1>& wrench);
-
-  void normalAdmittanceEnableCallback(
-      const std_msgs::Bool::ConstPtr& msg);
-
-  void perchingAdmittanceEnableCallback(
-      const std_msgs::Bool::ConstPtr& msg);
-
-  void perchingEnableCallback(
-      const std_msgs::Bool::ConstPtr& msg);
-
-  void perchingSlantedEnableCallback(const std_msgs::Bool::ConstPtr& msg);
-  void selectPerchingMode(perching_geometry::Mode mode, bool enable);
-  // Caller holds perching_state_mutex_. Navigator mode/stamp are authoritative.
-  void synchronizePerchingModeUnsafe();
-  void resetPerchingLockUnsafe();
-
-  void perchingPointCallback(
-      const geometry_msgs::PointStamped::ConstPtr& msg);
-
-  void branchPoseCallback(
-      const geometry_msgs::PoseStamped::ConstPtr& msg);
-
-  void lockedPoseCallback(
-      const geometry_msgs::PoseStamped::ConstPtr& msg);
-
-  void lockedPivotCallback(
-      const geometry_msgs::PointStamped::ConstPtr& msg);
-
-  void updateLockedConstraintFromLockedPoseAndPivot();
-
-  void resetEquilibriumWrenchUnsafe();
-
-  /*
-   * The caller must already hold perching_state_mutex_.
-   */
-  void resetContactGateUnsafe();
-
-  /*
-   * Remove external admittance forcing while preserving a valid
-   * nonzero admittance state so stiffness and damping can return
-   * the pitch correction smoothly to zero.
-   *
-   * The caller must already hold perching_state_mutex_.
-   */
-  void enterZeroInputRecoveryUnsafe();
-
   void preparePerchingAdmittanceInput();
-
-  void updateContactGate(
-      double residual_pitch_torque,
-      double dt);
-
-  bool recoveryComplete() const;
-
-  bool perchingPitchAdmittanceConfigValid() const;
-
-  bool perchingPitchOutputFinite(
-      const AdmittanceCoreOutput& output) const;
-
-  double safeAdmittanceDt() const;
-
-  void publishContactAdmittanceDiagnostics() const;
-
-  virtual Eigen::Matrix3d getComplianceToWorldRotation() const override;
-  void publishPivotWrenchFrame(
-      const tf::Vector3& pivot_world,
-      const Eigen::Matrix3d& R_world_constraint,
-      const ros::Time& stamp);
-
-private:
-  ros::Subscriber normal_admittance_enable_sub_;
-  ros::Subscriber perching_admittance_enable_sub_;
-
-  ros::Subscriber perching_enable_sub_for_constraint_;
-  ros::Subscriber perching_slanted_enable_sub_;
-  ros::Subscriber perching_point_sub_;
-  ros::Subscriber branch_pose_sub_;
-  ros::Subscriber locked_pose_sub_;
-  ros::Subscriber locked_pivot_sub_;
-
-  ros::Publisher contact_active_pub_;
-  ros::Publisher recovery_active_pub_;
-  ros::Publisher pivot_torque_raw_pub_;
-  ros::Publisher pivot_torque_filtered_pub_;
-  ros::Publisher pitch_offset_pub_;
-  ros::Publisher pivot_external_wrench_est_pub_;
-
-  std::string perching_enable_topic_for_constraint_;
-  std::string perching_slanted_enable_topic_;
-  std::string perching_admittance_enable_topic_;
-  std::string perching_point_topic_;
-  std::string perching_branch_pose_topic_;
-  std::string perching_locked_pose_topic_;
-  std::string perching_locked_pivot_topic_;
-  std::string perching_pivot_wrench_frame_id_;
-
-  bool normal_admittance_enabled_;
-  bool perching_admittance_enabled_;
-  bool effective_admittance_enabled_;
-
-  perching_geometry::Mode perching_mode_;
-  ros::Time navigator_lock_stamp_;
-  bool has_perching_point_;
-  bool has_branch_pose_;
-  bool has_locked_pose_msg_;
-  bool has_locked_pivot_;
-  bool has_locked_pose_;
-
-  bool use_branch_pose_if_no_point_;
-  bool require_perching_lock_;
-
-  double min_valid_radius_;
-
-  double contact_torque_filter_alpha_;
-  double contact_on_threshold_;
-  double contact_off_threshold_;
-  double contact_on_duration_;
-  double contact_off_duration_;
-  double recovery_angle_epsilon_;
-  double recovery_rate_epsilon_;
-  double perching_pitch_torque_sign_;
-
-  tf::Vector3 perching_point_world_;
-  tf::Vector3 branch_pos_world_;
-
-  tf::Vector3 locked_robot_pos_world_;
-  tf::Quaternion locked_robot_orientation_;
-  perching_geometry::Lock geometry_;
-  tf::Vector3 locked_pivot_world_;
-
-  double locked_radius_;
-
-  Eigen::Matrix3d R_world_constraint_;
-  Eigen::Vector3d constraint_axis_world_;
-
-  mutable std::mutex perching_state_mutex_;
-
-  ros::Time locked_pose_stamp_;
-  ros::Time locked_pivot_stamp_;
-
-  ros::Time accepted_locked_pose_stamp_;
-  ros::Time accepted_locked_pivot_stamp_;
-
-  double maximum_lock_stamp_difference_;
-
-  /*
-  * Number of control cycles used to calculate the average no-contact wrench while the robot is perched.
-  *
-  * At a 40 Hz control rate: 80 samples = approximately 2 seconds.
-  */
-  int equilibrium_wrench_required_samples_;
-
-  /*
-  * getExternalWrenchWorld() is const because it overrides the
-  * base controller function. These members are mutable because
-  * tare collection is performed inside that function.
-  */
-  mutable Eigen::Matrix<double, 6, 1> equilibrium_wrench_pivot_world_;
-  mutable Eigen::Matrix<double, 6, 1> equilibrium_wrench_pivot_sum_;
-
-  mutable int equilibrium_wrench_sample_count_;
-  mutable bool equilibrium_wrench_ready_;
-
-  bool admittance_reset_requested_;
-
-  bool contact_active_;
-  bool recovery_active_;
-
-  double contact_on_timer_;
-  double contact_off_timer_;
-
-  double residual_pitch_torque_raw_;
-  double residual_pitch_torque_filtered_;
-
+  void updateAdmittance();
+  bool articulatedExternalLoad(Eigen::VectorXd&, Eigen::VectorXd&, double&);
+  void updateContactGate(double residual_pitch_torque, double dt);
+  void perchingAdmittanceEnableCallback(const std_msgs::BoolConstPtr&);
+  void resetCalibration();
+  void publishContactAdmittanceDiagnostics();
+  void commandWrenchCallback(const geometry_msgs::WrenchStampedConstPtr&);
+  void updatePitchIntegralPolicy(PID&, bool);
+  aerial_robot_navigation::GimbalrotorPerchingNavigator* perching_navigator_ = nullptr;
+  mutable std::recursive_mutex perching_state_mutex_;
+  ros::Subscriber perching_admittance_enable_sub_, tare_sub_, normal_enable_sub_, command_sub_;
+  ros::Publisher contact_active_pub_, recovery_active_pub_, pivot_torque_raw_pub_, pivot_torque_filtered_pub_, pitch_offset_pub_;
+  ros::Publisher generalized_load_pub_, generalized_valid_pub_, pivot_wrench_pub_;
+  perching_geometry::Session session_{perching_geometry::Mode::DISABLED, ros::Time(0)};
+  bool perching_active_ = false, normal_admittance_enabled_ = false, perching_admittance_enabled_ = false;
+  bool reset_requested_ = true, contact_active_ = false, recovery_active_ = false;
+  bool equilibrium_wrench_ready_ = false, input_valid_ = false, output_accepted_ = false;
+  bool pitch_i_limit_suppressed_ = false;
+  double normal_pitch_i_limit_ = 0;
+  int equilibrium_wrench_required_samples_ = 80, equilibrium_wrench_sample_count_ = 0;
+  Eigen::VectorXd baseline_, baseline_sum_;
+  double pitch_torque_lpf_ = 0;
+  double last_load_stamp_ = 0, last_tare_stamp_ = 0;
+  double contact_on_timer_ = 0, contact_off_timer_ = 0;
+  double contact_torque_filter_alpha_ = .2, contact_on_threshold_ = .04, contact_off_threshold_ = .02;
+  double contact_on_duration_ = .1, contact_off_duration_ = .2;
+  double recovery_angle_epsilon_ = .00174533, recovery_rate_epsilon_ = .01;
+  double residual_pitch_torque_raw_ = 0, residual_pitch_torque_filtered_ = 0, perching_pitch_torque_sign_ = 1;
+  double pitch_acceleration_limit_ = .1, observer_gain_ = 10, observer_max_interval_ = .15, synchronization_tolerance_ = .05;
   ros::Time previous_contact_gate_time_;
-
-  /*
-   * These two values are prepared from the same locked-pivot
-   * snapshot and are consumed together by the parent admittance
-   * controller.
-   */
-  Eigen::Matrix<double, 6, 1> prepared_perching_admittance_wrench_world_;
-
-  Eigen::Matrix3d prepared_R_world_constraint_;
-
-  /*
-   * Normal pitch integral-term output limit.
-   * This stores controller/pitch/limit_i from the YAML file.
-   * It is restored when perching mode is disabled.
-   */
-  double normal_pitch_i_limit_;
-
-  /*
-   * Indicates that pitch limit_i is currently forced to zero.
-   */
-  bool pitch_i_limit_suppressed_;
-  tf::TransformBroadcaster pivot_wrench_tf_broadcaster_;
-
-  std::uint64_t last_published_pivot_wrench_sequence_ = 0;
+  Eigen::Matrix<double, 6, 1> prepared_perching_admittance_wrench_world_ = Eigen::Matrix<double, 6, 1>::Zero();
+  perching_dynamics::MultilinkModel dynamics_;
+  perching_dynamics::MomentumObserver observer_;
+  perching_dynamics::ObservationFilter observation_filter_;
+  bool dynamics_valid_ = false;
+  double filtered_stamp_ = 0, observation_start_ = 0;
+  Eigen::VectorXd observation_tangent_;
+  tf::TransformBroadcaster pivot_tf_;
+  std::string pivot_frame_;
+  std::string reason_ = "disarmed", world_ = "world";
+  std::uint64_t tare_generation_ = 0, tare_request_sequence_ = 0, enable_request_sequence_ = 0;
+  struct Command
+  {
+    double stamp = 0, receipt = 0;
+    Eigen::Matrix<double, 6, 1> wrench;
+    Eigen::Vector3d offset;
+  };
+  std::deque<Command> commands_;
 };
-
-} // namespace aerial_robot_control
+}

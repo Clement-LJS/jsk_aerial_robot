@@ -11,19 +11,20 @@ namespace perching_dynamics
 class ObservationFilter
 {
 public:
-  Eigen::Vector3d q = Eigen::Vector3d::Zero(), rate = q, omega = q, effort = q, gyro = q;
+  Eigen::VectorXd q, rate, effort;
+  Eigen::Vector3d omega = Eigen::Vector3d::Zero(), gyro = omega;
   Eigen::Matrix<double, 6, 1> wrench = Eigen::Matrix<double, 6, 1>::Zero();
   // Condition measured coordinates and their derivatives at one bandwidth:
   // a 0.001534-rad roll encoder tick otherwise gives 0.077 rad/s at 50 Hz.
   // Body-rate disagreement is diagnostic only; flight feedback is unchanged.
   double time_constant = .4;
-  bool observe(const Eigen::Vector3d& position, const Eigen::Matrix3d& rotation,
-               const Eigen::Vector3d& measured_gyro, const Eigen::Vector3d& torque,
+  bool observe(const Eigen::VectorXd& position, const Eigen::Matrix3d& rotation,
+               const Eigen::Vector3d& measured_gyro, const Eigen::VectorXd& torque,
                const Eigen::Matrix<double, 6, 1>& input, double stamp, double max_interval);
   void reset();
 private:
   double stamp_ = 0, started_ = 0;
-  Eigen::Vector3d previous_ = Eigen::Vector3d::Zero();
+  Eigen::VectorXd previous_;
   Eigen::Matrix3d previous_rotation_ = Eigen::Matrix3d::Identity();
 };
 

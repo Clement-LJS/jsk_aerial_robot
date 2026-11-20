@@ -1,61 +1,90 @@
+# Model radians. Exclusive servo mappings copied from the existing documented alternatives.
+# Verify hardware wiring and physical hinge calibration before hardware use.
 navigation:
-  perching_configuration: multilink
-  multilink_perching:
-    pitch_joint_name: "joint_pitch"
-    secondary_joint_name: "joint_roll"
-    contact_link_name: "roll_hand_link"
-
+  perching_enable: false
+  perching:
     joint_command_topic: joints_ctrl
     joint_state_topic: joint_states
     secondary_joint_target_topic: perching/multilink/secondary_joint_target
-
     secondary_position_tolerance: 0.02
     secondary_velocity_tolerance: 0.05
-    secondary_settle_duration: 0.30
+    secondary_settle_duration: 0.3
     joint_state_timeout: 0.15
-
     joint_state_future_tolerance: 0.02
-
-    pitch_axis_alignment_threshold: 0.90
-    secondary_axis_alignment_threshold: 0.90
-
     pitch_command_sign: 1.0
     secondary_command_sign: 1.0
-
-    # Passive perching-pivot body-pitch rezero (navigation only).
     pitch_rezero_topic: perching/multilink/pitch_rezero
-    pitch_rezero_target_pitch: 0.0       # BASELINK world pitch [rad]
-
-    # Physical hinge center in contact_link_name [m]. Calibrate from CAD or
-    # measurement if yaw_hand_link origin is not the actual hinge center.
-
-    # # yaw joint config 
-    # pitch_rezero_pivot_offset_x: 0.18999
-    # pitch_rezero_pivot_offset_y: 0.0
-    # pitch_rezero_pivot_offset_z: 0.0205
-
-    # roll joint config 
+    pitch_rezero_target_pitch: 0.0
     pitch_rezero_pivot_offset_x: 0.21049
     pitch_rezero_pivot_offset_y: 0.0
     pitch_rezero_pivot_offset_z: 0.0205
-
-    # Physical hinge axis in contact_link_name; normalized by the navigator.
     pitch_rezero_axis_x: 0.0
     pitch_rezero_axis_y: 1.0
     pitch_rezero_axis_z: 0.0
-
-    # Sign must match how passive rotation changes measured body pitch.
     pitch_rezero_command_sign: -1.0
-    pitch_rezero_kp: 1.0                # approximately 1/s
-    pitch_rezero_rate_limit: 0.1745329   # rad/s (10 deg/s)
-    pitch_rezero_max_delta: 0.5235988    # rad (30 deg from trigger pose)
-    pitch_rezero_pitch_tolerance: 0.0349066  # rad (2 deg)
-    pitch_rezero_rate_tolerance: 0.05    # rad/s
-    pitch_rezero_stable_duration: 0.30  # s, continuously within both tolerances
-    pitch_rezero_timeout: 5.0           # s; failure holds last valid target
-
-    # Maximum measured deviation from active-joint positions frozen at rezero
-    # start [rad]. Only the external passive perch pivot is assumed to move.
-    # Each tolerance must be finite and in (0, 0.5]; 0.02 rad is about 1.15 deg.
+    pitch_rezero_kp: 1.0
+    pitch_rezero_rate_limit: 0.1745329
+    pitch_rezero_max_delta: 0.5235988
+    pitch_rezero_pitch_tolerance: 0.0349066
+    pitch_rezero_rate_tolerance: 0.05
+    pitch_rezero_stable_duration: 0.3
+    pitch_rezero_timeout: 5.0
     pitch_rezero_pitch_joint_hold_tolerance: 0.02
     pitch_rezero_secondary_joint_hold_tolerance: 0.02
+    active_joints:
+    - joint_pitch
+    - joint_roll
+    pitch_coordinates:
+    - joint_pitch
+    manual_coordinate: joint_pitch
+    contact_link: roll_hand_link
+    debug_prefix: perching/multilink
+    diagnostic_name: multilink_perching
+    feedback_timeout: 0.15
+    future_tolerance: 0.02
+    pivot_offset:
+    - 0.21049
+    - 0.0
+    - 0.0205
+    hinge_axis:
+    - 0.0
+    - 1.0
+    - 0.0
+    coordinate_topics:
+      perching/multilink/secondary_joint_target: joint_roll
+    dynamics:
+      observer_gain: 10.0
+      joint_effort:
+        source: servo_bridge_joint_states
+        topic: joint_states
+    position_lower:
+    - -0.5235988
+    - -1.57079632679
+    - -1.57079632679
+    position_upper:
+    - 0.5235988
+    - 1.57079632679
+    - 1.57079632679
+    velocity_caps:
+    - 0.1745329
+    - 0.1
+    - 0.1
+  multilink_perching:
+    pitch_command_sign: 1.0
+    pitch_rezero_topic: perching/multilink/pitch_rezero
+controller:
+  command_wrench_topic: perching/multilink/command_wrench_estimate
+servo_controller:
+  joints:
+    controller1:
+      id: 6
+      name: joint_pitch
+      angle_sgn: -1
+      simulation:
+        init_value: 0
+    controller2:
+      id: 7
+      name: joint_roll
+      angle_scale: 0.001534
+      simulation:
+        init_value: 0

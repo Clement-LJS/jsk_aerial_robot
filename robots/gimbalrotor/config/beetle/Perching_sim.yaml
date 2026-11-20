@@ -1,0 +1,11 @@
+# Verified simulation effort contract; no hardware actuator IDs are introduced.
+navigation:
+  perching:
+    dynamics:
+      joint_effort_contract: joint_side_actuation_nm
+      joint_effort:
+        source: gazebo_ode_joint_states
+        topic: joint_states
+        producer: /gazebo
+        units: Nm
+        sign: urdf
