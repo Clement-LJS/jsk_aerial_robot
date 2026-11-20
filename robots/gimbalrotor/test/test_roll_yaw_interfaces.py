@@ -806,18 +806,16 @@ class Interfaces(unittest.TestCase):
                          'aerial_robot_control/gimbalrotor_controller')
         self.assertEqual(config.params[namespace + '/flight_navigation_plugin_name'].value,
                          'aerial_robot_navigation/gimbalrotor_multilink_perching_navigation')
-        self.assertEqual(config.params[namespace + '/navigation/perching_configuration'].value,
-                         'roll_yaw')
+        self.assertEqual(config.params[namespace + '/navigation/perching/active_joints'].value,
+                         ['joint_roll', 'joint_yaw'])
         return config
 
     def test_hardware_offline(self):
         config = self.load_launch('false')
-        self.assertTrue(config.params['/gimbalrotor/navigation/roll_yaw_perching/settle_use_window'].value)
         self.check_effort_source(config, '/gimbalrotor', 'servo_bridge_joint_states')
 
     def check_effort_source(self, config, namespace, source):
-        prefix = namespace + '/navigation/roll_yaw_perching/'
-        self.assertEqual(config.params[prefix + 'admittance/source'].value, 'articulated_momentum')
+        prefix = namespace + '/navigation/perching/'
         self.assertEqual(config.params[prefix + 'dynamics/joint_effort/source'].value, source)
         self.assertEqual(config.params[prefix + 'dynamics/joint_effort/topic'].value,
                          config.params[prefix + 'joint_state_topic'].value)
@@ -834,11 +832,9 @@ class Interfaces(unittest.TestCase):
     def test_simulation_override(self):
         config = self.load_launch('true')
         self.check_effort_source(config, '/gimbalrotor', 'gazebo_ode_joint_states')
-        prefix = '/gimbalrotor/navigation/roll_yaw_perching/dynamics/'
+        prefix = '/gimbalrotor/navigation/perching/dynamics/'
         self.assertEqual(config.params[prefix + 'joint_effort_contract'].value, 'joint_side_actuation_nm')
         self.assertEqual(config.params[prefix + 'joint_effort/producer'].value, '/gazebo')
-        self.assertFalse(config.params['/gimbalrotor/navigation/roll_yaw_perching/settle_use_window'].value)
-        self.assertEqual(config.params['/gimbalrotor/navigation/roll_yaw_perching/settle_rate'].value, .08)
 
 
 if __name__ == '__main__':
