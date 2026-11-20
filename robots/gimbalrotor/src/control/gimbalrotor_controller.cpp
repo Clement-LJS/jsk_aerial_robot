@@ -1,4 +1,5 @@
 #include <gimbalrotor/control/gimbalrotor_controller.h>
+#include <gimbalrotor/gimbalrotor_perching_navigation.h>
 
 using namespace std;
 
@@ -34,9 +35,6 @@ namespace aerial_robot_control
     rpy_gain_pub_ = nh_.advertise<spinal::RollPitchYawTerms>("rpy/gain", 1);
     torque_allocation_matrix_inv_pub_ = nh_.advertise<spinal::TorqueAllocationMatrixInv>("torque_allocation_matrix_inv", 1);
     gimbal_dof_pub_ = nh_.advertise<std_msgs::UInt8>("gimbal_dof", 1);
-    std::string command_wrench_topic;
-    nh_.param<std::string>("controller/command_wrench_topic", command_wrench_topic, "perching/command_wrench_estimate");
-    command_wrench_pub_ = nh_.advertise<geometry_msgs::WrenchStamped>(command_wrench_topic, 1);
   }
 
   void GimbalrotorController::reset()
@@ -57,6 +55,9 @@ namespace aerial_robot_control
 
   bool GimbalrotorController::update()
   {
+    auto perching = boost::dynamic_pointer_cast<aerial_robot_navigation::GimbalrotorPerchingNavigator>(navigator_);
+    std::unique_lock<std::recursive_mutex> reference_lock;
+    if(perching) reference_lock = std::unique_lock<std::recursive_mutex>(perching->perchingStateMutex());
     sendGimbalCommand();
     if(gimbal_calc_in_fc_){
       std_msgs::UInt8 msg;
@@ -67,11 +68,13 @@ namespace aerial_robot_control
     return PoseLinearController::update();
   }
 
-void GimbalrotorController::controlCore()
-{
-  PoseLinearController::controlCore();
-
-    const bool use_yaw_aligned_translation = underactuate_;
+  void GimbalrotorController::controlCore()
+  {
+    // ControlBase has admitted this cycle; navigation commits one body/joint pair
+    // before the ordinary PID reads its target. No perched output on skipped cycles.
+    auto perching = boost::dynamic_pointer_cast<aerial_robot_navigation::GimbalrotorPerchingNavigator>(navigator_);
+    if(perching) perching->applyPerchingReference(0, 0, 0);
+    PoseLinearController::controlCore();
     tf::Matrix3x3 uav_rot = estimator_->getOrientation(Frame::COG, estimate_mode_);
     tf::Vector3 target_acc_w(pid_controllers_.at(X).result(),
                              pid_controllers_.at(Y).result(),
@@ -80,10 +83,8 @@ void GimbalrotorController::controlCore()
     tf::Vector3 target_acc_cog = uav_rot.inverse() * target_acc_w;
     Eigen::VectorXd target_wrench_acc_cog = Eigen::VectorXd::Zero(6);
 
-    if(use_yaw_aligned_translation)
-      target_wrench_acc_cog.head(3) = Eigen::Vector3d(target_acc_dash.x(), target_acc_dash.y(), target_acc_dash.z());
-    else
-      target_wrench_acc_cog.head(3) = Eigen::Vector3d(target_acc_cog.x(), target_acc_cog.y(), target_acc_cog.z());
+    if(underactuate_) target_wrench_acc_cog.head(3) = Eigen::Vector3d(target_acc_dash.x(), target_acc_dash.y(), target_acc_dash.z());
+    else target_wrench_acc_cog.head(3) = Eigen::Vector3d(target_acc_cog.x(), target_acc_cog.y(), target_acc_cog.z());
 
     double target_ang_acc_x = pid_controllers_.at(ROLL).result();
     double target_ang_acc_y = pid_controllers_.at(PITCH).result();
@@ -98,22 +99,6 @@ void GimbalrotorController::controlCore()
     else
       target_wrench_acc_cog.tail(3) = Eigen::Vector3d(target_ang_acc_x, target_ang_acc_y, target_ang_acc_z) + gyro;
 
-    allocateWrench(target_wrench_acc_cog);
-}
-
-void GimbalrotorController::allocateWrench(Eigen::VectorXd target_wrench_acc_cog, bool constrained)
-{
-    const bool effective_underactuate = underactuate_ && !constrained;
-    const tf::Matrix3x3 uav_rot = estimator_->getOrientation(Frame::COG, estimate_mode_);
-    const Eigen::Matrix3d inertia = gimbalrotor_robot_model_->getInertia<Eigen::Matrix3d>();
-    const tf::Vector3 target_acc_w(pid_controllers_.at(X).result(), pid_controllers_.at(Y).result(), pid_controllers_.at(Z).result());
-    const tf::Vector3 target_acc_dash = tf::Matrix3x3(tf::createQuaternionFromYaw(rpy_.z())).inverse() * target_acc_w;
-    const Eigen::Vector3d omega(omega_.x(), omega_.y(), omega_.z());
-    const Eigen::Vector3d gyro = omega.cross(inertia * omega);
-    const double target_ang_acc_x = constrained ? target_wrench_acc_cog[3] : pid_controllers_.at(ROLL).result();
-    const double target_ang_acc_y = constrained ? target_wrench_acc_cog[4] : pid_controllers_.at(PITCH).result();
-    const double target_ang_acc_z = constrained ? target_wrench_acc_cog[5] : pid_controllers_.at(YAW).result();
-    setTargetWrenchAccCog(target_wrench_acc_cog);
     pid_msg_.roll.total.at(0) = target_ang_acc_x;
     pid_msg_.roll.p_term.at(0) = pid_controllers_.at(ROLL).getPTerm();
     pid_msg_.roll.i_term.at(0) = pid_controllers_.at(ROLL).getITerm();
@@ -183,7 +168,7 @@ void GimbalrotorController::allocateWrench(Eigen::VectorXd target_wrench_acc_cog
     integrated_map = full_q_mat * integrated_rot;
 
     /* extract controlled axis  */
-    if(effective_underactuate)
+    if(underactuate_)
       {
         target_wrench_acc_cog = target_wrench_acc_cog.tail(4);  // z, roll, pitch, yaw
         integrated_map = integrated_map.bottomRows(4);          // z, roll, pitch, yaw
@@ -191,9 +176,9 @@ void GimbalrotorController::allocateWrench(Eigen::VectorXd target_wrench_acc_cog
 
     /* vectoring force mapping */
     Eigen::MatrixXd integrated_map_inv = aerial_robot_model::pseudoinverse(integrated_map);
-    integrated_map_inv_trans_ = integrated_map_inv.leftCols(effective_underactuate ? 1 : 3);
+    integrated_map_inv_trans_ = integrated_map_inv.leftCols(underactuate_ ? 1 : 3);
     integrated_map_inv_rot_ = integrated_map_inv.rightCols(3);
-    if(effective_underactuate)
+    if(underactuate_)
       target_vectoring_f_trans_ = integrated_map_inv_trans_ * target_wrench_acc_cog(0);
     else
       target_vectoring_f_trans_ = integrated_map_inv_trans_ * target_wrench_acc_cog.topRows(3);
@@ -201,7 +186,7 @@ void GimbalrotorController::allocateWrench(Eigen::VectorXd target_wrench_acc_cog
     last_col = 0;
 
     /* under actuated axis  */
-    if(effective_underactuate)
+    if(underactuate_)
       {
         if(hovering_approximate_)
           {
@@ -218,24 +203,11 @@ void GimbalrotorController::allocateWrench(Eigen::VectorXd target_wrench_acc_cog
             navigator_->setTargetPitch(target_pitch_);
           }
       }
-    else
-      {
-	target_roll_ = navigator_->getTargetRPY().x();
-	target_pitch_ = navigator_->getTargetRPY().y();
-      }
 
-    // The FC supplies attitude feedback and gyro compensation. Only the
-    // reference-rate/acceleration terms missing from FourAxisCommand go here.
-    Eigen::VectorXd reference_force = Eigen::VectorXd::Zero(target_vectoring_f_trans_.size());
-    if(constrained)
-      reference_force = target_vectoring_f_rot_;
-    else if(gimbal_calc_in_fc_ && !effective_underactuate)
-      reference_force = integrated_map_inv_rot_ * angularFeedforward();
-    /* calculate target base thrust */
+    /*  calculate target base thrust (considering only translational components)*/
     double max_yaw_scale = 0; // for reconstruct yaw control term in spinal
     for(int i = 0; i < motor_num_; i++){
-      Eigen::VectorXd f_i = target_vectoring_f_trans_.segment(last_col, rotor_coef_) +
-          reference_force.segment(last_col, rotor_coef_);
+      Eigen::VectorXd f_i = target_vectoring_f_trans_.segment(last_col, rotor_coef_);
       if(gimbal_dof_ == 1)
         {
           target_base_thrust_.at(rotor_coef_ * i) = f_i[0];
@@ -245,11 +217,11 @@ void GimbalrotorController::allocateWrench(Eigen::VectorXd target_wrench_acc_cog
           target_base_thrust_.at(rotor_coef_ * i+1) = f_i[1];
           target_base_thrust_.at(rotor_coef_ * i+2) = f_i[2];
         }
-      if(integrated_map_inv(i, (effective_underactuate ? YAW - 2 : YAW)) > max_yaw_scale) max_yaw_scale = integrated_map_inv(i, (effective_underactuate ? YAW - 2 : YAW));  // underactuated: yaw col is shifted
+      if(integrated_map_inv(i, (underactuate_ ? YAW - 2 : YAW)) > max_yaw_scale) max_yaw_scale = integrated_map_inv(i, (underactuate_ ? YAW - 2 : YAW));  // underactuated: yaw col is shifted
 
       last_col += rotor_coef_;
     }
-    candidate_yaw_term_ = constrained ? 0 : pid_controllers_.at(YAW).result() * max_yaw_scale;
+    candidate_yaw_term_ = pid_controllers_.at(YAW).result() * max_yaw_scale;
 
     /* calculate target full thrusts and gimbal angles (considering full components)*/
     last_col = 0;
@@ -271,37 +243,19 @@ void GimbalrotorController::allocateWrench(Eigen::VectorXd target_wrench_acc_cog
         }
       last_col += rotor_coef_;
     }
-    // Reconstruct the allocated body resultant at the CoG. The constrained FC
-    // path lacks yaw/gyro telemetry, so it cannot supply a valid input estimate.
-    if(!underactuate_ && !(constrained && gimbal_calc_in_fc_) && command_wrench_pub_.getNumSubscribers()) {
-      const Eigen::VectorXd allocated = constrained ?
-          Eigen::VectorXd(full_q_mat * integrated_rot * (target_vectoring_f_trans_ + target_vectoring_f_rot_)) : target_wrench_acc_cog;
-      Eigen::Matrix3d rotation; tf::matrixTFToEigen(uav_rot, rotation);
-      const Eigen::Vector3d force = rotation * (robot_model_->getMass() * allocated.head<3>());
-      const Eigen::Vector3d torque = rotation * (inertia * allocated.tail<3>() +
-          (gimbal_calc_in_fc_ && !constrained ? gyro : Eigen::Vector3d::Zero()));
-      if(force.allFinite() && torque.allFinite()) {
-        geometry_msgs::WrenchStamped msg;
-        msg.header.stamp = ros::Time::now(); msg.header.frame_id="world";
-        msg.wrench.force.x=force.x(); msg.wrench.force.y=force.y(); msg.wrench.force.z=force.z();
-        msg.wrench.torque.x=torque.x(); msg.wrench.torque.y=torque.y(); msg.wrench.torque.z=torque.z();
-        command_wrench_pub_.publish(msg);
-      }
-    }
   }
 
   void GimbalrotorController::sendCmd()
   {
     PoseLinearController::sendCmd();
 
+    sendFourAxisCommand();
+
     if(gimbal_calc_in_fc_){
       sendTorqueAllocationMatrixInv();
-      sendFourAxisCommand();
     }
     else
       {
-        sendFourAxisCommand();
-
         sensor_msgs::JointState gimbal_control_msg;
         gimbal_control_msg.header.stamp = ros::Time::now();
         for(int i = 0; i < motor_num_; i++){
@@ -401,7 +355,6 @@ void GimbalrotorController::allocateWrench(Eigen::VectorXd target_wrench_acc_cog
     rpy_gain_msg.motors.at(0).yaw_d = pid_controllers_.at(YAW).getDGain() * 1000;
     rpy_gain_pub_.publish(rpy_gain_msg);
   }
-
 } //namespace aerial_robot_controller
 
 

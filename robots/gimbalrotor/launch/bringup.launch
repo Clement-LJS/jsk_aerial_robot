@@ -66,17 +66,17 @@
    <rosparam file="$(arg config_dir)/Simulation.yaml" command="load" if="$(eval arg('simulation') and not arg('real_machine'))"/>
 
    ###########  Navigation  ###########
-   <param name="aerial_robot_control_name" value="aerial_robot_control/gimbalrotor_perching_admittance_controller" if="$(eval arg('airframe') == 'beetle')"/>
+   <param name="aerial_robot_control_name" value="aerial_robot_control/gimbalrotor_controller" if="$(eval arg('airframe') == 'beetle')"/>
    <rosparam file="$(arg config_dir)/NavigationConfig.yaml" command="load" />
    <rosparam param="navigation/perching/active_joints">[]</rosparam>
    <group if="$(arg roll_yaw_perching)">
      <rosparam file="$(arg config_dir)/beetle/RollYawPerching.yaml" command="load"/>
      <rosparam file="$(arg config_dir)/beetle/RollYawPerching_sim.yaml" command="load" if="$(arg simulation)"/>
-     <param name="aerial_robot_control_name" value="aerial_robot_control/gimbalrotor_multilink_perching_admittance_controller"/>
+     <param name="aerial_robot_control_name" value="aerial_robot_control/gimbalrotor_controller"/>
    </group>
    <group if="$(arg pitch_only_perching)">
      <rosparam file="$(arg config_dir)/beetle/PitchOnlyPerching.yaml" command="load"/>
-     <param name="aerial_robot_control_name" value="aerial_robot_control/gimbalrotor_multilink_perching_admittance_controller"/>
+     <param name="aerial_robot_control_name" value="aerial_robot_control/gimbalrotor_controller"/>
    </group>
    <group if="$(arg multilink_perching)">
      <rosparam file="$(arg config_dir)/$(arg airframe)/MultilinkPerching.yaml" command="load" />
@@ -86,14 +86,13 @@
        <param name="servo_controller/joints/controller2/name" value="joint_yaw"/>
        <param name="servo_controller/joints/controller2/angle_scale" value="0.00076699"/>
      </group>
-     <param name="aerial_robot_control_name" value="aerial_robot_control/gimbalrotor_multilink_perching_admittance_controller" />
+     <param name="aerial_robot_control_name" value="aerial_robot_control/gimbalrotor_controller" />
    </group>
 
    <rosparam file="$(arg config_dir)/beetle/Perching_sim.yaml" command="load" if="$(eval arg('simulation') and (arg('roll_yaw_perching') or arg('pitch_only_perching') or arg('multilink_perching')))"/>
 
-   <!-- Select the perching model only for Beetle; other airframes retain RobotModel.yaml. -->
-   <param name="robot_model_plugin_name" value="gimbalrotor_perching_model" if="$(eval arg('airframe') == 'beetle')"/>
-   <param name="robot_model_plugin_name" value="gimbalrotor_multilink_perching_model" if="$(eval arg('roll_yaw_perching') or arg('pitch_only_perching') or arg('multilink_perching'))"/>
+   <!-- Beetle uses ordinary flight dynamics for every perching profile. -->
+   <param name="robot_model_plugin_name" value="gimbalrotor_robot_model" if="$(eval arg('airframe') == 'beetle')"/>
 
    <!-- Enforce the canonical navigator after profiles. -->
    <param name="flight_navigation_plugin_name" value="aerial_robot_navigation/gimbalrotor_perching_navigation"/>

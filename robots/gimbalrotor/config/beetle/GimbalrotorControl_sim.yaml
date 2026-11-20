@@ -1,5 +1,5 @@
 # Flight gains retained; perching uses the same signed pitch law as the hardware profile.
-aerial_robot_control_name: aerial_robot_control/gimbalrotor_perching_admittance_controller
+aerial_robot_control_name: aerial_robot_control/gimbalrotor_controller
 controller:
   torque_allocation_matrix_inv_pub_interval: 0.05
   wrench_allocation_matrix_pub_interval: 0.1

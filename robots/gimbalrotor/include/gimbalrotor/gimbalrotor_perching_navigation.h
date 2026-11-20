@@ -2,7 +2,7 @@
 #pragma once
 #include <gimbalrotor/gimbalrotor_navigation.h>
 #include <gimbalrotor/gimbalrotor_perching.h>
-#include <gimbalrotor/model/gimbalrotor_multilink_perching_model.h>
+#include <gimbalrotor/model/gimbalrotor_robot_model.h>
 #include <gimbalrotor/RollYawMotion.h>
 #include <geometry_msgs/PointStamped.h>
 #include <geometry_msgs/PoseStamped.h>
@@ -21,7 +21,6 @@ namespace aerial_robot_navigation
 class GimbalrotorPerchingNavigator : public GimbalrotorNavigator, public perching_geometry::TargetProvider
 {
 public:
-  using Model = GimbalrotorPerchingModel;
   using Vector = Eigen::VectorXd;
   using Pose = Eigen::Isometry3d;
   struct Sample
@@ -29,8 +28,7 @@ public:
     double stamp = 0, receipt = 0;
     Pose body = Pose::Identity();
     Eigen::Vector3d omega = Eigen::Vector3d::Zero();
-    Vector q, rate, effort;
-    bool effort_valid = false;
+    Vector q, rate;
   };
   GimbalrotorPerchingNavigator();
   void initialize(ros::NodeHandle, ros::NodeHandle, boost::shared_ptr<aerial_robot_model::RobotModel>,
@@ -39,17 +37,15 @@ public:
   perching_geometry::Session perchingSession() const override;
   bool perchingAdmittanceTarget(const ros::Time&, double, const tf::Vector3&, perching_geometry::Pose&) const override;
   std::recursive_mutex& perchingStateMutex() const { return perching_state_mutex_; }
-  const perching_geometry::Lock& rigidLock() const { return model_->hinge_arc; }
   bool articulated() const { return !active_joints_.empty(); }
   bool motionFeedbackValid() const;
   bool observation(Sample&) const;
   const Vector& appliedCoordinates() const { return applied_; }
   const Vector& appliedRates() const { return applied_rate_; }
   const Vector& appliedAccelerations() const { return applied_acceleration_; }
-  double rigidAngle() const { return arc_pitch_sign_ * active_pitch_delta_ + applied_pitch_offset_; }
+  double rigidAngle() const { return arc_pitch_sign_ * rigid_applied_pose_.delta; }
   double rigidRate() const { return (velocity_active_ ? velocity_command_ : 0) + applied_offset_rate_; }
   bool jointCommand(sensor_msgs::JointState& command) const;
-  const Model& mechanism() const { return *model_; }
   const std::vector<bool>& movingCoordinates() const { return moving_; }
   const std::string& prefix() const { return prefix_; }
   const std::string& worldFrame() const { return world_; }
@@ -57,14 +53,10 @@ public:
   bool trackingHeld() const;
   double appliedPitchOffset() const { return applied_pitch_offset_; }
   bool applyPerchingReference(double pitch_offset, double rate, double acceleration);
-  void setAdmittanceDiagnostics(const std::map<std::string, std::string>& values) { admittance_diagnostics_ = values; }
   void publishDiagnostics();
-  void retireCorrection();
-  double pitchAccelerationLimit() const;
 private:
   bool tryLockPerching(const std::string& reason);
   void resetPerchingLock();
-  void applyActivePerchingTarget();
   bool applyPerchingConstraint(aerial_robot_msgs::FlightNav& nav_msg);
   void applyManualPitchDelta(double delta);
 
@@ -90,8 +82,6 @@ private:
   void perchingPointCallback(const geometry_msgs::PointStampedConstPtr& msg);
 
   void manualPitchDeltaCallback(const std_msgs::Float64ConstPtr& msg);
-
-  aerial_robot_msgs::FlightNav buildActivePerchingNavCommand();
 
   bool hasPitchCommand(const aerial_robot_msgs::FlightNav& nav_msg) const;
   bool hasPositionCommand(const aerial_robot_msgs::FlightNav& nav_msg) const;
@@ -205,20 +195,41 @@ private:
   void resetMotion();
   bool fresh(double stamp, double receipt) const;
   bool candidateAllowed(const Vector&, double) const;
-  boost::shared_ptr<Model> model_;
+  struct Reference
+  {
+    Pose body = Pose::Identity(), cog = Pose::Identity();
+  };
+  bool configureGeometry(std::string& reason);
+  bool geometryFrames(const Vector&, std::map<std::string, KDL::Frame>&) const;
+  bool bodyContact(const Vector&, Pose&, Eigen::Vector3d&) const;
+  bool lockGeometry(const Pose&, const Vector&, const Eigen::Vector3d* world_pivot = nullptr);
+  bool evaluateReference(const Vector&, Reference&) const;
+  bool estimateCoordinates(const Pose&, Vector&, double&, double&) const;
+  bool angularJacobian(const Vector&, Eigen::MatrixXd&) const;
+  bool pitchTangent(const Vector&, const std::vector<bool>&, Vector&) const;
+  bool orient(const Vector&, const Eigen::Matrix3d&, const std::vector<bool>&, Vector&) const;
+  bool pitch(const Vector&, double, const std::vector<bool>&, Vector&) const;
+  bool allowed(const Vector&, double, double, double) const;
+  boost::shared_ptr<GimbalrotorRobotModel> model_;
+  KDL::Tree geometry_tree_;
+  KDL::JntArray held_joints_;
+  Pose pivot_ = Pose::Identity();
+  Eigen::Matrix3d cog_to_body_ = Eigen::Matrix3d::Identity();
+  perching_geometry::Lock hinge_arc_;
+  Vector coordinate_lower_, coordinate_upper_, coordinate_velocity_, coordinate_acceleration_;
   std::vector<std::string> active_joints_;
   std::vector<bool> moving_;
   std::map<std::string, int> coordinate_map_;
   std::map<int, std::string> wire_coordinates_;
   std::vector<std::string> wire_angles_;
-  std::map<std::string, std::string> admittance_diagnostics_;
   std::vector<ros::Subscriber> subscriptions_;
   std::map<std::string, ros::Publisher> bool_pubs_, number_pubs_;
+  ros::Publisher joints_pub_;
   ros::Publisher reference_pub_, measured_pub_, cog_pub_, status_pub_, state_pub_;
   ros::Publisher session_pub_, epoch_pub_, ack_pub_, nominal_pub_, angles_pub_, lower_pub_, upper_pub_, body_pose_pub_;
   std::string prefix_ = "perching", world_ = "world", body_frame_, status_name_ = "perching";
-  std::string joint_topic_, effort_producer_, manual_coordinate_ = "alpha", positioning_joint_;
-  bool effort_source_valid_ = false, model_valid_ = false;
+  std::string joint_topic_, manual_coordinate_ = "alpha", positioning_joint_;
+  bool model_valid_ = false;
   bool positioning_ = false, body_target_valid_ = false, velocity_active_ = false, stopping_ = false;
   bool rezero_active_ = false, rezero_ready_ = false, rezero_failed_ = false;
   bool proposal_valid_ = false, prepared_motion_ = false, paused_ = false;
@@ -230,7 +241,7 @@ private:
   std::deque<Sample> joint_history_, body_history_;
   Vector nominal_, destination_, proposed_, nominal_rate_, proposed_rate_, applied_, applied_rate_, applied_acceleration_;
   Vector body_start_, locked_q_;
-  Model::State applied_state_;
+  Reference applied_state_;
   perching_geometry::Pose rigid_applied_pose_;
   bool rigid_applied_valid_ = false;
   double applied_pitch_offset_ = 0, applied_offset_rate_ = 0;
