@@ -652,7 +652,7 @@ private:
   std::weak_ptr<aerial_robot_control::RollYawInteraction> interaction_;
   aerial_robot_control::RollYawInteractionInput interactionInput(const roll_yaw::Feedback&) const;
   void resetComplianceSession();
-  void transitionNominalReference(double direction = 1);
+  bool transitionNominalReference(double direction = 1);
   void resetArticulatedSession(const std::string&);
   void updateInteraction(const roll_yaw::Feedback&);
   bool articulatedLoadValid(const roll_yaw::Feedback&) const;

@@ -701,7 +701,7 @@ public:
   Estimate measured;
   Plan plan;
   double progress = 0, nominal_progress = 0;
-  // Negative scalar relief, radians increasing into the cut. No off-path IK.
+  // Signed local-body pitch correction; composed by navigation after nominal planning.
   double relief = 0;
   bool interaction_hold = false, resisting_load = false;
   bool relief_enabled = false, relief_limited = false;
@@ -743,7 +743,7 @@ public:
   void hold(const std::string&);
 
 private:
-  void advanceMotion(const Feedback&, double dt, bool release_only = false);
+  void advanceMotion(const Feedback&, double dt);
   void resetSettling();
   SettlingWindow settling_window_;
   double last_time_ = 0, stable_since_ = 0, ready_since_ = 0, speed_ = 1;
@@ -775,10 +775,11 @@ public:
   int samples = 0;
   void reset();
   // Availability does not own the calibration, correction or consumed timestamp.
-  void inputUnavailable() { input_missing_ = true; }
+  void inputUnavailable()
+  { input_missing_ = true; filtered = 0; contact = false; on_ = off_ = 0; filter_reacquiring = true; }
   void restartObservationClock() { stamp_ = 0; input_missing_ = true; }
   bool filter_reacquiring = true;
-  void observe(double torque, double stamp, bool no_cut, bool bidirectional = false);
+  void observe(double torque, double stamp, bool no_cut, bool bidirectional = true);
   bool step(double dt, bool input_fresh, bool relief_only = false, double available_relief = -1);
 
 private:
@@ -786,6 +787,8 @@ private:
   double sum_ = 0, stamp_ = 0, on_ = 0, off_ = 0;
 };
 // Local constrained reference synthesis; never edits a nominal Path or goal.
+// dt == 0 is only for removing a correction during coordinate conversion;
+// physical pose/derivative limits still apply, temporal step bounds do not.
 bool compliantReference(const Kinematics&, const Reference& nominal, const Reference& previous, double offset,
                         double rate, double acceleration, double dt, const PlanningConfig&, Reference&, std::string&);
 bool advanceCompliance(const Kinematics&, const Reference& nominal, const Reference& previous, double dt, bool fresh,

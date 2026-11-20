@@ -283,6 +283,7 @@ def main():
     connection_deadline = None
     normal_exit = False
     startup = AdmittanceStartup()
+    startup_complete = not use_admittance
     measured_start = None
     state, values = 'waiting for navigator feedback', {}
     next_report = started
@@ -349,26 +350,26 @@ def main():
                         raise ValueError('Current angle status identity/frame/target unavailable')
                     time.sleep(.02)
                     continue
-            if use_admittance and task.sequence and (values.get('admittance_enabled') != '1' or values.get('baseline_ready') != '1'):
+            if use_admittance and startup_complete and (values.get('admittance_enabled') != '1' or values.get('baseline_ready') != '1'):
                 raise ValueError('Admittance calibration or enable was lost; sequence stopped')
             if use_admittance and startup.generation is not None and int(values['tare_generation']) != startup.generation:
                 raise ValueError('Admittance baseline or contact model changed; sequence stopped')
             if interrupted.is_set() or rospy.is_shutdown():
                 break
-            if use_admittance and not task.sequence:
-                if not startup.ready(now, values, tare, enable):
+            if not startup_complete:
+                startup_complete = startup.ready(now, values, tare, enable)
+                if not startup_complete:
                     time.sleep(.02)
                     continue
             pose = poses.get('measured')
             measured_fresh = pose and 0 <= now - pose[0] <= feedback_timeout and -.02 <= ros_now - pose[1] <= feedback_timeout
             if task.sequence and not measured_fresh:
                 raise ValueError('Measured body pose feedback lost; stopping sequence')
-            load_ready = values.get('admittance_enabled') != '1' or values.get('task_torque_valid') == '1'
             # This gate checks nominal hold/contact/model and effective tracking,
             # allowing vibration and correction motion even without auto-enable.
             held = values.get('admittance_hold_eligible') == '1'
             previous_hold = task.hold_since
-            ready = task.ready(stamp, values, held and bool(measured_fresh) and load_ready)
+            ready = task.ready(stamp, values, held and bool(measured_fresh))
             completed = previous_hold is None and task.hold_since is not None
             if task.sequence and (completed or ready or now >= next_report):
                 offset = float(values.get('effective_offset_rad', 'nan'))

@@ -114,9 +114,6 @@ public:
   virtual void resetArticulatedSession(const Input&, const std::string&) = 0;
   virtual void invalidateArticulated(const Input&, const std::string&) = 0;
   virtual void resetComplianceSession() = 0;
-  // New producer starts at the applied pose; absorb the old correction into
-  // that nominal reference, transferring total derivatives to its bounded brake.
-  virtual void rebaseReference(double direction = 1) = 0;
   virtual void referenceDirection(double direction) = 0;
   virtual void stopped() = 0;
   virtual bool motionAllowed(const Input&) const = 0;

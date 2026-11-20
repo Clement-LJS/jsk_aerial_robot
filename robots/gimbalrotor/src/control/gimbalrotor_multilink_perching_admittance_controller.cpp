@@ -47,7 +47,6 @@ public:
   void resetArticulatedSession(const Input&, const std::string&) override;
   void invalidateArticulated(const Input&, const std::string&) override;
   void resetComplianceSession() override;
-  void rebaseReference(double direction) override;
   void referenceDirection(double direction) override;
   void stopped() override;
   bool motionAllowed(const Input&) const override;
@@ -321,19 +320,13 @@ void RollYawInteractionRuntime::stopped()
     return;
   }
   admittance_reason_ = admittance_.enabled
-      ? "enabled: nominal stopped; completed tare retained, freshness still required"
+      ? "enabled: nominal stopped; compliance and completed tare retained"
       : "disabled/ready: nominal stopped; completed tare retained";
 }
 
 bool RollYawInteractionRuntime::motionAllowed(const Input& c) const
 {
-  const auto& current = c.feedback;
-  return !(admittance_.enabled && (!interaction_valid_ || !admittance_.baseline_ready ||
-           current.now - interaction_stamp_ > c.feedback_config.timeout ||
-           current.now - interaction_stamp_ < -c.feedback_config.future_tolerance ||
-           (articulated() ? !articulatedLoadValid(c, current) :
-            std::abs(interaction_stamp_ - current.body_stamp) > c.synchronization_tolerance) ||
-           roll_yaw::steadySeconds() - interaction_receipt_ > c.feedback_config.timeout));
+  return c.lock_valid && c.feedback.hover && c.contact_safety_rejection(c.feedback).empty();
 }
 
 double RollYawInteractionRuntime::holdReference(double applied_relief)
@@ -909,27 +902,9 @@ void RollYawInteractionRuntime::resetComplianceSession()
 
 void RollYawInteractionRuntime::referenceDirection(double direction)
 {
-  const double sign = direction / reference_direction_;
-  admittance_.offset *= sign;
-  admittance_.rate *= sign;
-  admittance_.acceleration *= sign;
-  admittance_.filtered *= sign;
-  interaction_torque_ *= sign;
+  // Only the path-coordinate boundary changes sign. Torque and scalar state
+  // always describe positive nominal main-body local Y.
   reference_direction_ = direction;
-}
-
-void RollYawInteractionRuntime::rebaseReference(double direction)
-{
-  referenceDirection(direction);
-  // The caller retains the actual applied pose and total derivatives as the
-  // new producer's initial nominal reference. No physical offset is removed or
-  // applied a second time; subsequent compliance is relative to that reference.
-  admittance_.offset = admittance_.rate = admittance_.acceleration = 0;
-  previous_offset_ = previous_rate_ = previous_acceleration_ = 0;
-  compliance_time_ = 0;
-  admittance_reason_ = admittance_.enabled
-      ? "enabled: correction reconciled into new applied nominal reference"
-      : "disabled: applied nominal reference retained";
 }
 
 bool RollYawInteractionRuntime::quietContact(const Input& c) const
@@ -964,7 +939,7 @@ void RollYawInteractionRuntime::admittanceCallback(const Input& c, const std_msg
   }
   else if(admittance_.enabled)
   {
-    admittance_reason_ = interaction_valid_ ? "enabled: request retained" : "enabled: input unavailable; reference held";
+    admittance_reason_ = interaction_valid_ ? "enabled: request retained" : "enabled: input unavailable; zero-input recovery";
   }
   else if(!interaction_configured_ || !admittance_.config.valid())
   {
@@ -1001,7 +976,7 @@ void RollYawInteractionRuntime::admittanceCallback(const Input& c, const std_msg
   else
   {
     admittance_.enabled = true;
-    admittance_reason_ = "enabled/ready: approximate path interaction; assumed no-cut tare";
+    admittance_reason_ = "enabled/ready: signed body-pitch interaction; assumed no-cut tare";
   }
   // A rejected enable is reported as rejected, not a hidden pending request.
   enable_requested_ = admittance_.enabled;
@@ -1082,7 +1057,7 @@ void RollYawInteractionRuntime::externalWrenchCallback(const Input& c, const geo
 }
 bool RollYawInteractionRuntime::observeInteractionSample(const Input& c, const roll_yaw::Feedback& f, double stamp, bool held)
 {
-  const double direction = reference_direction_;
+  const double direction = 1; // Fixed physical local +Y, including reverse strokes.
   Eigen::VectorXd load;
   Eigen::Vector3d force = Eigen::Vector3d::Zero(), moment = force;
   Eigen::Vector3d q = f.eta;
@@ -1163,7 +1138,7 @@ bool RollYawInteractionRuntime::observeInteractionSample(const Input& c, const r
     // Articulated vector tare owns its sample count and gap policy. The scalar filter's
     // pre-baseline gap reset must not reset that count while retaining its sum.
     if(stamp > interaction_stamp_ && (!articulated || admittance_.baseline_ready))
-      admittance_.observe(interaction_torque_, stamp, false, !c.plan);
+      admittance_.observe(interaction_torque_, stamp, false, true);
     interaction_stamp_ = stamp;
   }
   return fresh;
@@ -1221,15 +1196,15 @@ RollYawInteractionRuntime::Output RollYawInteractionRuntime::updateInteraction(c
   }
   if(admittance_.enabled && !fresh)
     admittance_reason_ =
-        "stale/unavailable interaction: bounded path stop, correction braking/held; original goal retained";
+        "stale/unavailable interaction: zero-input recovery; nominal goal retained";
   else if(admittance_.enabled)
-    admittance_reason_ = "enabled/ready: approximate external work, resistance reduces penetration";
+    admittance_reason_ = "enabled/ready: signed body-local pitch compliance";
   else if(fresh && admittance_.baseline_ready)
     admittance_reason_ = "disabled/ready: unloaded contact baseline complete; enable explicitly";
   if(articulated && !fresh)
   {
     const bool raw_available = articulatedLoadValid(c, f);
-    admittance_reason_ = projection_failed ? "signed path projection unavailable; retrying with retained tare"
+    admittance_reason_ = projection_failed ? "signed body-pitch projection unavailable; retrying with retained tare"
         : raw_available && !admittance_.baseline_ready
             ? (tare_requested_ ? "task torque unavailable: collecting unloaded tare"
                                : "task torque unavailable: no completed baseline")
@@ -1241,27 +1216,15 @@ RollYawInteractionRuntime::Output RollYawInteractionRuntime::updateInteraction(c
     else if(admittance_.enabled)
       admittance_reason_ += "; no completed baseline; disarm and tare unloaded";
     if(admittance_.enabled)
-      admittance_reason_ += "; feed held with correction braking/held";
+      admittance_reason_ += "; zero-input recovery with nominal motion eligible";
   }
   if(!fresh) invalidateInteraction(); // Pause forcing only; retain history and the source watermark.
-  // Observation/filtering continues at a hold. Only explicit disable may
-  // release correction while PAUSED; the executor keeps nominal progress frozen.
-  if(((c.plan && (c.stage == roll_yaw::Stage::EXECUTING ||
-                 (c.stage == roll_yaw::Stage::PAUSED && !c.plan->goal.align_only && !admittance_.enabled))) ||
-       !c.plan) && !c.stopping &&
+  // Every nominal producer, including a stopped/paused one, shares this state.
+  // Missing torque removes forcing; independently valid motion feedback still
+  // permits spring/damper recovery and nominal motion.
+  if(c.contact_safety_rejection(f).empty() &&
      (admittance_.enabled || std::abs(admittance_.offset) > 1e-10 || std::abs(admittance_.rate) > 1e-10))
   {
-    double available = admittance_.config.angle_limit;
-    bool mapped = true;
-    if(c.plan)
-    {
-      const auto& plan = *c.plan;
-      double angle = 0, cross = 0;
-      const Eigen::Matrix3d pre = roll_yaw::cuttingOrientation(plan.neutral, plan.goal, 0, 0, 0).rotation;
-      mapped = roll_yaw::taskPitch(pre, plan.cut.desired(c.nominal_progress).rotation, plan.goal.pitch_start, angle, cross);
-      available = std::min(c.relief_available,
-          std::max(0.0, (plan.goal.pitch_end >= plan.goal.pitch_start ? 1 : -1) * (angle - plan.goal.pitch_start)));
-    }
     const double elapsed = c.plan ? dt : c.local_dt;
     const int steps = c.feedback_config.integrationSteps(elapsed);
     auto candidate = admittance_;
@@ -1270,9 +1233,9 @@ RollYawInteractionRuntime::Output RollYawInteractionRuntime::updateInteraction(c
       candidate.config.rate_limit = std::min(candidate.config.rate_limit, c.local_rate_limit);
       candidate.config.acceleration_limit = std::min(candidate.config.acceleration_limit, c.local_acceleration_limit);
     }
-    bool integrated = mapped && steps >= 0;
+    bool integrated = steps >= 0;
     for(int i = 0; integrated && i < steps; ++i)
-      integrated = candidate.step(elapsed / steps, fresh, c.plan != nullptr, available);
+      integrated = candidate.step(elapsed / steps, fresh);
     if(integrated)
     {
       candidate.config = admittance_.config; // Physical limits constrain this step, not the configured law.
@@ -1290,10 +1253,10 @@ RollYawInteractionRuntime::Output RollYawInteractionRuntime::updateInteraction(c
 
   interaction_valid_ = fresh;
   out.updated = true;
-  out.relief = c.plan ? std::min(0.0, admittance_.offset) : admittance_.offset;
-  out.interaction_hold = (admittance_.enabled && !fresh) || scalar_failed;
+  out.relief = admittance_.offset;
+  out.interaction_hold = scalar_failed;
   out.resisting_load = admittance_.enabled && fresh && admittance_.contact &&
-      (c.plan || c.pitch_rate * admittance_.filtered < 0);
+      ((c.plan ? reference_direction_ : c.pitch_rate) * admittance_.filtered < 0);
   out.relief_enabled = admittance_.enabled;
   out.relief_angle_limit = admittance_.config.angle_limit;
   out.relief_rate_limit = admittance_.config.rate_limit;

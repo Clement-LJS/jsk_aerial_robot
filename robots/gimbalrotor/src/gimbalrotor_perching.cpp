@@ -2501,10 +2501,8 @@ void Executor::waitForFeedback(double now, const std::string& why)
     plan = Plan();
     stage = Stage::CONTACT_LOCKED;
   }
-  if(applied_valid)
-    target = applied;
+  // target is the reached nominal reference; applied may contain compliance.
   scaleReference(target, 0, 0);
-  applied = target;
   speed_ = 0;
   last_time_ = now;
   motion_clock_pending_ = true;
@@ -2593,11 +2591,7 @@ void Executor::tick(const Feedback& s)
   recovery_joint_stamp_ = s.joint_stamp;
   const double dt = s.now - last_time_;
   last_time_ = s.now;
-  // Disabling compliance may release an applied correction along the same
-  // validated path while the operator's nominal pause remains in force.
-  const bool releasing = stage == Stage::PAUSED && !paused_align_ && plan.ok && !relief_enabled &&
-      (std::abs(applied_relief) > 1e-8 || std::abs(speed_) > 1e-10);
-  const bool moving = stage == Stage::PRE_ALIGN || stage == Stage::EXECUTING || releasing;
+  const bool moving = stage == Stage::PRE_ALIGN || stage == Stage::EXECUTING;
   if(dt < 0)
   {
     fault("execution clock moved backwards");
@@ -2630,13 +2624,16 @@ void Executor::tick(const Feedback& s)
     goal_orientation_error = logSO3(s.body.linear().transpose() *
                                     cuttingOrientation(plan.neutral, plan.goal, plan.goal.pitch_end, 0, 0).rotation)
                                  .norm();
+    if(stage == Stage::COMPLETED_HOLD)
+      goal_reached = task.valid && std::abs(goal_error) <= config.goal_tolerance &&
+          goal_orientation_error <= config.goal_tolerance;
   }
   if(plan.ok && stage == Stage::READY)
   {
     Reference start;
-    if(!samplePath(model, plan.align, plan.align.duration(), start) || (tracking.eta - start.eta).norm() > 1e-9 ||
-       (tracking.body.matrix() - start.body.matrix()).norm() > 1e-9 ||
-       (tracking.cog.matrix() - start.cog.matrix()).norm() > 1e-9)
+    if(!samplePath(model, plan.align, plan.align.duration(), start) || (target.eta - start.eta).norm() > 1e-9 ||
+       (target.body.matrix() - start.body.matrix()).norm() > 1e-9 ||
+       (target.cog.matrix() - start.cog.matrix()).norm() > 1e-9)
     {
       plan = Plan();
       hold("applied prepared start changed; prepare again");
@@ -2660,7 +2657,7 @@ void Executor::tick(const Feedback& s)
   const bool saved_end = path_end_commanded;
   for(int i = 0; i < steps; ++i)
   {
-    advanceMotion(s, dt / steps, releasing);
+    advanceMotion(s, dt / steps);
     if(stage == Stage::FAULT_HOLD)
     {
       progress = saved_progress;
@@ -2675,7 +2672,7 @@ void Executor::tick(const Feedback& s)
       reference_updated = false;
       return;
     }
-    if(stage != Stage::PRE_ALIGN && stage != Stage::EXECUTING && !releasing)
+    if(stage != Stage::PRE_ALIGN && stage != Stage::EXECUTING)
       break;
   }
 }
@@ -2708,14 +2705,14 @@ std::function<void()> Executor::referenceRollback()
   };
 }
 
-void Executor::advanceMotion(const Feedback& s, double dt, bool release_only)
+void Executor::advanceMotion(const Feedback& s, double dt)
 {
   Eigen::Vector3d measured_q = s.eta;
   measured_q[0] = measured.alpha;
-  const Reference& tracking = target;
+  const Reference& tracking = applied_valid ? applied : target;
   const double joint_error = (measured_q - tracking.eta).cwiseAbs().maxCoeff();
   const double body_error = logSO3(s.body.linear().transpose() * tracking.body.linear()).norm();
-  const bool cut = stage == Stage::EXECUTING || release_only;
+  const bool cut = stage == Stage::EXECUTING;
   const auto& path = cut ? plan.cut : plan.align;
   if(!plan.ok || plan.session != session)
   {
@@ -2726,22 +2723,6 @@ void Executor::advanceMotion(const Feedback& s, double dt, bool release_only)
                               planning.cog_acceleration_limit / planning.cog_speed_limit) *
                      .5;
   double speed_cap = 1;
-  const bool correcting = cut && (relief_enabled || std::abs(relief) > 1e-10 || speed_ < 0);
-  if(correcting)
-  {
-    if(!std::isfinite(relief) || !std::isfinite(relief_angle_limit) || relief_angle_limit <= 0 ||
-       !std::isfinite(relief_rate_limit) || relief_rate_limit <= 0 || !std::isfinite(relief_acceleration_limit) ||
-       relief_acceleration_limit <= 0)
-    {
-      fault("invalid scalar relief limits/state");
-      return;
-    }
-    // Stroke derivatives are bounded by the requested magnitudes (time scaling
-    // only reduces them). Reserve half the angular acceleration for each chain term.
-    speed_cap = std::min(
-        {1.0, relief_rate_limit / plan.goal.rate, std::sqrt(.5 * relief_acceleration_limit / plan.goal.acceleration)});
-    speed_acc = std::min(speed_acc, .5 * relief_acceleration_limit / plan.goal.rate);
-  }
   const double direction = plan.goal.pitch_end >= plan.goal.pitch_start ? 1 : -1;
   const Eigen::Matrix3d pre = cuttingOrientation(plan.neutral, plan.goal, 0, 0, 0).rotation;
   auto pitch = [&](double t)
@@ -2778,21 +2759,12 @@ void Executor::advanceMotion(const Feedback& s, double dt, bool release_only)
       fault("invalid prepared pitch map");
       return;
     }
-    const double low_angle = std::max(0.0, task.upper_distance - config.reference_lead);
-    const double high_angle = std::min(length, task.current + config.reference_lead);
-    invalid_band = !task.valid || low_angle > high_angle;
-    if(!invalid_band)
-    {
-      lower = phaseAt(low_angle);
-      upper = phaseAt(high_angle);
-    }
-    else
-      lower = upper = progress;
-    // Retreat remains within the configured angle from the frozen nominal point.
-    if(correcting)
-      lower = std::max(lower, phaseAt(std::max(0.0, pitch(nominal_progress) - relief_angle_limit)));
-    else
-      lower = std::max(lower, progress);  // ordinary execution is forward/hold
+    // Compare nominal progress to measured pitch with the accepted physical
+    // correction removed. Tracking/physical bounds still use the applied pose.
+    const double measured_nominal = direction * (task.raw - plan.goal.pitch_start - applied_relief);
+    invalid_band = !task.valid || !std::isfinite(measured_nominal);
+    lower = progress;
+    upper = invalid_band ? progress : phaseAt(std::clamp(measured_nominal + config.reference_lead, 0.0, length));
   }
   const Eigen::Vector3d origin = pathTravel(path, progress);
   const Eigen::Vector3d joint_errors = (measured_q - tracking.eta).cwiseAbs();
@@ -2840,38 +2812,12 @@ void Executor::advanceMotion(const Feedback& s, double dt, bool release_only)
      body_error < soft_body * config.resume_fraction)
     governor_hold_ = false;
   if(invalid_band || joint_error >= soft_joint || body_error >= soft_body ||
-     (std::abs(speed_) < .01 && !resisting_load && relief >= -1e-10 && upper - progress < 1e-4 &&
+     (std::abs(speed_) < .01 && upper - progress < 1e-4 &&
       upper < path.duration() - 1e-7))
     governor_hold_ = true;
-  double next_nominal = nominal_progress;
-  double destination = upper;
-  if(cut)
-  {
-    // Freeze the nominal schedule during relief, tracking holds and recovery.
-    // Release the correction before normal feeding; no wall-clock debt.
-    if(!release_only && !stopping_ && !interaction_hold && !resisting_load && !governor_hold_ && std::abs(relief) < 1e-8)
-      next_nominal = std::max(nominal_progress, std::min(upper, nominal_progress + dt));
-    const double correction = correcting ? std::clamp(relief, -relief_angle_limit, 0.0) : 0;
-    const double wanted = std::clamp(pitch(next_nominal) + correction, 0.0, length);
-    destination = phaseAt(wanted);
-    relief_available = correcting && !outside_band && !invalid_band
-                           ? std::clamp(pitch(next_nominal) - pitch(lower), 0.0, relief_angle_limit)
-                           : 0;
-    relief_limited = resisting_load && (wanted <= 1e-10 || -relief >= relief_available - 1e-8);
-    if(!outside_band)
-      destination = std::clamp(destination, lower, upper);
-    // A resisting load may authorize reverse relief, never additional feed.
-    if(resisting_load)
-      destination = std::min(destination, progress);
-  }
-  const bool reverse_requested = correcting && destination < progress - 1e-8 && lower < progress - 1e-8;
-  // A forward-feed latch must not forbid safe retreat inside the same symmetric
-  // tracking allowance. It still freezes the nominal schedule.
-  const bool brake = stopping_ || interaction_hold || (governor_hold_ && !reverse_requested) || invalid_band || outside_band;
-  const double desired_speed =
-      brake ? 0
-            : (destination > progress + 1e-8 ? speed_cap
-                                             : (correcting && destination < progress - 1e-8 ? -speed_cap : 0));
+  const double destination = upper;
+  const bool brake = stopping_ || interaction_hold || governor_hold_ || invalid_band || outside_band;
+  const double desired_speed = brake ? 0 : (destination > progress + 1e-8 ? speed_cap : 0);
   const double dv = speed_acc * dt;
   double new_speed = std::clamp(desired_speed, speed_ - dv, speed_ + dv);
   // Do not change direction inside one trapezoidal integration step.
@@ -2919,20 +2865,18 @@ void Executor::advanceMotion(const Feedback& s, double dt, bool release_only)
   }
   // Preserve the acceleration term at zero crossing; only a completed hold zeros it.
   scaleReference(next, new_speed, phase_acc);
-  if(!referenceAllowed(next, planning, sample_error) ||
-     (correcting && (next.desired.omega.norm() > relief_rate_limit + 1e-8 ||
-                     next.desired.acceleration.norm() > relief_acceleration_limit + 1e-8)))
+  if(!referenceAllowed(next, planning, sample_error))
   {
     fault("signed reference rejected: " + sample_error);
     return;
   }
   // Commit scalar path state only after the same coherent reference passed bounds.
   progress = next_progress;
-  nominal_progress = next_nominal;
+  nominal_progress = next_progress;
   speed_ = new_speed;
   target = next;
   reference_updated = true;
-  const bool restricted = governor_hold_ || resisting_load || interaction_hold || (cut && relief < -1e-8);
+  const bool restricted = governor_hold_ || interaction_hold;
   progress_lag = !stopping_ && restricted;
   const bool pending_progress = progress < path.duration() - 1e-7 || (cut && restricted);
   if(!stopping_)
@@ -2950,14 +2894,9 @@ void Executor::advanceMotion(const Feedback& s, double dt, bool release_only)
     }
     else if(pending_progress)
     {
-      reason = interaction_hold                      ? "interaction hold; original goal retained"
-               : governor_hold_ && !reverse_requested ? "tracking hold; original goal pending"
-               : speed_ < -1e-8                        ? "bounded on-path relief retreat; original goal pending"
-               : resisting_load                        ? (relief_limited ? "relief limit reached; original goal pending"
-                                                                         : "resisting-load hold; original goal pending")
-               : correcting && std::abs(relief) > 1e-8 ? "bounded correction recovery; original goal pending"
-               : cut                                   ? "feeding prepared stroke"
-                                                       : "advancing prepared connection";
+      reason = interaction_hold ? "scalar feasibility hold; original goal retained"
+               : governor_hold_ ? "tracking hold; original goal pending"
+               : cut ? "feeding prepared nominal stroke" : "advancing prepared nominal connection";
     }
   }
   if(!cut && !progress_lag)
@@ -2966,13 +2905,7 @@ void Executor::advanceMotion(const Feedback& s, double dt, bool release_only)
   {
     double cross;
     taskPitch(pre, next.desired.rotation, planned_pitch, planned_pitch, cross);
-    applied_relief = pitch(progress) - pitch(nominal_progress);
     path_end_commanded = progress >= path.duration() - 1e-7;
-  }
-  if(release_only)
-  {
-    reason = "PAUSED: bounded correction release; nominal progress retained";
-    return;
   }
   // Reaching the path's zero-rate endpoint also completes a stop. Otherwise an
   // automatic alignment could enter READY before deceleration finished and leave
@@ -2994,16 +2927,12 @@ void Executor::advanceMotion(const Feedback& s, double dt, bool release_only)
     target.desired = {target.body.linear(), Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero()};
     reason = cancel_ ? "cancelled; stopped at contact-consistent reference"
                      : "PAUSED: " + reason + "; coherent reference held; explicit resume required";
-    if(cancel_)
-      plan = Plan();
     stopping_ = cancel_ = false;
     return;
   }
-  if(progress < path.duration() - 1e-7 || stopping_ ||
-     (cut && (resisting_load || interaction_hold || std::abs(relief) >= 1e-8)))
+  if(progress < path.duration() - 1e-7 || stopping_)
     resetSettling();
-  if(progress >= path.duration() - 1e-7 && !stopping_ &&
-     (!cut || (!resisting_load && !interaction_hold && std::abs(relief) < 1e-8)))
+  if(progress >= path.duration() - 1e-7 && !stopping_)
   {
     if(ready_since_ == 0)
       ready_since_ = s.now;
@@ -3060,7 +2989,7 @@ void Executor::advanceMotion(const Feedback& s, double dt, bool release_only)
              << config.settle_time << " s; current body=" << body_rate << " joint=" << joint_rate
              << "; bound=" << config.settle_rate << " rad/s";
     }
-    const bool at_goal =
+    const bool measured_goal =
         stage == Stage::PRE_ALIGN
             ? (logSO3(s.body.linear().transpose() * path.desired(path.duration()).rotation).norm() <=
                    config.goal_tolerance &&
@@ -3068,6 +2997,8 @@ void Executor::advanceMotion(const Feedback& s, double dt, bool release_only)
             : (task.valid && std::abs(goal_error) <= config.goal_tolerance &&
                goal_orientation_error <= config.goal_tolerance &&
                (measured_q - plan.cut.knots.back().eta).cwiseAbs().maxCoeff() <= config.tracking_tolerance);
+    goal_reached = cut && measured_goal;
+    const bool at_goal = joint_error <= config.goal_tolerance && body_error <= config.goal_tolerance;
     if(!at_goal)
     {
       qualified = false;
@@ -3092,9 +3023,9 @@ void Executor::advanceMotion(const Feedback& s, double dt, bool release_only)
         plan.measured_start_valid = true;
       }
       stage = stage == Stage::PRE_ALIGN ? Stage::READY : Stage::COMPLETED_HOLD;
-      goal_reached = stage == Stage::COMPLETED_HOLD;
+      goal_reached = stage == Stage::COMPLETED_HOLD && measured_goal;
       reason = stage == Stage::READY ? "MOTION_COMPLETE: alignment settled; READY for next command"
-                                     : "GOAL_REACHED: measured original endpoint settled; holding contact";
+                                     : "NOMINAL_COMPLETE: applied endpoint settled; measured nominal arrival reported separately";
       resetSettling();
     }
     else
@@ -3165,9 +3096,8 @@ void PitchAdmittance::observe(double torque, double stamp, bool no_cut, bool bid
   input_missing_ = false;
   if(!baseline_ready || filter_reacquiring)
   {
-    // Retain a short interruption's filter, but never count missing time as
-    // contact dwell. A long gap reacquires from zero on advancing samples.
-    if(dt <= 0 || dt > .15) filtered = 0;
+    // An outage restarts filtering and dwell without integrating missing time.
+    filtered = 0;
     contact = false;
     on_ = off_ = 0;
     return;
@@ -3214,11 +3144,9 @@ bool PitchAdmittance::step(double dt, bool fresh, bool relief_only, double avail
                             : 0;
   // Implicit force balance with x_next = x + dt * (v_old + v_next) / 2.
   // Active motion limits below make this a bounded approximation.
-  const double proposed = enabled && !fresh
-                              ? 0
-                              : (config.inertia * rate + dt * (torque - config.stiffness * offset) -
-                                 0.5 * dt * dt * config.stiffness * rate) /
-                                    (config.inertia + dt * config.damping + 0.5 * dt * dt * config.stiffness);
+  const double proposed = (config.inertia * rate + dt * (torque - config.stiffness * offset) -
+                           0.5 * dt * dt * config.stiffness * rate) /
+                          (config.inertia + dt * config.damping + 0.5 * dt * dt * config.stiffness);
   double v = std::clamp(proposed, rate - config.acceleration_limit * dt, rate + config.acceleration_limit * dt);
   v = std::clamp(v, -config.rate_limit, config.rate_limit);
   // Braking distance prevents hitting the angle clamp at nonzero velocity.
@@ -3289,10 +3217,10 @@ bool compliantReference(const Kinematics& m, const Reference& nominal, const Ref
   if(!m.jacobian(q + 1e-4 * velocity, jp) || !m.jacobian(q - 1e-4 * velocity, jm))
     return false;
   const Eigen::Vector3d acc = svd.solve(angular_acc - (jp - jm) / (2e-4) * velocity);
-  if(!std::isfinite(dt) || dt <= 0 || (velocity.cwiseAbs().array() > config.limits.velocity.array()).any() ||
+  if(!std::isfinite(dt) || dt < 0 || (velocity.cwiseAbs().array() > config.limits.velocity.array()).any() ||
      (acc.cwiseAbs().array() > config.limits.acceleration.array()).any() ||
-     ((q - previous.eta).cwiseAbs().array() > config.limits.velocity.array() * dt + 1e-6).any() ||
-     ((velocity - previous.velocity).cwiseAbs().array() > config.limits.acceleration.array() * dt + 1e-5).any())
+     (dt > 0 && (((q - previous.eta).cwiseAbs().array() > config.limits.velocity.array() * dt + 1e-6).any() ||
+                 ((velocity - previous.velocity).cwiseAbs().array() > config.limits.acceleration.array() * dt + 1e-5).any())))
   {
     reason = "compliant joint rate/acceleration bound";
     return false;
