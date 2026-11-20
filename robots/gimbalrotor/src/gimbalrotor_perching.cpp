@@ -15,9 +15,9 @@ namespace perching_geometry
 {
 bool Lock::targetOrientation(const tf::Quaternion& desired, double limit, double sign, Pose& pose) const
 {
-  const tf::Matrix3x3 relative(orientation.inverse() * desired);
-  const double angle = std::atan2(relative[0][2] - relative[2][0], relative[0][0] + relative[2][2]);
-  return target(angle / sign, limit, sign, pose);
+  const tf::Quaternion relative = desired * orientation.inverse();
+  const double angle = 2 * std::atan2(tf::Vector3(relative.x(), relative.y(), relative.z()).dot(axis), relative.w());
+  return target(std::atan2(std::sin(angle), std::cos(angle)) / sign, limit, sign, pose);
 }
 
 void accumulateLinkInertia(KDL::RigidBodyInertia& total, const KDL::Frame& frame, const std::string& link,
@@ -87,8 +87,7 @@ bool Config::valid() const
          std::isfinite(body_pitch_min) && std::isfinite(body_pitch_max) && body_pitch_min >= -M_PI / 2 &&
          body_pitch_max <= M_PI / 2 && body_pitch_min < body_pitch_max && rezero_pitch >= body_pitch_min &&
          rezero_pitch <= body_pitch_max && std::isfinite(passive_min) && std::isfinite(passive_max) &&
-         passive_min < 0 && passive_max > 0 && finite(pivot_offset) && finite(hinge_axis) &&
-         std::abs(hinge_axis.Norm() - 1) < 1e-6;
+         passive_min < 0 && passive_max > 0;
 }
 
 const char* Core::feedbackError(const Sample& s) const
@@ -169,8 +168,8 @@ bool Core::enable(const Sample& s)
   contact = s.body * bc;
   target = reference = s.body;
   cog = g;
-  pivot = contact * config.pivot_offset;
-  axis = contact.M * config.hinge_axis;
+  pivot = contact.p;
+  axis = contact.M.UnitY();
   q_target = q_goal = s.q;
   alpha = alpha_goal = 0;
   rezero_completed = false;
@@ -215,7 +214,7 @@ bool Core::rebase(const Sample& s, Stage required)
     return reject("rebase FK invalid");
   // Use measured contact orientation but keep the original world pivot.
   contact = s.body * bc;
-  contact.p = pivot - contact.M * config.pivot_offset;
+  contact.p = pivot;
   target = contact * bc.Inverse();
   cog = g;
   q_target = q_goal = s.q;

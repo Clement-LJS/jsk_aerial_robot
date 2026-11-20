@@ -60,13 +60,13 @@ add_library(gimbalrotor_controller
 target_link_libraries(gimbalrotor_controller gimbalrotor_navigation gimbalrotor_perching gimbalrotor_robot_model ${catkin_LIBRARIES})
 
 add_library(gimbalrotor_robot_model
-  src/model/gimbalrotor_robot_model.cpp)
-target_link_libraries(gimbalrotor_robot_model ${catkin_LIBRARIES})
+  src/model/gimbalrotor_robot_model.cpp
+  src/model/gimbalrotor_perching_model.cpp
+  src/model/gimbalrotor_multilink_perching_model.cpp)
+target_link_libraries(gimbalrotor_robot_model gimbalrotor_perching ${catkin_LIBRARIES})
 
 add_library(gimbalrotor_perching
-  src/gimbalrotor_perching.cpp
-  src/model/gimbalrotor_multilink_perching_model.cpp
-  src/model/gimbalrotor_serial_model.cpp)
+  src/gimbalrotor_perching.cpp)
 target_link_libraries(gimbalrotor_perching ${catkin_LIBRARIES})
 
 add_library(gimbalrotor_navigation

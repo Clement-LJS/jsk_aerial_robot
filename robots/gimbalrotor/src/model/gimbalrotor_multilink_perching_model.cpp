@@ -265,3 +265,82 @@ bool MomentumObserver::observe(const Eigen::VectorXd& p, const Eigen::VectorXd& 
   return true;
 }
 } // namespace perching_dynamics
+
+#include <Eigen/SVD>
+#include <pluginlib/class_list_macros.h>
+using namespace perching_geometry;
+
+bool GimbalrotorMultilinkPerchingModel::configure(const std::vector<std::string>& active, std::string& reason)
+{
+  if(active.empty()) { reason = "articulated model requires named active joints"; return false; }
+  return GimbalrotorPerchingModel::configure(active, reason);
+}
+
+bool GimbalrotorMultilinkPerchingModel::pitchTangent(const Vector& q, const std::vector<bool>& moving, Vector& tangent) const
+{
+  Eigen::MatrixXd angular;
+  if(moving.size() != coordinates_.size() || !jacobian(q, angular)) return false;
+  std::vector<int> selected;
+  for(int i = 0; i < q.size(); ++i) if(moving[i]) selected.push_back(i);
+  if(selected.empty()) return false;
+  Eigen::MatrixXd task(3, selected.size());
+  for(std::size_t i = 0; i < selected.size(); ++i) task.col(i) = angular.col(selected[i]);
+  Eigen::JacobiSVD<Eigen::MatrixXd> svd(task, Eigen::ComputeThinU | Eigen::ComputeThinV);
+  svd.setThreshold(1e-6);
+  const Vector solution = svd.solve(Eigen::Vector3d::UnitY());
+  // Rank is not a feasibility test: a single pitch axis is sufficient.
+  if(!solution.allFinite() || (task * solution - Eigen::Vector3d::UnitY()).norm() > 1e-5) return false;
+  tangent = Vector::Zero(q.size());
+  for(std::size_t i = 0; i < selected.size(); ++i) tangent[selected[i]] = solution[i];
+  return true;
+}
+
+bool GimbalrotorMultilinkPerchingModel::orient(const Vector& start, const Eigen::Matrix3d& target, const std::vector<bool>& moving, Vector& result) const
+{
+  if(!rotationValid(target) || moving.size() != coordinates_.size()) return false;
+  result = start;
+  std::vector<int> selected;
+  for(int i = 0; i < start.size(); ++i) if(moving[i]) selected.push_back(i);
+  if(selected.empty()) return false;
+  for(int iteration = 0; iteration < 40; ++iteration)
+  {
+    State state; Eigen::MatrixXd angular;
+    if(!evaluate(result, state) || !jacobian(result, angular)) return false;
+    const Eigen::Vector3d error = logSO3(state.body.linear().transpose() * target);
+    if(error.norm() < 1e-6) return true;
+    Eigen::MatrixXd task(3, selected.size());
+    for(std::size_t j = 0; j < selected.size(); ++j) task.col(j) = angular.col(selected[j]);
+    Eigen::JacobiSVD<Eigen::MatrixXd> svd(task, Eigen::ComputeThinU | Eigen::ComputeThinV);
+    svd.setThreshold(1e-6);
+    Vector delta = svd.solve(error);
+    if(!delta.allFinite() || (task * delta - error).norm() > 1e-5) return false;
+    if(delta.norm() > .1) delta *= .1 / delta.norm();
+    for(std::size_t j = 0; j < selected.size(); ++j) result[selected[j]] += delta[j];
+    if((result.array() < lower.array()).any() || (result.array() > upper.array()).any()) return false;
+  }
+  return false;
+}
+
+bool GimbalrotorMultilinkPerchingModel::pitch(const Vector& start, double angle, const std::vector<bool>& moving, Vector& result) const
+{
+  if(!std::isfinite(angle) || std::abs(angle) > M_PI) return false;
+  result = start;
+  if(angle == 0) return start.size() == lower.size() && start.allFinite();
+  // Integrate the very same tangent used for virtual work. This fixes the
+  // null-space policy for parallel axes and preserves held coordinates exactly.
+  const int steps = std::max(1, static_cast<int>(std::ceil(std::abs(angle) / .002)));
+  const double h = angle / steps;
+  for(int i = 0; i < steps; ++i)
+  {
+    Vector tangent, middle;
+    if(!pitchTangent(result, moving, tangent) || !pitchTangent(result + .5 * h * tangent, moving, middle)) return false;
+    result += h * middle;
+    if((result.array() < lower.array()).any() || (result.array() > upper.array()).any()) return false;
+  }
+  State a, b;
+  return evaluate(start, a) && evaluate(result, b) &&
+      logSO3((a.body.linear() * expSO3(Eigen::Vector3d::UnitY() * angle)).transpose() * b.body.linear()).norm() < 1e-4;
+}
+
+
+PLUGINLIB_EXPORT_CLASS(GimbalrotorMultilinkPerchingModel, aerial_robot_model::RobotModel);

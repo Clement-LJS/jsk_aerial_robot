@@ -14,14 +14,6 @@ navigation:
     pitch_position_tolerance: 0.02
     pitch_velocity_tolerance: 0.05
     pitch_zero_tolerance: 0.02
-    pivot_offset:
-    - 0.21049
-    - -0.014
-    - 0.0205
-    hinge_axis:
-    - 0.0
-    - 1.0
-    - 0.0
     pitch_rezero_target_pitch: 0.0
     pitch_rezero_command_sign: -1.0
     pitch_rezero_kp: 1.0
@@ -40,7 +32,6 @@ navigation:
     - alpha
     manual_coordinate: alpha
     positioning_joint: joint_pitch_only
-    contact_link: pitch_joint_only_hand_link
     debug_prefix: perching/pitch_only
     diagnostic_name: pitch_only_perching
     feedback_timeout: 0.15

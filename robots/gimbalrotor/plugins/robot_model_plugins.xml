@@ -2,4 +2,10 @@
   <class name="gimbalrotor_robot_model" type="GimbalrotorRobotModel" base_class_type="aerial_robot_model::RobotModel">
     <description>plugin for gimbalrotor robot model </description>
   </class>
+  <class name="gimbalrotor_perching_model" type="GimbalrotorPerchingModel" base_class_type="aerial_robot_model::RobotModel">
+    <description>Rigid perching hinge on the vehicle tree</description>
+  </class>
+  <class name="gimbalrotor_multilink_perching_model" type="GimbalrotorMultilinkPerchingModel" base_class_type="aerial_robot_model::RobotModel">
+    <description>Articulated perching coordinates on the vehicle tree</description>
+  </class>
 </library>

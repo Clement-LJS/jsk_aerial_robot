@@ -38,10 +38,7 @@ GimbalrotorPerchingNavigator::GimbalrotorPerchingNavigator():
 
   require_branch_point_(true),
   command_pitch_as_delta_(false),
-  constrain_position_command_(true),
-  constrain_velocity_command_(true),
   use_pitch_command_for_arc_(true),
-  hold_locked_pose_without_pitch_command_(true),
 
   accept_uav_nav_pitch_command_(false),
 
@@ -51,7 +48,6 @@ GimbalrotorPerchingNavigator::GimbalrotorPerchingNavigator():
   max_pitch_delta_(0.78539816339),  // 45 deg
   arc_pitch_sign_(1.0),
   command_pitch_sign_(1.0),
-  y_compliance_deadband_(0.03),
 
   pivot_source_("manual"),
 
@@ -73,8 +69,6 @@ GimbalrotorPerchingNavigator::GimbalrotorPerchingNavigator():
   branch_pos_world_.setValue(0.0, 0.0, 0.0);
   perching_point_world_.setValue(0.0, 0.0, 0.0);
 
-  hand_perching_center_offset_baselink_.setValue(0.0, 0.0, 0.0);
-  
   locked_robot_pos_world_.setValue(0.0, 0.0, 0.0);
   reference_locked_rpy_.setValue(0.0, 0.0, 0.0);
   locked_pivot_world_.setValue(0.0, 0.0, 0.0);
@@ -89,6 +83,7 @@ void GimbalrotorPerchingNavigator::initialize(
 {
   std::lock_guard<std::recursive_mutex> lock(perchingStateMutex());
   GimbalrotorNavigator::initialize(nh, nhp, robot_model, estimator, loop_du);
+  model_ = boost::dynamic_pointer_cast<Model>(robot_model);
   readProfile();
   initializeMechanism();
 
@@ -130,10 +125,7 @@ void GimbalrotorPerchingNavigator::rosParamInit()
   getParam<bool>(navi_nh, "perching_lock_once", perching_lock_once_, true);
   getParam<bool>(navi_nh, "perching_require_branch_point", require_branch_point_, true);
   getParam<bool>(navi_nh, "perching_command_pitch_as_delta", command_pitch_as_delta_, false);
-  getParam<bool>(navi_nh, "perching_constrain_position_command", constrain_position_command_, true);
-  getParam<bool>(navi_nh, "perching_constrain_velocity_command", constrain_velocity_command_, true);
   getParam<bool>(navi_nh, "perching_use_pitch_command_for_arc", use_pitch_command_for_arc_, true);
-  getParam<bool>(navi_nh, "perching_hold_locked_pose_without_pitch_command", hold_locked_pose_without_pitch_command_, true);
 
   /*
    * Important:
@@ -154,7 +146,6 @@ void GimbalrotorPerchingNavigator::rosParamInit()
   getParam<double>(navi_nh, "perching_max_pitch_delta", max_pitch_delta_, 0.78539816339);
   getParam<double>(navi_nh, "perching_arc_pitch_sign", arc_pitch_sign_, 1.0);
   getParam<double>(navi_nh, "perching_command_pitch_sign", command_pitch_sign_, 1.0);
-  getParam<double>(navi_nh, "perching_y_compliance_deadband", y_compliance_deadband_, 0.03);
 
   if(!std::isfinite(min_valid_radius_) || min_valid_radius_ <= 1.0e-6) min_valid_radius_ = 0.05;
   if(!std::isfinite(max_pitch_delta_) || max_pitch_delta_ <= 0.0 || max_pitch_delta_ > PI)
@@ -166,16 +157,6 @@ void GimbalrotorPerchingNavigator::rosParamInit()
   if(!std::isfinite(y_compliance_deadband_) || y_compliance_deadband_ < 0.0) y_compliance_deadband_ = 0.03;
 
   getParam<std::string>(navi_nh, "perching_pivot_source", pivot_source_, std::string("hand_center"));
-
-  double hand_center_x = hand_perching_center_offset_baselink_.x();
-  double hand_center_y = hand_perching_center_offset_baselink_.y();
-  double hand_center_z = hand_perching_center_offset_baselink_.z();
-
-  getParam<double>(navi_nh, "hand_perching_center_offset_baselink_x", hand_center_x, hand_center_x);
-  getParam<double>(navi_nh, "hand_perching_center_offset_baselink_y", hand_center_y, hand_center_y);
-  getParam<double>(navi_nh, "hand_perching_center_offset_baselink_z", hand_center_z, hand_center_z);
-
-  hand_perching_center_offset_baselink_.setValue(hand_center_x, hand_center_y, hand_center_z);
 
   getParam<std::string>(navi_nh, "perching_enable_topic", perching_enable_topic_, "perching/enable");
   getParam<std::string>(navi_nh, "perching_slanted_enable_topic", perching_slanted_enable_topic_, "perching/slanted_enable");
@@ -204,7 +185,7 @@ void GimbalrotorPerchingNavigator::update()
     perching_mode_ = perching_geometry::Mode::DISABLED;
     return;
   }
-  if(articulated() && !model_valid_ && robot_model_->initialized()) model_valid_ = resolveMechanismModel();
+  if(model_ && !model_valid_ && robot_model_->initialized()) model_valid_ = resolveMechanismModel();
   const double now = ros::Time::now().toSec();
   const double elapsed = last_update_ > 0 ? now - last_update_ : 0;
   last_update_ = now;
@@ -214,10 +195,23 @@ void GimbalrotorPerchingNavigator::update()
   if(articulated())
   {
     proposal_valid_ = false;
-    if(observation(measured_)) model_.estimate(measured_.body, measured_.q, pivot_error_, hinge_error_);
+    if(observation(measured_)) model_->estimate(measured_.body, measured_.q, pivot_error_, hinge_error_);
     if(motionFeedbackValid() && cycle_dt_ > 0) advanceNominal(cycle_dt_);
   }
-  else if(active_perching_hold_enable_) applyActivePerchingTarget();
+  else
+  {
+    Sample sample;
+    if(observation(sample)) model_->estimate(sample.body, sample.q, pivot_error_, hinge_error_);
+    if(velocity_active_ && now >= velocity_expires_) velocity_active_ = false;
+    if(velocity_active_ && cycle_dt_ > 0)
+    {
+      perching_geometry::Pose pose;
+      if(model_->hinge_arc.target(active_pitch_delta_ + velocity_command_ * cycle_dt_ / arc_pitch_sign_,
+                                  max_pitch_delta_, arc_pitch_sign_, pose)) active_pitch_delta_ = pose.delta;
+      if(std::abs(active_pitch_delta_) >= max_pitch_delta_) velocity_active_ = false;
+    }
+    if(active_perching_hold_enable_) applyActivePerchingTarget();
+  }
 }
 
 void GimbalrotorPerchingNavigator::perchingEnableCallback(const std_msgs::BoolConstPtr& msg)
@@ -341,7 +335,7 @@ void GimbalrotorPerchingNavigator::resetPerchingLock()
   locked_radius_ = 0.0;
   active_pitch_delta_ = 0.0;
   lock_stamp_ = ros::Time(0);
-  geometry_ = perching_geometry::Lock();
+  if(model_) model_->unlock();
   reference_locked_rpy_.setValue(0, 0, 0);
   locked_robot_pos_world_.setValue(0, 0, 0);
   locked_pivot_world_.setValue(0, 0, 0);
@@ -399,10 +393,10 @@ void GimbalrotorPerchingNavigator::applyManualPitchDelta(double delta)
     return;
   }
   perching_geometry::Pose pose;
-  if(!geometry_.target(command_pitch_sign_ * delta, max_pitch_delta_, arc_pitch_sign_, pose))
+  if(!model_->hinge_arc.target(command_pitch_sign_ * delta, max_pitch_delta_, arc_pitch_sign_, pose))
     return;
   active_pitch_delta_ = pose.delta;
-  applyAxialCompliance(pose);
+  velocity_active_ = false;
   aerial_robot_msgs::FlightNav command;
   setPoseCommand(command, pose);
   aerial_robot_msgs::FlightNavConstPtr command_ptr(new aerial_robot_msgs::FlightNav(command));
@@ -430,7 +424,7 @@ bool GimbalrotorPerchingNavigator::tryLockRigid(const std::string& reason)
    * Pivot source logic:
    *
    * manual:
-   *   Use base_link -> hand_center fixed robot geometry.
+   *   Use FK from base_link to the URDF perching_pivot marker.
    *   Branch mocap is NOT required and is NOT used.
    *
    * branch:
@@ -462,36 +456,42 @@ bool GimbalrotorPerchingNavigator::tryLockRigid(const std::string& reason)
     return false;
   }
 
+  if(!model_) return false;
+  model_valid_ = resolveMechanismModel();
+  if(!model_valid_) return false;
   locked_robot_pos_world_ = getCurrentRobotPos();
 
   locked_pivot_world_ = computeLockPivotWorld();
   perching_point_world_ = locked_pivot_world_;
 
-  const tf::Vector3 existing_target_rpy = getTargetRPY();
-  tf::Vector3 measured_rpy = getCurrentRobotRPY();
-  // NORMAL preserves roll/yaw intent; measured tracking error is not a target.
-  tf::Vector3 reference_rpy(existing_target_rpy.x(), measured_rpy.y(), existing_target_rpy.z());
-  tf::Quaternion reference_orientation = tf::createQuaternionFromRPY(
-      reference_rpy.x(), reference_rpy.y(), reference_rpy.z());
-  if(perching_mode_ == perching_geometry::Mode::SLANTED)
-  {
-    estimator_->getOrientation(Frame::COG, estimate_mode_).getRotation(reference_orientation);
-    // Lock::initialize validates and normalizes the measured quaternion.
-  }
-  if(!geometry_.initialize(locked_robot_pos_world_, locked_pivot_world_, reference_orientation, min_valid_radius_))
+  Pose body = Pose::Identity();
+  Eigen::Matrix3d body_rotation;
+  Eigen::Vector3d body_position;
+  tf::matrixTFToEigen(getCurrentBaselinkRot(), body_rotation);
+  tf::vectorTFToEigen(getCurrentBaselinkPos(), body_position);
+  body.linear() = body_rotation;
+  body.translation() = body_position;
+  Eigen::Vector3d pivot;
+  tf::vectorTFToEigen(locked_pivot_world_, pivot);
+  if(!model_->lock(body, Vector::Zero(1), &pivot)) return false;
+  Model::State anchored;
+  if(!model_->evaluate(Vector::Zero(1), anchored)) return false;
+  const auto& position = anchored.cog.translation();
+  locked_robot_pos_world_.setValue(position.x(), position.y(), position.z());
+  const Eigen::Quaterniond orientation(anchored.cog.linear());
+  const tf::Quaternion reference_orientation(orientation.x(), orientation.y(), orientation.z(), orientation.w());
+  const Eigen::Vector3d axis = model_->pivot().linear().col(1);
+  if(!model_->hinge_arc.initialize(locked_robot_pos_world_, locked_pivot_world_, reference_orientation,
+                                  min_valid_radius_, tf::Vector3(axis.x(), axis.y(), axis.z())))
   {
     ROS_WARN("[GimbalrotorPerchingNavigator] rejected invalid perching geometry");
     return false;
   }
-  if(perching_mode_ == perching_geometry::Mode::SLANTED)
-  {
-    double roll, pitch, yaw;
-    tf::Matrix3x3(geometry_.orientation).getRPY(roll, pitch, yaw);
-    reference_rpy.setValue(roll, pitch, yaw);
-    measured_rpy = reference_rpy;  // Log the same measured snapshot used by the lock.
-  }
-  reference_locked_rpy_ = reference_rpy;
-  locked_radius_ = geometry_.radial().length();
+  double roll, pitch, yaw;
+  tf::Matrix3x3(reference_orientation).getRPY(roll, pitch, yaw);
+  reference_locked_rpy_.setValue(roll, pitch, yaw);
+  const tf::Vector3 measured_rpy = getCurrentRobotRPY();
+  locked_radius_ = model_->hinge_arc.radial().length();
   active_pitch_delta_ = 0.0;
   commitPerchingLockIdentity();
 
@@ -510,16 +510,12 @@ bool GimbalrotorPerchingNavigator::tryLockRigid(const std::string& reason)
            measured_rpy.x() * 180.0 / PI,
            measured_rpy.y() * 180.0 / PI,
            measured_rpy.z() * 180.0 / PI);
-  ROS_WARN("[GimbalrotorPerchingNavigator] pre-lock target rpy deg: roll %.2f, pitch %.2f, yaw %.2f",
-           existing_target_rpy.x() * 180.0 / PI,
-           existing_target_rpy.y() * 180.0 / PI,
-           existing_target_rpy.z() * 180.0 / PI);
   ROS_WARN("[GimbalrotorPerchingNavigator] reference rpy deg: roll %.2f, pitch %.2f, yaw %.2f",
            reference_locked_rpy_.x() * 180.0 / PI,
            reference_locked_rpy_.y() * 180.0 / PI,
            reference_locked_rpy_.z() * 180.0 / PI);
-  ROS_WARN("[GimbalrotorPerchingNavigator] reference local +Y axis in world: x %.6f, y %.6f, z %.6f",
-           geometry_.axis.x(), geometry_.axis.y(), geometry_.axis.z());
+  ROS_WARN("[GimbalrotorPerchingNavigator] marker local +Y axis in world: x %.6f, y %.6f, z %.6f",
+           model_->hinge_arc.axis.x(), model_->hinge_arc.axis.y(), model_->hinge_arc.axis.z());
   ROS_WARN("[GimbalrotorPerchingNavigator] pitch-plane radius: %.3f m",
            locked_radius_);
   publishLockedDebugPose();
@@ -548,7 +544,7 @@ void GimbalrotorPerchingNavigator::commitFixedContactLock(
   locked_pivot_world_ = contact_position;
   geometry_msgs::PoseStamped pose;
   pose.header.stamp = lock_stamp_;
-  pose.header.frame_id = "world";
+  pose.header.frame_id = world_;
   tf::pointTFToMsg(cog_position, pose.pose.position);
   tf::quaternionTFToMsg(cog_orientation, pose.pose.orientation);
   locked_pose_pub_.publish(pose);
@@ -619,7 +615,9 @@ tf::Vector3 GimbalrotorPerchingNavigator::computeHandPerchingCenterWorldFromBase
   const tf::Vector3 baselink_pos_world = getCurrentBaselinkPos();
   const tf::Matrix3x3 baselink_rot_world = getCurrentBaselinkRot();
 
-  return baselink_pos_world + baselink_rot_world * hand_perching_center_offset_baselink_;
+  const auto marker = model_->bodyPivot();
+  const auto& p = marker.translation();
+  return baselink_pos_world + baselink_rot_world * tf::Vector3(p.x(), p.y(), p.z());
 }
 
 bool GimbalrotorPerchingNavigator::isManualPivotMode() const
@@ -701,7 +699,7 @@ bool GimbalrotorPerchingNavigator::applyPerchingConstraint(aerial_robot_msgs::Fl
   {
     if(command_pitch_as_delta_)
     {
-      if(!geometry_.target(command_pitch_sign_ * msg.target_pitch,
+      if(!model_->hinge_arc.target(command_pitch_sign_ * msg.target_pitch,
                            max_pitch_delta_, arc_pitch_sign_, pose)) return false;
     }
     else
@@ -712,40 +710,38 @@ bool GimbalrotorPerchingNavigator::applyPerchingConstraint(aerial_robot_msgs::Fl
           msg.roll_nav_mode == NAV_MODE_POS ? msg.target_roll : reference_locked_rpy_.x(),
           msg.target_pitch,
           msg.yaw_nav_mode == NAV_MODE_POS ? msg.target_yaw : reference_locked_rpy_.z());
-      if(!geometry_.targetOrientation(desired, max_pitch_delta_, arc_pitch_sign_, pose)) return false;
+      if(!model_->hinge_arc.targetOrientation(desired, max_pitch_delta_, arc_pitch_sign_, pose)) return false;
     }
     active_pitch_delta_ = pose.delta;
-    applyAxialCompliance(pose);
+    velocity_active_ = false;
     setPoseCommand(msg, pose);
     return true;
   }
 
-  if(constrain_position_command_ && position_command)
+  if(position_command)
   {
-    if(!geometry_.project(getDesiredPosition(msg), max_pitch_delta_, arc_pitch_sign_, pose) &&
-       !geometry_.target(active_pitch_delta_, max_pitch_delta_, arc_pitch_sign_, pose)) return false;
+    if(!model_->hinge_arc.project(getDesiredPosition(msg), max_pitch_delta_, arc_pitch_sign_, pose) &&
+       !model_->hinge_arc.target(active_pitch_delta_, max_pitch_delta_, arc_pitch_sign_, pose)) return false;
     active_pitch_delta_ = pose.delta;
-    applyAxialCompliance(pose);
+    velocity_active_ = false;
     setPoseCommand(msg, pose);
   }
-  else if(hold_locked_pose_without_pitch_command_ && !position_command && !velocity_command)
+  else if(!position_command && !velocity_command)
   {
     if(!activePose(pose)) return false;
     setPoseCommand(msg, pose);
     return true;
   }
 
-  if(constrain_velocity_command_ && velocity_command)
+  if(velocity_command)
   {
-    const tf::Vector3 tangent = geometry_.tangentVelocity(getCurrentRobotPos(), desired_velocity);
-    // Projection can couple every world component, including previously idle axes.
-    if(position_command && !constrain_position_command_)
-    {
-      const tf::Vector3 position = getDesiredPosition(msg);
-      msg.target_pos_x = position.x();
-      msg.target_pos_y = position.y();
-      msg.target_pos_z = position.z();
-    }
+    if(!model_->hinge_arc.target(active_pitch_delta_, max_pitch_delta_, arc_pitch_sign_, pose)) return false;
+    const tf::Vector3 direction = model_->hinge_arc.axis.cross(pose.position - model_->hinge_arc.pivot);
+    const tf::Vector3 tangent = model_->hinge_arc.tangentVelocity(pose.position, desired_velocity);
+    velocity_command_ = std::clamp(direction.dot(tangent) / direction.length2(), -rate_limit_, rate_limit_);
+    velocity_active_ = std::abs(velocity_command_) > 1e-9;
+    velocity_expires_ = ros::Time::now().toSec() + velocity_duration_;
+    setPoseCommand(msg, pose);
     msg.pos_xy_nav_mode = position_command ? NAV_MODE_POS_VEL : NAV_MODE_VEL;
     msg.pos_z_nav_mode = position_command ? NAV_MODE_POS_VEL : NAV_MODE_VEL;
     msg.control_frame = aerial_robot_msgs::FlightNav::WORLD_FRAME;
@@ -854,13 +850,13 @@ void GimbalrotorPerchingNavigator::publishLockedDebugPose()
 {
   geometry_msgs::PoseStamped msg;
   msg.header.stamp = lock_stamp_;
-  msg.header.frame_id = "world";
+  msg.header.frame_id = world_;
 
   msg.pose.position.x = locked_robot_pos_world_.x();
   msg.pose.position.y = locked_robot_pos_world_.y();
   msg.pose.position.z = locked_robot_pos_world_.z();
 
-  tf::quaternionTFToMsg(geometry_.orientation, msg.pose.orientation);
+  tf::quaternionTFToMsg(model_->hinge_arc.orientation, msg.pose.orientation);
 
   locked_pose_pub_.publish(msg);
 }
@@ -869,7 +865,7 @@ void GimbalrotorPerchingNavigator::publishLockedPivot()
 {
   geometry_msgs::PointStamped msg;
   msg.header.stamp = lock_stamp_;
-  msg.header.frame_id = "world";
+  msg.header.frame_id = world_;
 
   msg.point.x = locked_pivot_world_.x();
   msg.point.y = locked_pivot_world_.y();
@@ -882,7 +878,7 @@ void GimbalrotorPerchingNavigator::publishCommandedDebugPose(const perching_geom
 {
   geometry_msgs::PoseStamped msg;
   msg.header.stamp = ros::Time::now();
-  msg.header.frame_id = "world";
+  msg.header.frame_id = world_;
   tf::pointTFToMsg(pose.position, msg.pose.position);
   tf::Quaternion commanded_orientation = pose.orientation;
   if(perching_mode_ == perching_geometry::Mode::NORMAL)
@@ -901,18 +897,11 @@ void GimbalrotorPerchingNavigator::publishCommandedDebugPose(const perching_geom
 
 bool GimbalrotorPerchingNavigator::activePose(perching_geometry::Pose& pose) const
 {
-  if(!perching_locked_ || !geometry_.target(active_pitch_delta_, max_pitch_delta_, arc_pitch_sign_, pose))
+  if(!perching_locked_ || !model_->hinge_arc.target(active_pitch_delta_, max_pitch_delta_, arc_pitch_sign_, pose))
     return false;
-  applyAxialCompliance(pose);
   return true;
 }
 
-void GimbalrotorPerchingNavigator::applyAxialCompliance(perching_geometry::Pose& pose) const
-{
-  const double displacement = geometry_.axis.dot(getCurrentRobotPos() - geometry_.position);
-  if(std::isfinite(displacement))
-    pose.position += geometry_.axis * clamp(displacement, -y_compliance_deadband_, y_compliance_deadband_);
-}
 
 void GimbalrotorPerchingNavigator::setPoseCommand(
     aerial_robot_msgs::FlightNav& msg, const perching_geometry::Pose& pose)
@@ -928,10 +917,10 @@ void GimbalrotorPerchingNavigator::setPoseCommand(
   msg.roll_nav_mode = msg.pitch_nav_mode = msg.yaw_nav_mode = NAV_MODE_POS;
   double roll, pitch, yaw;
   tf::Matrix3x3(pose.orientation).getRPY(roll, pitch, yaw);
-  // SLANTED commands the complete revolute orientation; its Euler yaw can change.
-  msg.target_roll = perching_mode_ == perching_geometry::Mode::NORMAL ? reference_locked_rpy_.x() : roll;
+  // The physical revolute arc can change every Euler component.
+  msg.target_roll = roll;
   msg.target_pitch = pitch;
-  msg.target_yaw = perching_mode_ == perching_geometry::Mode::NORMAL ? reference_locked_rpy_.z() : yaw;
+  msg.target_yaw = yaw;
   publishCommandedDebugPose(pose);
 }
 
@@ -950,9 +939,8 @@ bool GimbalrotorPerchingNavigator::perchingAdmittanceTarget(
      lock_stamp != lock_stamp_ || !perching_geometry::finite(nominal_position)) return false;
   // Compliance Y is a physical axis angle. Convert to the logical coordinate
   // before the shared helper applies arc_pitch_sign exactly once.
-  if(!geometry_.target(active_pitch_delta_ + physical_offset / arc_pitch_sign_,
+  if(!model_->hinge_arc.target(active_pitch_delta_ + physical_offset / arc_pitch_sign_,
                        max_pitch_delta_, arc_pitch_sign_, pose)) return false;
-  pose.position += geometry_.axis * geometry_.axis.dot(nominal_position - geometry_.position);
   return true;
 }
 
@@ -982,7 +970,6 @@ void GimbalrotorPerchingNavigator::readProfile()
   pn.getParam("active_joints", active_joints_);
   coordinate_map_["alpha"] = 0;
   for(std::size_t i = 0; i < active_joints_.size(); ++i) coordinate_map_[active_joints_[i]] = i + 1;
-  pn.param<std::string>("contact_link", contact_link_, "");
   pn.param<std::string>("debug_prefix", prefix_, "perching");
   pn.param<std::string>("diagnostic_name", status_name_, "perching");
   pn.param<std::string>("world_frame", world_, "world");
@@ -1032,10 +1019,12 @@ void GimbalrotorPerchingNavigator::readProfile()
 
 void GimbalrotorPerchingNavigator::initializeMechanism()
 {
+  if(model_ && robot_model_->initialized()) model_valid_ = resolveMechanismModel();
+  status_pub_ = nh_.advertise<diagnostic_msgs::DiagnosticArray>(prefix_ + "/diagnostics_status", 1);
+  state_pub_ = nh_.advertise<std_msgs::String>(prefix_ + "/state", 1, true);
   if(!articulated()) return;
   ros::NodeHandle pn(nh_, "navigation/perching");
-  std::string command, body_topic, source, effort_topic;
-  pn.param<std::string>("joint_command_topic", command, "joints_ctrl");
+  std::string body_topic, source, effort_topic;
   pn.param<std::string>("body_state_topic", body_topic, "uav/baselink/odom");
   pn.param<std::string>("dynamics/joint_effort/source", source, "unavailable");
   pn.param<std::string>("dynamics/joint_effort/topic", effort_topic, joint_topic_);
@@ -1052,13 +1041,10 @@ void GimbalrotorPerchingNavigator::initializeMechanism()
         contract == "joint_side_actuation_nm" && units == "Nm" && sign == "urdf" &&
         description.find("gazebo_ros_control/AerialRobotHWSim") != std::string::npos;
   }
-  joints_pub_ = nh_.advertise<sensor_msgs::JointState>(command, 1);
   reference_pub_ = nh_.advertise<nav_msgs::Odometry>(prefix_ + "/body_reference", 1);
   measured_pub_ = nh_.advertise<nav_msgs::Odometry>(prefix_ + "/body_measured", 1);
   cog_pub_ = nh_.advertise<nav_msgs::Odometry>(prefix_ + "/cog_reference", 1);
   body_pose_pub_ = nh_.advertise<geometry_msgs::PoseStamped>(prefix_ + "/target_body_pose", 1);
-  status_pub_ = nh_.advertise<diagnostic_msgs::DiagnosticArray>(prefix_ + "/diagnostics_status", 1);
-  state_pub_ = nh_.advertise<std_msgs::String>(prefix_ + "/state", 1, true);
   session_pub_ = nh_.advertise<std_msgs::UInt64>(prefix_ + "/session", 1, true);
   epoch_pub_ = nh_.advertise<std_msgs::UInt64>(prefix_ + "/motion_epoch", 1, true);
   ack_pub_ = nh_.advertise<std_msgs::String>(prefix_ + "/command_ack", 10);
@@ -1118,50 +1104,32 @@ void GimbalrotorPerchingNavigator::initializeMechanism()
       "pitch_joint_measured", "pitch_joint_nominal", "pitch_joint_final", "secondary_joint_measured",
       "secondary_joint_nominal", "pitch_joint_hold_error", "secondary_joint_hold_error", "passive_pitch_delta"})
     number_pubs_[key] = nh_.advertise<std_msgs::Float64>(prefix_ + "/" + key, 1);
-  if(robot_model_->initialized()) model_valid_ = resolveMechanismModel();
 }
 
 bool GimbalrotorPerchingNavigator::resolveMechanismModel()
 {
-  auto robot = boost::dynamic_pointer_cast<GimbalrotorRobotModel>(robot_model_);
-  if(!robot) return false;
-  KDL::Tree tree;
-  if(!kdl_parser::treeFromUrdfModel(robot->getUrdfModel(), tree)) return false;
+  if(!model_) return false;
   ros::NodeHandle pn(nh_, "navigation/perching");
-  auto read = [&](const std::string& key, Eigen::Vector3d& value)
-  {
-    std::vector<double> values;
-    if(!pn.getParam(key, values) || values.size() != 3) return false;
-    value = Eigen::Vector3d(values[0], values[1], values[2]); return value.allFinite();
-  };
-  Eigen::Vector3d xyz, axis, rpy = Eigen::Vector3d::Zero();
-  if(!read("pivot_offset", xyz) || !read("hinge_axis", axis)) return false;
-  if(pn.hasParam("pivot_rpy") && !read("pivot_rpy", rpy)) return false;
-  Pose cp = Pose::Identity(); cp.translation() = xyz;
-  cp.linear() = perching_geometry::expSO3(Eigen::Vector3d::UnitZ() * rpy.z()) *
-      perching_geometry::expSO3(Eigen::Vector3d::UnitY() * rpy.y()) * perching_geometry::expSO3(Eigen::Vector3d::UnitX() * rpy.x());
   std::string reason;
-  const auto joints = robot->getJointPositionsSnapshot();
-  if(!model_.configure(robot->getUrdfModel(), tree, joints, robot->getInertiaMap(), robot->getExtraModuleMap(),
-      robot->getBaselinkName(), contact_link_, active_joints_, cp, axis,
-      robot->getCogDesireOrientation<Eigen::Matrix3d>().transpose(), reason))
+  if(!model_->configure(active_joints_, reason))
   { ROS_ERROR_STREAM("Perching model: " << reason); return false; }
+  if(!articulated()) { moving_ = {true}; return true; }
   for(const auto& key : {"position_lower", "position_upper", "velocity_caps", "acceleration_caps"})
   {
     std::vector<double> limits;
     if(!pn.hasParam(key)) continue;
-    if(!pn.getParam(key, limits) || limits.size() != model_.coordinates().size()) return false;
+    if(!pn.getParam(key, limits) || limits.size() != model_->coordinates().size()) return false;
     for(std::size_t i = 0; i < limits.size(); ++i)
     {
       if(!std::isfinite(limits[i])) return false;
-      if(std::string(key) == "position_lower") model_.lower[i] = std::max(model_.lower[i], limits[i]);
-      if(std::string(key) == "position_upper") model_.upper[i] = std::min(model_.upper[i], limits[i]);
-      if(std::string(key) == "velocity_caps") model_.velocity[i] = std::min(model_.velocity[i], limits[i]);
-      if(std::string(key) == "acceleration_caps") model_.acceleration[i] = limits[i];
+      if(std::string(key) == "position_lower") model_->lower[i] = std::max(model_->lower[i], limits[i]);
+      if(std::string(key) == "position_upper") model_->upper[i] = std::min(model_->upper[i], limits[i]);
+      if(std::string(key) == "velocity_caps") model_->velocity[i] = std::min(model_->velocity[i], limits[i]);
+      if(std::string(key) == "acceleration_caps") model_->acceleration[i] = limits[i];
     }
   }
-  if(!model_.lower.allFinite() || !model_.upper.allFinite() || (model_.lower.array() >= model_.upper.array()).any() ||
-      (model_.velocity.array() <= 0).any() || (model_.acceleration.array() <= 0).any()) return false;
+  if(!model_->lower.allFinite() || !model_->upper.allFinite() || (model_->lower.array() >= model_->upper.array()).any() ||
+      (model_->velocity.array() <= 0).any() || (model_->acceleration.array() <= 0).any()) return false;
   moving_.assign(active_joints_.size() + 1, false);
   std::vector<std::string> moving;
   pn.getParam("pitch_coordinates", moving);
@@ -1172,14 +1140,13 @@ bool GimbalrotorPerchingNavigator::resolveMechanismModel()
   }
   if(moving.empty() || !coordinate_map_.count(manual_coordinate_)) return false;
   std::string prefix; nhp_.param<std::string>("tf_prefix", prefix, "");
-  pn.param<std::string>("body_frame", body_frame_, tf::resolve(prefix, robot->getBaselinkName()));
+  pn.param<std::string>("body_frame", body_frame_, tf::resolve(prefix, model_->getBaselinkName()));
   if(positioning_)
   {
     if(!coordinate_map_.count(positioning_joint_) || coordinate_map_.at(positioning_joint_) == 0) return false;
     const int index = coordinate_map_.at(positioning_joint_);
     auto& c = servo_.config;
-    c.q_min = model_.lower[index]; c.q_max = model_.upper[index]; c.q_rate = model_.velocity[index];
-    c.pivot_offset = KDL::Vector(xyz.x(), xyz.y(), xyz.z()); c.hinge_axis = KDL::Vector(axis.x(), axis.y(), axis.z());
+    c.q_min = model_->lower[index]; c.q_max = model_->upper[index]; c.q_rate = model_->velocity[index];
     c.body_pitch_min = min_body_pitch_; c.body_pitch_max = max_body_pitch_;
     c.feedback_timeout = timeout_; c.future_tolerance = future_tolerance_;
     c.rezero_pitch = rezero_target_; c.rezero_sign = rezero_sign_; c.rezero_rate = rezero_rate_;
@@ -1255,6 +1222,25 @@ void GimbalrotorPerchingNavigator::bodyCallback(const nav_msgs::OdometryConstPtr
 
 bool GimbalrotorPerchingNavigator::observation(Sample& sample) const
 {
+  if(!articulated())
+  {
+    if(!model_ || !model_->locked()) return false;
+    Eigen::Matrix3d rotation;
+    Eigen::Vector3d position;
+    tf::matrixTFToEigen(getCurrentBaselinkRot(), rotation);
+    tf::vectorTFToEigen(getCurrentBaselinkPos(), position);
+    sample.body.linear() = rotation;
+    sample.body.translation() = position;
+    tf::vectorTFToEigen(estimator_->getAngularVel(Frame::BASELINK, estimate_mode_), sample.omega);
+    sample.stamp = estimator_->getImuLatestTimeStamp();
+    sample.receipt = steadyTime();
+    sample.q = sample.rate = sample.effort = Vector::Zero(1);
+    double pivot, hinge;
+    if(!model_->estimate(sample.body, sample.q, pivot, hinge)) return false;
+    sample.rate[0] = model_->pivot().linear().col(1).dot(sample.body.linear() * sample.omega);
+    sample.effort_valid = true;
+    return perching_geometry::poseValid(sample.body) && sample.rate.allFinite() && fresh(sample.stamp, sample.receipt);
+  }
   if(body_history_.empty() || joint_history_.empty()) return false;
   const auto& body = body_history_.back(); const auto& joint = joint_history_.back();
   if(!fresh(body.stamp, body.receipt) || !fresh(joint.stamp, joint.receipt) ||
@@ -1289,10 +1275,13 @@ bool GimbalrotorPerchingNavigator::observation(Sample& sample) const
   Sample b, j;
   if(!bracket(body_history_, b, true) || !bracket(joint_history_, j, false)) return false;
   sample = j; sample.body = b.body; sample.omega = b.omega; sample.receipt = std::min(b.receipt, j.receipt);
-  if(model_.locked())
+  if(model_->locked())
   {
     double pivot, hinge;
-    if(!model_.estimate(sample.body, sample.q, pivot, hinge)) return false;
+    if(!model_->estimate(sample.body, sample.q, pivot, hinge)) return false;
+    Eigen::MatrixXd angular;
+    if(!model_->jacobian(sample.q, angular)) return false;
+    sample.rate[0] = angular.col(0).dot(sample.omega - angular.rightCols(sample.q.size() - 1) * sample.rate.tail(sample.q.size() - 1));
   }
   return true;
 }
@@ -1300,12 +1289,12 @@ bool GimbalrotorPerchingNavigator::observation(Sample& sample) const
 bool GimbalrotorPerchingNavigator::motionFeedbackValid() const
 {
   if(!perching_locked_ || navi_state_ != HOVER_STATE) return false;
-  if(!articulated()) return perching_geometry::finite(getCurrentRobotPos());
+  if(!articulated()) { Sample sample; return observation(sample); }
   Sample sample;
   if(!model_valid_ || !observation(sample) || !sample.q.allFinite() || !sample.rate.allFinite()) return false;
   const double pitch = std::asin(std::clamp(-sample.body.linear()(2, 0), -1.0, 1.0));
   return sample.body.linear()(2, 2) >= std::cos(max_tilt_) && pitch >= min_body_pitch_ && pitch <= max_body_pitch_ &&
-      model_.allowed(sample.q, max_tilt_, min_body_pitch_, max_body_pitch_);
+      model_->allowed(sample.q, max_tilt_, min_body_pitch_, max_body_pitch_);
 }
 
 bool GimbalrotorPerchingNavigator::tryLockPerching(const std::string& reason)
@@ -1314,13 +1303,13 @@ bool GimbalrotorPerchingNavigator::tryLockPerching(const std::string& reason)
   if(navi_state_ != HOVER_STATE || !model_valid_ || !observation(measured_)) return false;
   if(!resolveMechanismModel()) return false; // Capture held internal geometry/inertias for this lock.
   measured_.q[0] = 0;
-  if(!model_.lock(measured_.body, measured_.q) || !model_.allowed(measured_.q, max_tilt_, min_body_pitch_, max_body_pitch_)) return false;
+  if(!model_->lock(measured_.body, measured_.q) || !model_->allowed(measured_.q, max_tilt_, min_body_pitch_, max_body_pitch_)) return false;
   nominal_ = destination_ = proposed_ = applied_ = locked_q_ = measured_.q;
-  nominal_rate_ = proposed_rate_ = applied_rate_ = Vector::Zero(nominal_.size());
-  if(!model_.evaluate(applied_, applied_state_)) return false;
+  nominal_rate_ = proposed_rate_ = applied_rate_ = applied_acceleration_ = Vector::Zero(nominal_.size());
+  if(!model_->evaluate(applied_, applied_state_)) return false;
   if(positioning_ && !servo_.enable(servoSample())) return false;
   commitFixedContactLock(tfVector(applied_state_.cog.translation()), tfQuaternion(applied_state_.cog.linear()),
-                         tfVector(model_.pivot().translation()));
+                         tfVector(model_->pivot().translation()));
   session_ = lock_stamp_.toNSec();
   applied_stamp_ = 0; last_update_ = ros::Time::now().toSec();
   phase_ = "CONTACT_LOCKED"; status_ = "locked; collecting unloaded baseline";
@@ -1358,7 +1347,7 @@ void GimbalrotorPerchingNavigator::navigationTargetConflict(const char* source)
 
 bool GimbalrotorPerchingNavigator::nominalHeld() const
 {
-  if(!articulated()) return true;
+  if(!articulated()) return !velocity_active_;
   return perching_locked_ && !rezero_active_ && nominal_rate_.norm() < 1e-6 && std::abs(body_rate_) < 1e-6 &&
       !velocity_active_ && !stopping_ && (destination_ - nominal_).norm() < 1e-5 &&
       (!body_target_valid_ || std::abs(body_destination_ - body_progress_) < 1e-4);
@@ -1366,11 +1355,17 @@ bool GimbalrotorPerchingNavigator::nominalHeld() const
 
 bool GimbalrotorPerchingNavigator::trackingHeld() const
 {
-  if(!articulated()) return true;
+  if(!articulated())
+  {
+    Sample sample;
+    return observation(sample) && std::abs(sample.q[0] - rigidAngle()) <= tracking_tolerance_ &&
+        std::abs(sample.rate[0]) <= rezero_rate_tolerance_;
+  }
   Sample sample;
-  return observation(sample) && applied_.size() == sample.q.size() &&
+  Model::State measured;
+  return observation(sample) && applied_.size() == sample.q.size() && model_->evaluate(sample.q, measured) &&
       (sample.q - applied_).cwiseAbs().maxCoeff() <= tracking_tolerance_ &&
-      perching_geometry::logSO3(sample.body.linear().transpose() * applied_state_.body.linear()).norm() <= body_tracking_tolerance_;
+      perching_geometry::logSO3(measured.body.linear().transpose() * applied_state_.body.linear()).norm() <= body_tracking_tolerance_;
 }
 
 void GimbalrotorPerchingNavigator::stopMotion()
@@ -1385,7 +1380,10 @@ void GimbalrotorPerchingNavigator::stopMotion()
 void GimbalrotorPerchingNavigator::coordinateCommand(int index, double value)
 {
   if(!perching_locked_ || !std::isfinite(value) || index < 0 || index >= nominal_.size() ||
-      value < model_.lower[index] || value > model_.upper[index] || rezero_active_) return;
+      value < model_->lower[index] || value > model_->upper[index] || rezero_active_) return;
+  Vector candidate = destination_;
+  candidate[index] = value;
+  if(!model_->allowed(candidate, max_tilt_, min_body_pitch_, max_body_pitch_)) return;
   body_target_valid_ = velocity_active_ = false;
   destination_[index] = value; stopping_ = false; rezero_ready_ = false;
   phase_ = "EXECUTING";
@@ -1397,7 +1395,7 @@ void GimbalrotorPerchingNavigator::bodyPitchCommand(double angle, double rate, s
   const bool new_frame = !body_target_valid_ || frame != body_frame_id_;
   const Vector start = new_frame ? nominal_ : body_start_;
   Vector endpoint;
-  if(!model_.pitch(start, angle, moving_, endpoint) || !model_.allowed(endpoint, max_tilt_, min_body_pitch_, max_body_pitch_))
+  if(!model_->pitch(start, angle, moving_, endpoint) || !model_->allowed(endpoint, max_tilt_, min_body_pitch_, max_body_pitch_))
   { status_ = "requested body pitch is infeasible"; return; }
   if(new_frame)
   {
@@ -1458,8 +1456,14 @@ void GimbalrotorPerchingNavigator::motionCallback(const gimbalrotor::RollYawMoti
         else
         {
           const int index = coordinate_map_.at(name->second);
-          if(m.value < model_.lower[index] || m.value > model_.upper[index]) why = "coordinate outside limits";
-          else coordinateCommand(index, m.value);
+          if(m.value < model_->lower[index] || m.value > model_->upper[index]) why = "coordinate outside limits";
+          else
+          {
+            Vector candidate = destination_;
+            candidate[index] = m.value;
+            if(!model_->allowed(candidate, max_tilt_, min_body_pitch_, max_body_pitch_)) why = "coordinate target is infeasible";
+            else coordinateCommand(index, m.value);
+          }
         }
       }
     }
@@ -1491,7 +1495,7 @@ bool GimbalrotorPerchingNavigator::servoModel(double value, KDL::Frame& contact,
   if(nominal_.size() == 0 || !coordinate_map_.count(positioning_joint_)) return false;
   Vector q = nominal_; q[coordinate_map_.at(positioning_joint_)] = value;
   Pose bc; Eigen::Vector3d center;
-  if(!model_.bodyContact(q, bc, center)) return false;
+  if(!model_->bodyContact(q, bc, center)) return false;
   contact = perching_geometry::toKdl(bc); cog = KDL::Vector(center.x(), center.y(), center.z());
   return true;
 }
@@ -1527,11 +1531,11 @@ void GimbalrotorPerchingNavigator::planCommand(const std::string& action, std::u
       request.param("yaw", yaw, yaw); request.param("roll", roll, roll); request.param("pitch_start", start, start);
       request.param("pitch_increment", increment, increment);
       Model::State state; Vector goal, end;
-      model_.evaluate(nominal_, state);
+      model_->evaluate(nominal_, state);
       const Eigen::Matrix3d desired = state.body.linear() * perching_geometry::expSO3(Eigen::Vector3d::UnitZ() * yaw) *
           perching_geometry::expSO3(Eigen::Vector3d::UnitX() * roll) * perching_geometry::expSO3(Eigen::Vector3d::UnitY() * start);
-      if(!model_.orient(nominal_, desired, moving_, goal) || !model_.pitch(goal, increment, moving_, end) ||
-          !model_.allowed(goal, max_tilt_, min_body_pitch_, max_body_pitch_) || !model_.allowed(end, max_tilt_, min_body_pitch_, max_body_pitch_))
+      if(!model_->orient(nominal_, desired, moving_, goal) || !model_->pitch(goal, increment, moving_, end) ||
+          !model_->allowed(goal, max_tilt_, min_body_pitch_, max_body_pitch_) || !model_->allowed(end, max_tilt_, min_body_pitch_, max_body_pitch_))
         error = "requested orientation/pitch is infeasible";
       else
       {
@@ -1558,7 +1562,7 @@ void GimbalrotorPerchingNavigator::workflowCommand(const std::string& action)
     if(perching_locked_ && applied_pitch_offset_ != 0)
     {
       Sample measured; Vector nominal; Model::State state;
-      if(observation(measured) && model_.pitch(measured.q, -applied_pitch_offset_, moving_, nominal) && model_.evaluate(nominal, state))
+      if(observation(measured) && model_->pitch(measured.q, -applied_pitch_offset_, moving_, nominal) && model_->evaluate(nominal, state))
         s.body = perching_geometry::toKdl(state.body);
     }
     if(action == "confirm_detached_zero") servo_.armZero(s);
@@ -1594,7 +1598,7 @@ void GimbalrotorPerchingNavigator::advanceNominal(double dt)
     servo_.tick(servoSample(), dt);
     proposed_[coordinate_map_.at(positioning_joint_)] = servo_.q_target;
     double pivot, hinge;
-    if(!model_.estimate(perching_geometry::fromKdl(servo_.target), proposed_, pivot, hinge)) return;
+    if(!model_->estimate(perching_geometry::fromKdl(servo_.target), proposed_, pivot, hinge)) return;
     const Vector goal = proposed_;
     followCoordinates(goal, dt); destination_ = goal; status_ = servo_.status;
   }
@@ -1626,13 +1630,13 @@ void GimbalrotorPerchingNavigator::advanceNominal(double dt)
     proposed_body_rate_ = std::clamp(goal_rate, body_rate_ - change, body_rate_ + change);
     if(std::abs(proposed_body_rate_) < 1e-8) proposed_body_rate_ = 0;
     const double step = .5 * (body_rate_ + proposed_body_rate_) * dt;
-    if(!model_.pitch(nominal_, step, moving_, proposed_)) { status_ = "body pitch direction unavailable"; return; }
+    if(!model_->pitch(nominal_, step, moving_, proposed_)) { status_ = "body pitch direction unavailable"; return; }
     proposed_progress_ = body_progress_ + step;
     proposed_rate_ = (proposed_ - nominal_) / dt;
     destination_ = nominal_;
   }
   else followCoordinates(destination_, dt);
-  proposal_valid_ = model_.allowed(proposed_, max_tilt_, min_body_pitch_, max_body_pitch_);
+  proposal_valid_ = model_->allowed(proposed_, max_tilt_, min_body_pitch_, max_body_pitch_);
   if(!proposal_valid_) status_ = "nominal proposal outside mechanism/body bounds";
 }
 
@@ -1641,9 +1645,9 @@ void GimbalrotorPerchingNavigator::followCoordinates(const Vector& goal, double 
   for(int i = 0; i < nominal_.size(); ++i)
   {
     const double error = goal[i] - nominal_[i];
-    const double desired = stopping_ ? 0 : std::clamp(error / .5, -model_.velocity[i], model_.velocity[i]);
-    proposed_rate_[i] = std::clamp(desired, nominal_rate_[i] - .5 * model_.acceleration[i] * dt,
-                                 nominal_rate_[i] + .5 * model_.acceleration[i] * dt);
+    const double desired = stopping_ ? 0 : std::clamp(error / .5, -model_->velocity[i], model_->velocity[i]);
+    proposed_rate_[i] = std::clamp(desired, nominal_rate_[i] - .5 * model_->acceleration[i] * dt,
+                                 nominal_rate_[i] + .5 * model_->acceleration[i] * dt);
     if(std::abs(proposed_rate_[i]) < 1e-8) proposed_rate_[i] = 0;
     proposed_[i] = nominal_[i] + .5 * (nominal_rate_[i] + proposed_rate_[i]) * dt;
   }
@@ -1651,14 +1655,14 @@ void GimbalrotorPerchingNavigator::followCoordinates(const Vector& goal, double 
 
 bool GimbalrotorPerchingNavigator::candidateAllowed(const Vector& q, double dt) const
 {
-  if(!model_.allowed(q, max_tilt_, min_body_pitch_, max_body_pitch_)) return false;
+  if(!model_->allowed(q, max_tilt_, min_body_pitch_, max_body_pitch_)) return false;
   if(applied_stamp_ == 0) return true;
   if(dt <= 0) return (q - applied_).norm() < 1e-8;
   const Vector rate = (q - applied_) / dt;
-  if((rate.cwiseAbs().array() > model_.velocity.array() + 1e-6).any() ||
-      ((rate - applied_rate_).cwiseAbs().array() > model_.acceleration.array() * dt + 1e-5).any()) return false;
+  if((rate.cwiseAbs().array() > model_->velocity.array() + 1e-6).any() ||
+      ((rate - applied_rate_).cwiseAbs().array() > model_->acceleration.array() * dt + 1e-5).any()) return false;
   Model::State state;
-  if(!model_.evaluate(q, state)) return false;
+  if(!model_->evaluate(q, state)) return false;
   const Eigen::Vector3d velocity = (state.cog.translation() - applied_state_.cog.translation()) / dt;
   return velocity.norm() <= cog_speed_limit_ + 1e-6 &&
       (velocity - reference_velocity_).norm() <= cog_acceleration_limit_ * dt + 1e-5;
@@ -1671,16 +1675,14 @@ bool GimbalrotorPerchingNavigator::applyPerchingReference(double pitch_offset, d
     // Explicit detached-zero hold owns only the named servo, before a contact
     // exists. It still publishes from the controller's single output phase.
     if(!positioning_ || !servo_.zero_hold_armed || !servo_.feedback(servoSample())) return false;
-    sensor_msgs::JointState command;
-    command.header.stamp = ros::Time::now(); command.name = {positioning_joint_};
-    command.position = {servo_.q_target}; joints_pub_.publish(command);
     return true;
   }
   if(!articulated())
   {
     perching_geometry::Pose pose;
     const tf::Vector3 nominal_position = getTargetPos();
-    if(!std::isfinite(pitch_offset) || std::abs(active_pitch_delta_ + pitch_offset / arc_pitch_sign_) > max_pitch_delta_ ||
+    if(!std::isfinite(pitch_offset) || !std::isfinite(rate) || !std::isfinite(acceleration) ||
+       std::abs(active_pitch_delta_ + pitch_offset / arc_pitch_sign_) > max_pitch_delta_ ||
        !perchingAdmittanceTarget(lock_stamp_, pitch_offset, nominal_position, pose))
     {
       if(rigid_applied_valid_)
@@ -1692,8 +1694,6 @@ bool GimbalrotorPerchingNavigator::applyPerchingReference(double pitch_offset, d
     }
     double roll, pitch, yaw;
     tf::Matrix3x3(pose.orientation).getRPY(roll, pitch, yaw);
-    if(perching_mode_ == perching_geometry::Mode::NORMAL)
-    { roll = reference_locked_rpy_.x(); yaw = reference_locked_rpy_.z(); }
     setTargetPos(pose.position); setTargetRPY(tf::Vector3(roll, pitch, yaw));
     applied_pitch_offset_ = pitch_offset; applied_offset_rate_ = rate;
     rigid_applied_pose_ = pose; rigid_applied_pose_.orientation = tf::createQuaternionFromRPY(roll, pitch, yaw); rigid_applied_valid_ = true;
@@ -1705,9 +1705,9 @@ bool GimbalrotorPerchingNavigator::applyPerchingReference(double pitch_offset, d
   const Vector& nominal = proposal_valid_ && fresh ? proposed_ : nominal_;
   Vector candidate;
   bool accepted = fresh && std::isfinite(pitch_offset) && std::isfinite(rate) && std::isfinite(acceleration) &&
-      model_.pitch(nominal, pitch_offset, moving_, candidate) && candidateAllowed(candidate, cycle_dt_);
+      model_->pitch(nominal, pitch_offset, moving_, candidate) && candidateAllowed(candidate, cycle_dt_);
   Model::State state;
-  if(accepted) accepted = model_.evaluate(candidate, state);
+  if(accepted) accepted = model_->evaluate(candidate, state);
   if(accepted)
   {
     const bool derivative = applied_stamp_ > 0 && cycle_dt_ > 0;
@@ -1716,7 +1716,14 @@ bool GimbalrotorPerchingNavigator::applyPerchingReference(double pitch_offset, d
     {
       velocity = (state.cog.translation() - applied_state_.cog.translation()) / cycle_dt_;
       omega = perching_geometry::logSO3(applied_state_.cog.linear().transpose() * state.cog.linear()) / cycle_dt_;
-      applied_rate_ = (candidate - applied_) / cycle_dt_;
+      const Vector rate = (candidate - applied_) / cycle_dt_;
+      applied_acceleration_ = (rate - applied_rate_) / cycle_dt_;
+      applied_rate_ = rate;
+    }
+    else
+    {
+      applied_rate_.setZero();
+      applied_acceleration_.setZero();
     }
     reference_acceleration_ = derivative ? Eigen::Vector3d((velocity - reference_velocity_) / cycle_dt_) : Eigen::Vector3d::Zero();
     reference_angular_acceleration_ = derivative ? Eigen::Vector3d((omega - reference_omega_) / cycle_dt_) : Eigen::Vector3d::Zero();
@@ -1738,7 +1745,7 @@ bool GimbalrotorPerchingNavigator::applyPerchingReference(double pitch_offset, d
     // A true feedback loss holds; raw observation remains independent.
     if(positioning_ && proposal_valid_) servo_ = previous_servo_;
     reference_velocity_.setZero(); reference_acceleration_.setZero(); reference_omega_.setZero(); reference_angular_acceleration_.setZero();
-    applied_rate_.setZero(); nominal_rate_.setZero(); body_rate_ = 0;
+    applied_rate_.setZero(); applied_acceleration_.setZero(); nominal_rate_.setZero(); body_rate_ = 0;
     status_ = fresh ? "coordinated reference rejected; holding last feasible output" : "waiting for motion feedback";
   }
   proposal_valid_ = false;
@@ -1757,10 +1764,22 @@ void GimbalrotorPerchingNavigator::publishApplied()
   Eigen::Matrix3d current;
   tf::matrixTFToEigen(estimator_->getOrientation(Frame::COG, estimate_mode_), current);
   setTargetAngAcc(tfVector(current.transpose() * applied_state_.cog.linear() * reference_angular_acceleration_));
-  sensor_msgs::JointState command;
-  command.header.stamp = ros::Time::now(); command.name = active_joints_;
+}
+
+bool GimbalrotorPerchingNavigator::jointCommand(sensor_msgs::JointState& command) const
+{
+  command.header.stamp = ros::Time::now();
+  if(!perching_locked_)
+  {
+    if(!positioning_ || !servo_.zero_hold_armed || !servo_.feedback(servoSample())) return false;
+    command.name = {positioning_joint_};
+    command.position = {servo_.q_target};
+    return true;
+  }
+  if(!articulated()) return false;
+  command.name = active_joints_;
   for(int i = 1; i < applied_.size(); ++i) command.position.push_back(applied_[i]);
-  joints_pub_.publish(command);
+  return true;
 }
 
 void GimbalrotorPerchingNavigator::retireCorrection()
@@ -1771,7 +1790,7 @@ void GimbalrotorPerchingNavigator::retireCorrection()
   if(articulated())
   {
     nominal_ = destination_ = proposed_ = applied_;
-    nominal_rate_.setZero(); body_rate_ = 0; body_target_valid_ = velocity_active_ = stopping_ = false;
+    nominal_rate_.setZero(); applied_acceleration_.setZero(); body_rate_ = 0; body_target_valid_ = velocity_active_ = stopping_ = false;
     proposed_rate_.setZero(); proposal_valid_ = prepared_motion_ = paused_ = rezero_active_ = false;
     if(positioning_ && servo_.ownsPose())
     {
@@ -1787,14 +1806,18 @@ void GimbalrotorPerchingNavigator::retireCorrection()
         servo_.stage = perching_servo::Stage::CONTACT_LOCKED_PRE_REZERO;
     }
   }
-  else active_pitch_delta_ += applied_pitch_offset_ / arc_pitch_sign_;
+  else
+  {
+    active_pitch_delta_ += applied_pitch_offset_ / arc_pitch_sign_;
+    velocity_active_ = false;
+  }
   applied_pitch_offset_ = applied_offset_rate_ = 0;
 }
 
 double GimbalrotorPerchingNavigator::pitchAccelerationLimit() const
 {
   Vector tangent;
-  if(!model_.pitchTangent(nominal_, moving_, tangent)) return 0;
+  if(!model_->pitchTangent(nominal_, moving_, tangent)) return 0;
   double limit = std::numeric_limits<double>::infinity();
   for(int i = 0; i < tangent.size(); ++i)
     if(std::abs(tangent[i]) > 1e-8)
@@ -1802,20 +1825,34 @@ double GimbalrotorPerchingNavigator::pitchAccelerationLimit() const
       const double nominal_acceleration = cycle_dt_ > 0 && proposal_valid_ ?
           std::abs(proposed_rate_[i] - nominal_rate_[i]) / cycle_dt_ : 0;
       // Reserve curvature/FK margin; final joint and CoG bounds are still checked.
-      limit = std::min(limit, .5 * std::max(0.0, model_.acceleration[i] - nominal_acceleration) / std::abs(tangent[i]));
+      limit = std::min(limit, .5 * std::max(0.0, model_->acceleration[i] - nominal_acceleration) / std::abs(tangent[i]));
     }
   return std::isfinite(limit) ? limit : 0;
 }
 
-bool GimbalrotorPerchingNavigator::taskAxisIsCogPitch() const
-{
-  if(!articulated()) return true;
-  const Eigen::Vector3d axis = applied_state_.cog.linear().transpose() * applied_state_.body.linear().col(1);
-  return std::abs(axis.dot(Eigen::Vector3d::UnitY())) > 1 - 1e-6;
-}
 void GimbalrotorPerchingNavigator::publishDiagnostics()
 {
-  if(!articulated()) return;
+  if(!articulated())
+  {
+    diagnostic_msgs::DiagnosticArray array;
+    array.header.stamp = ros::Time::now();
+    diagnostic_msgs::DiagnosticStatus diagnostic;
+    diagnostic.name = nh_.getNamespace() + "/" + status_name_;
+    diagnostic.message = perching_locked_ ? "CONTACT_LOCKED" : "FREE_FLIGHT";
+    diagnostic_msgs::KeyValue residual;
+    residual.key = "hinge_residual";
+    residual.value = std::to_string(hinge_error_);
+    diagnostic.values.push_back(residual);
+    residual.key = "pivot_error";
+    residual.value = std::to_string(pivot_error_);
+    diagnostic.values.push_back(residual);
+    array.status.push_back(diagnostic);
+    status_pub_.publish(array);
+    std_msgs::String state;
+    state.data = diagnostic.message + ": " + status_;
+    state_pub_.publish(state);
+    return;
+  }
   const bool feedback = motionFeedbackValid();
   const bool held = nominalHeld() && feedback && trackingHeld();
   if(held && phase_ == "EXECUTING") phase_ = "COMPLETED_HOLD";
@@ -1892,7 +1929,7 @@ void GimbalrotorPerchingNavigator::publishDiagnostics()
       m.vector.x = q[coordinate_map_.at(wire_angles_[0])]; m.vector.y = q[coordinate_map_.at(wire_angles_[1])]; m.vector.z = q[coordinate_map_.at(wire_angles_[2])];
       publisher.publish(m);
     };
-    angles(nominal_pub_, destination_); angles(angles_pub_, applied_); angles(lower_pub_, model_.lower); angles(upper_pub_, model_.upper);
+    angles(nominal_pub_, destination_); angles(angles_pub_, applied_); angles(lower_pub_, model_->lower); angles(upper_pub_, model_->upper);
   }
   std_msgs::String state;
   if(positioning_)

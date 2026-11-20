@@ -59,7 +59,7 @@ struct Lock
   tf::Quaternion orientation{0, 0, 0, 1};
   bool valid = false;
 
-  bool initialize(const tf::Vector3& p, const tf::Vector3& c, const tf::Quaternion& q, double min_radius)
+  bool initialize(const tf::Vector3& p, const tf::Vector3& c, const tf::Quaternion& q, double min_radius, const tf::Vector3& hinge_axis)
   {
     valid = false;
     if(!finite(p) || !finite(c) || !std::isfinite(q.x()) || !std::isfinite(q.y()) || !std::isfinite(q.z()) ||
@@ -70,7 +70,8 @@ struct Lock
     pivot = c;
     orientation = q.normalized();
     radius = p - c;
-    axis = tf::Matrix3x3(orientation).getColumn(1).normalized();
+    if(!finite(hinge_axis) || std::abs(hinge_axis.length2() - 1) > 1e-6) return false;
+    axis = hinge_axis;
     valid = finite(radius) && finite(axis) && std::isfinite(radial().length()) && radial().length() >= min_radius;
     return valid;
   }
@@ -255,7 +256,6 @@ struct Config
   double rezero_pitch_tolerance = .0349066, rezero_rate_tolerance = .05, rezero_timeout = 5;
   double passive_min = -.5235988, passive_max = .5235988, passive_rate = .1745329;
   double body_pitch_min = -.5235988, body_pitch_max = .5235988;
-  KDL::Vector pivot_offset{0, 0, 0}, hinge_axis{0, 1, 0};
 
   bool valid() const;
 };

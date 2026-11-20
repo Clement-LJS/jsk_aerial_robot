@@ -21,21 +21,21 @@ protected:
   void applyAdmittanceOutputToNavigator(const tf::Vector3&, const tf::Vector3&, const AdmittanceCoreOutput&) override;
   Eigen::Matrix<double, 6, 1> getExternalWrenchWorld() const override;
   Eigen::Matrix3d getComplianceToWorldRotation() const override;
-  Eigen::Vector3d angularFeedforward() const override;
   const char* controllerName() const override { return "GimbalrotorPerchingAdmittanceController"; }
-private:
   void preparePerchingAdmittanceInput();
   void updateAdmittance();
-  bool articulatedExternalLoad(Eigen::VectorXd&, Eigen::VectorXd&, double&);
+  virtual bool externalLoad(Eigen::VectorXd&, Eigen::VectorXd&, double&);
+  virtual bool feedbackWrench(Eigen::Matrix<double, 6, 1>&);
+  void sendTorqueAllocationMatrixInv() override;
+  boost::shared_ptr<GimbalrotorPerchingModel> perching_model_;
   void updateContactGate(double residual_pitch_torque, double dt);
   void perchingAdmittanceEnableCallback(const std_msgs::BoolConstPtr&);
   void resetCalibration();
   void publishContactAdmittanceDiagnostics();
-  void commandWrenchCallback(const geometry_msgs::WrenchStampedConstPtr&);
   void updatePitchIntegralPolicy(PID&, bool);
   aerial_robot_navigation::GimbalrotorPerchingNavigator* perching_navigator_ = nullptr;
   mutable std::recursive_mutex perching_state_mutex_;
-  ros::Subscriber perching_admittance_enable_sub_, tare_sub_, normal_enable_sub_, command_sub_;
+  ros::Subscriber perching_admittance_enable_sub_, tare_sub_, normal_enable_sub_;
   ros::Publisher contact_active_pub_, recovery_active_pub_, pivot_torque_raw_pub_, pivot_torque_filtered_pub_, pitch_offset_pub_;
   ros::Publisher generalized_load_pub_, generalized_valid_pub_, pivot_wrench_pub_;
   perching_geometry::Session session_{perching_geometry::Mode::DISABLED, ros::Time(0)};
@@ -56,22 +56,9 @@ private:
   double pitch_acceleration_limit_ = .1, observer_gain_ = 10, observer_max_interval_ = .15, synchronization_tolerance_ = .05;
   ros::Time previous_contact_gate_time_;
   Eigen::Matrix<double, 6, 1> prepared_perching_admittance_wrench_world_ = Eigen::Matrix<double, 6, 1>::Zero();
-  perching_dynamics::MultilinkModel dynamics_;
-  perching_dynamics::MomentumObserver observer_;
-  perching_dynamics::ObservationFilter observation_filter_;
-  bool dynamics_valid_ = false;
-  double filtered_stamp_ = 0, observation_start_ = 0;
-  Eigen::VectorXd observation_tangent_;
   tf::TransformBroadcaster pivot_tf_;
   std::string pivot_frame_;
   std::string reason_ = "disarmed", world_ = "world";
   std::uint64_t tare_generation_ = 0, tare_request_sequence_ = 0, enable_request_sequence_ = 0;
-  struct Command
-  {
-    double stamp = 0, receipt = 0;
-    Eigen::Matrix<double, 6, 1> wrench;
-    Eigen::Vector3d offset;
-  };
-  std::deque<Command> commands_;
 };
 }

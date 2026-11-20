@@ -1,4 +1,4 @@
-# Configured coordinates are [alpha, active_joints...]; all geometry except the external hinge comes from URDF.
+# Configured coordinates are [alpha, active_joints...]; geometry comes from the URDF perching_pivot marker.
 # Servo mappings retain the existing hardware IDs/signs. Hinge calibration and tuning require hardware verification.
 controller:
   gimbal_calc_in_fc: true
@@ -41,24 +41,11 @@ navigation:
     pitch_rezero_rate_tolerance: 0.05
     pitch_rezero_stable_duration: 0.3
     pitch_rezero_timeout: 5.0
-    contact_link: roll_hand_link
     joint_state_topic: joint_states
     joint_command_topic: joints_ctrl
     body_state_topic: uav/baselink/odom
     world_frame: world
     debug_prefix: perching/roll_yaw
-    pivot_offset:
-    - 0.21049
-    - 0.0
-    - 0.0205
-    pivot_rpy:
-    - 0.0
-    - 0.0
-    - 0.0
-    hinge_axis:
-    - 0.0
-    - 1.0
-    - 0.0
     position_lower:
     - -1.2
     - -1.57079632679

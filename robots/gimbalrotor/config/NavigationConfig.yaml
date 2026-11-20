@@ -47,17 +47,10 @@ navigation:
   # true: target_pitch is a logical locked local +Y rotation delta [rad].
   perching_command_pitch_as_delta: true
 
-  # If position command is sent while perching is enabled, constrain it onto branch pitch arc.
-  perching_constrain_position_command: true
-
-  # If velocity command is sent while perching is enabled, remove radial velocity away/toward branch.
-  perching_constrain_velocity_command: true
+  # Locked position and velocity commands always follow the model hinge arc.
 
   # Main cutting mode: target_pitch command creates target position around branch arc.
   perching_use_pitch_command_for_arc: true
-
-  # If perching enabled but no pitch command arrives, hold the locked pose instead of drifting to old command.
-  perching_hold_locked_pose_without_pitch_command: true
 
   # Safety: invalid branch/robot distance below this will not lock.
   perching_min_valid_radius: 0.05
@@ -81,9 +74,6 @@ navigation:
   perching_reset_topic: "perching/reset"
 
   perching_active_hold_enable: true
-  # Translational deadband along locked local +Y (legacy parameter name), in meters.
-  # Set to zero for a strict revolute constraint.
-  perching_y_compliance_deadband: 0.03
 
   perching_accept_uav_nav_pitch_command: false
   perching_manual_pitch_delta_topic: perching/manual_pitch_delta
@@ -91,14 +81,11 @@ navigation:
   perching_pivot_source: manual
   perching_require_branch_point: false
 
-  # hand center from baselink 
-  hand_perching_center_offset_baselink_x: -0.34867 #-0.33568
-  hand_perching_center_offset_baselink_y: 0.0
-  hand_perching_center_offset_baselink_z: 0.0375 #0.017
+  # Pivot geometry comes from the URDF perching_pivot marker.
 
   # Latched pivot topic published by perching navigator after lock.
   # Perching admittance controller uses this so both navigator and controller
   # use exactly the same pivot.
   perching_locked_pivot_topic: perching/locked_pivot
 
-  perching_pivot_wrench_frame_id: perching_pivot
+  perching_pivot_wrench_frame_id: perching_locked_wrench

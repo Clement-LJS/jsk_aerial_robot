@@ -71,7 +71,6 @@ void GimbalrotorController::controlCore()
 {
   PoseLinearController::controlCore();
 
-    const bool effective_underactuate = underactuate_;
     const bool use_yaw_aligned_translation = underactuate_;
     tf::Matrix3x3 uav_rot = estimator_->getOrientation(Frame::COG, estimate_mode_);
     tf::Vector3 target_acc_w(pid_controllers_.at(X).result(),
@@ -99,25 +98,22 @@ void GimbalrotorController::controlCore()
     else
       target_wrench_acc_cog.tail(3) = Eigen::Vector3d(target_ang_acc_x, target_ang_acc_y, target_ang_acc_z) + gyro;
 
+    allocateWrench(target_wrench_acc_cog);
+}
+
+void GimbalrotorController::allocateWrench(Eigen::VectorXd target_wrench_acc_cog, bool constrained)
+{
+    const bool effective_underactuate = underactuate_ && !constrained;
+    const tf::Matrix3x3 uav_rot = estimator_->getOrientation(Frame::COG, estimate_mode_);
+    const Eigen::Matrix3d inertia = gimbalrotor_robot_model_->getInertia<Eigen::Matrix3d>();
+    const tf::Vector3 target_acc_w(pid_controllers_.at(X).result(), pid_controllers_.at(Y).result(), pid_controllers_.at(Z).result());
+    const tf::Vector3 target_acc_dash = tf::Matrix3x3(tf::createQuaternionFromYaw(rpy_.z())).inverse() * target_acc_w;
+    const Eigen::Vector3d omega(omega_.x(), omega_.y(), omega_.z());
+    const Eigen::Vector3d gyro = omega.cross(inertia * omega);
+    const double target_ang_acc_x = constrained ? target_wrench_acc_cog[3] : pid_controllers_.at(ROLL).result();
+    const double target_ang_acc_y = constrained ? target_wrench_acc_cog[4] : pid_controllers_.at(PITCH).result();
+    const double target_ang_acc_z = constrained ? target_wrench_acc_cog[5] : pid_controllers_.at(YAW).result();
     setTargetWrenchAccCog(target_wrench_acc_cog);
-    // Fully actuated FC allocation: translation is already CoG-expressed,
-    // using the total PID result (including its accumulated hover support). Estimate the BODY rotor
-    // resultant about the instantaneous CoG. FC torque/rotor telemetry is absent;
-    // this is an input estimate, never a measured wrench or net external wrench.
-    if(!underactuate_ && command_wrench_pub_.getNumSubscribers()) {
-      Eigen::Matrix3d rotation; tf::matrixTFToEigen(uav_rot, rotation);
-      const Eigen::Vector3d force = rotation * (robot_model_->getMass() * target_wrench_acc_cog.head<3>());
-      const Eigen::Vector3d torque = rotation * (inertia * target_wrench_acc_cog.tail<3>() +
-          (gimbal_calc_in_fc_ ? gyro : Eigen::Vector3d::Zero()));
-      if(force.allFinite() && torque.allFinite()) {
-        geometry_msgs::WrenchStamped msg;
-        msg.header.stamp.fromSec(estimator_->getImuLatestTimeStamp()); msg.header.frame_id="world";
-        msg.wrench.force.x=force.x(); msg.wrench.force.y=force.y(); msg.wrench.force.z=force.z();
-        msg.wrench.torque.x=torque.x(); msg.wrench.torque.y=torque.y(); msg.wrench.torque.z=torque.z();
-        command_wrench_pub_.publish(msg);
-      }
-    }
-    
     pid_msg_.roll.total.at(0) = target_ang_acc_x;
     pid_msg_.roll.p_term.at(0) = pid_controllers_.at(ROLL).getPTerm();
     pid_msg_.roll.i_term.at(0) = pid_controllers_.at(ROLL).getITerm();
@@ -231,7 +227,9 @@ void GimbalrotorController::controlCore()
     // The FC supplies attitude feedback and gyro compensation. Only the
     // reference-rate/acceleration terms missing from FourAxisCommand go here.
     Eigen::VectorXd reference_force = Eigen::VectorXd::Zero(target_vectoring_f_trans_.size());
-    if(gimbal_calc_in_fc_ && !effective_underactuate)
+    if(constrained)
+      reference_force = target_vectoring_f_rot_;
+    else if(gimbal_calc_in_fc_ && !effective_underactuate)
       reference_force = integrated_map_inv_rot_ * angularFeedforward();
     /* calculate target base thrust */
     double max_yaw_scale = 0; // for reconstruct yaw control term in spinal
@@ -251,7 +249,7 @@ void GimbalrotorController::controlCore()
 
       last_col += rotor_coef_;
     }
-    candidate_yaw_term_ = pid_controllers_.at(YAW).result() * max_yaw_scale;
+    candidate_yaw_term_ = constrained ? 0 : pid_controllers_.at(YAW).result() * max_yaw_scale;
 
     /* calculate target full thrusts and gimbal angles (considering full components)*/
     last_col = 0;
@@ -272,6 +270,23 @@ void GimbalrotorController::controlCore()
           target_gimbal_angles_.at(2 * i + 1) = gimbal_pitch;
         }
       last_col += rotor_coef_;
+    }
+    // Reconstruct the allocated body resultant at the CoG. The constrained FC
+    // path lacks yaw/gyro telemetry, so it cannot supply a valid input estimate.
+    if(!underactuate_ && !(constrained && gimbal_calc_in_fc_) && command_wrench_pub_.getNumSubscribers()) {
+      const Eigen::VectorXd allocated = constrained ?
+          Eigen::VectorXd(full_q_mat * integrated_rot * (target_vectoring_f_trans_ + target_vectoring_f_rot_)) : target_wrench_acc_cog;
+      Eigen::Matrix3d rotation; tf::matrixTFToEigen(uav_rot, rotation);
+      const Eigen::Vector3d force = rotation * (robot_model_->getMass() * allocated.head<3>());
+      const Eigen::Vector3d torque = rotation * (inertia * allocated.tail<3>() +
+          (gimbal_calc_in_fc_ && !constrained ? gyro : Eigen::Vector3d::Zero()));
+      if(force.allFinite() && torque.allFinite()) {
+        geometry_msgs::WrenchStamped msg;
+        msg.header.stamp = ros::Time::now(); msg.header.frame_id="world";
+        msg.wrench.force.x=force.x(); msg.wrench.force.y=force.y(); msg.wrench.force.z=force.z();
+        msg.wrench.torque.x=torque.x(); msg.wrench.torque.y=torque.y(); msg.wrench.torque.z=torque.z();
+        command_wrench_pub_.publish(msg);
+      }
     }
   }
 

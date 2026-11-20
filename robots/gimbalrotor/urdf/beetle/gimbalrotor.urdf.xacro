@@ -647,6 +647,48 @@
     </joint>
   </xacro:if>
 
+  <!-- The marker is robot-attached; the environment hinge exists only at lock. -->
+  <xacro:if value="$(arg use_hand)">
+    <link name="perching_pivot"/>
+    <joint name="perching_pivot_joint" type="fixed">
+      <parent link="passive_hand_link"/>
+      <child link="perching_pivot"/>
+      <origin xyz="0.28949 0.00025 0.02050" rpy="0 0 ${pi}"/>
+    </joint>
+  </xacro:if>
+  <xacro:if value="$(arg use_pitch_joint_only)">
+    <link name="perching_pivot"/>
+    <joint name="perching_pivot_joint" type="fixed">
+      <parent link="pitch_joint_only_hand_link"/>
+      <child link="perching_pivot"/>
+      <origin xyz="0.21049 -0.01400 0.02050" rpy="0 0 0"/>
+    </joint>
+  </xacro:if>
+  <xacro:if value="$(arg use_roll_joint)">
+    <link name="perching_pivot"/>
+    <joint name="perching_pivot_joint" type="fixed">
+      <parent link="roll_hand_link"/>
+      <child link="perching_pivot"/>
+      <origin xyz="0.21049 0 0.02050" rpy="0 0 0"/>
+    </joint>
+  </xacro:if>
+  <xacro:if value="$(arg use_yaw_joint)">
+    <link name="perching_pivot"/>
+    <joint name="perching_pivot_joint" type="fixed">
+      <parent link="yaw_hand_link"/>
+      <child link="perching_pivot"/>
+      <origin xyz="0.18999 0 0.02050" rpy="0 0 0"/>
+    </joint>
+  </xacro:if>
+  <xacro:if value="$(arg use_roll_yaw_joint)">
+    <link name="perching_pivot"/>
+    <joint name="perching_pivot_joint" type="fixed">
+      <parent link="roll_hand_link"/>
+      <child link="perching_pivot"/>
+      <origin xyz="0.21049 0 0.02050" rpy="0 0 0"/>
+    </joint>
+  </xacro:if>
+
   <xacro:if value="$(arg use_hand)">
     <joint name="pitchpipe_joint" type="fixed">
       <child link="passive_hand_link"/>

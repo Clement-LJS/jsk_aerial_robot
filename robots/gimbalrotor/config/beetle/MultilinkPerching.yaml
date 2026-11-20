@@ -15,12 +15,6 @@ navigation:
     secondary_command_sign: 1.0
     pitch_rezero_topic: perching/multilink/pitch_rezero
     pitch_rezero_target_pitch: 0.0
-    pitch_rezero_pivot_offset_x: 0.21049
-    pitch_rezero_pivot_offset_y: 0.0
-    pitch_rezero_pivot_offset_z: 0.0205
-    pitch_rezero_axis_x: 0.0
-    pitch_rezero_axis_y: 1.0
-    pitch_rezero_axis_z: 0.0
     pitch_rezero_command_sign: -1.0
     pitch_rezero_kp: 1.0
     pitch_rezero_rate_limit: 0.1745329
@@ -37,19 +31,10 @@ navigation:
     pitch_coordinates:
     - joint_pitch
     manual_coordinate: joint_pitch
-    contact_link: roll_hand_link
     debug_prefix: perching/multilink
     diagnostic_name: multilink_perching
     feedback_timeout: 0.15
     future_tolerance: 0.02
-    pivot_offset:
-    - 0.21049
-    - 0.0
-    - 0.0205
-    hinge_axis:
-    - 0.0
-    - 1.0
-    - 0.0
     coordinate_topics:
       perching/multilink/secondary_joint_target: joint_roll
     dynamics:
