@@ -22,7 +22,6 @@ find_package(catkin REQUIRED COMPONENTS
   )
 
 find_package(Eigen3 REQUIRED)
-find_package(gazebo QUIET)
 
 add_message_files(FILES RollYawMotion.msg)
 generate_messages()
@@ -71,13 +70,6 @@ add_library(gimbalrotor_navigation
 target_link_libraries(gimbalrotor_navigation gimbalrotor_robot_model ${catkin_LIBRARIES})
 add_dependencies(gimbalrotor_controller ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 add_dependencies(gimbalrotor_navigation ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
-
-if(gazebo_FOUND)
-  add_library(gimbalrotor_perching_gazebo src/gimbalrotor_perching_gazebo.cpp)
-  target_include_directories(gimbalrotor_perching_gazebo PRIVATE ${GAZEBO_INCLUDE_DIRS})
-  target_link_libraries(gimbalrotor_perching_gazebo ${GAZEBO_LIBRARIES} ${catkin_LIBRARIES})
-  install(TARGETS gimbalrotor_perching_gazebo LIBRARY DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION})
-endif()
 
 install(DIRECTORY config plugins launch
   DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}

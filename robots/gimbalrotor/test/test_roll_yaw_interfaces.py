@@ -792,15 +792,14 @@ class Interfaces(unittest.TestCase):
     def load_launch(self, simulation, robot_id=''):
         config = roslaunch.config.ROSLaunchConfig()
         namespace = '/gimbalrotor' + robot_id
-        launch = 'roll_yaw_perching.launch'
-        args = ['simulation:=' + simulation]
+        args = ['simulation:=' + simulation, 'real_machine:=' + ('false' if simulation == 'true' else 'true'),
+                'airframe:=beetle', 'roll_yaw_perching:=true']
         if robot_id:
-            # robot_id is exposed by bringup, not the roll-yaw convenience launch.
-            launch = 'bringup.launch'
-            args += ['robot_id:=' + robot_id, 'real_machine:=true', 'airframe:=beetle',
-                     'roll_yaw_perching:=true', 'direct_model_name:=unused']
+            args += ['robot_id:=' + robot_id]
+        else:
+            args += ['headless:=false']
         roslaunch.xmlloader.XmlLoader().load(
-            str(ROOT / 'launch' / launch), config, argv=args,
+            str(ROOT / 'launch' / 'bringup.launch'), config, argv=args,
             verbose=False)
         self.assertEqual(config.params[namespace + '/aerial_robot_control_name'].value,
                          'aerial_robot_control/gimbalrotor_controller')
