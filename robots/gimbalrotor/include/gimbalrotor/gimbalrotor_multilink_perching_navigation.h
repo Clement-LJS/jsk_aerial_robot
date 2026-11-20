@@ -42,7 +42,7 @@ private:
   void jointCallback(const ros::MessageEvent<sensor_msgs::JointState const>&);
   void bodyCallback(const nav_msgs::OdometryConstPtr&);
   void motionCallback(const gimbalrotor::RollYawMotionConstPtr&);
-  void coordinateCommand(int, double);
+  bool coordinateCommand(int, double);
   bool bodyPitchCommand(double angle, double rate, std::uint64_t frame);
   void stopMotion();
   void followCoordinates(const Vector&, double);

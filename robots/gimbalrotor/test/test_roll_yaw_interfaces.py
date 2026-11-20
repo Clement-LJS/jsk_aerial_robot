@@ -803,9 +803,9 @@ class Interfaces(unittest.TestCase):
             str(ROOT / 'launch' / launch), config, argv=args,
             verbose=False)
         self.assertEqual(config.params[namespace + '/aerial_robot_control_name'].value,
-                         'aerial_robot_control/gimbalrotor_multilink_perching_admittance_controller')
+                         'aerial_robot_control/gimbalrotor_controller')
         self.assertEqual(config.params[namespace + '/flight_navigation_plugin_name'].value,
-                         'aerial_robot_navigation/gimbalrotor_perching_navigation')
+                         'aerial_robot_navigation/gimbalrotor_multilink_perching_navigation')
         self.assertEqual(config.params[namespace + '/navigation/perching_configuration'].value,
                          'roll_yaw')
         return config

@@ -518,16 +518,19 @@ void GimbalrotorMultilinkPerchingNavigator::stopMotion()
   status_ = "braking nominal motion";
 }
 
-void GimbalrotorMultilinkPerchingNavigator::coordinateCommand(int index, double value)
+bool GimbalrotorMultilinkPerchingNavigator::coordinateCommand(int index, double value)
 {
   if(!perching_locked_ || !std::isfinite(value) || index < 0 || index >= nominal_.size() ||
-      value < coordinate_lower_[index] || value > coordinate_upper_[index] || rezero_active_) return;
+      value < coordinate_lower_[index] || value > coordinate_upper_[index] || rezero_active_) return false;
   Vector candidate = destination_;
   candidate[index] = value;
-  if(!allowed(candidate, max_tilt_, min_body_pitch_, max_body_pitch_)) return;
+  if(!allowed(candidate, max_tilt_, min_body_pitch_, max_body_pitch_)) return false;
   body_target_valid_ = velocity_active_ = false;
-  destination_[index] = value; stopping_ = false; rezero_ready_ = false;
+  destination_[index] = value;
+  stopping_ = false;
+  rezero_ready_ = false;
   phase_ = "EXECUTING";
+  return true;
 }
 
 bool GimbalrotorMultilinkPerchingNavigator::bodyPitchCommand(double angle, double rate, std::uint64_t frame)
@@ -607,13 +610,13 @@ void GimbalrotorMultilinkPerchingNavigator::motionCallback(const gimbalrotor::Ro
         else
         {
           const int index = coordinate_map_.at(name->second);
-          if(m.value < coordinate_lower_[index] || m.value > coordinate_upper_[index]) why = "coordinate outside limits";
-          else
+          if(m.value < coordinate_lower_[index] || m.value > coordinate_upper_[index])
           {
-            Vector candidate = destination_;
-            candidate[index] = m.value;
-            if(!allowed(candidate, max_tilt_, min_body_pitch_, max_body_pitch_)) why = "coordinate target is infeasible";
-            else coordinateCommand(index, m.value);
+            why = "coordinate outside limits";
+          }
+          else if(!coordinateCommand(index, m.value))
+          {
+            why = rezero_active_ ? "pitch rezero is active" : "coordinate target is infeasible";
           }
         }
       }
