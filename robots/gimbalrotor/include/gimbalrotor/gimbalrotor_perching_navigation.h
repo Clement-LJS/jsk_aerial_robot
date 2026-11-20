@@ -57,7 +57,7 @@ public:
 private:
   bool tryLockPerching(const std::string& reason);
   void resetPerchingLock();
-  bool applyPerchingConstraint(aerial_robot_msgs::FlightNav& nav_msg);
+  bool applyPerchingConstraint(const aerial_robot_msgs::FlightNav& nav_msg);
   void applyManualPitchDelta(double delta);
 
   // Select the rigid contact mode or the configured articulated contact.
@@ -78,9 +78,6 @@ private:
   void perchingEnableCallback(const std_msgs::BoolConstPtr& msg);
   void perchingSlantedEnableCallback(const std_msgs::BoolConstPtr& msg);
 
-  void branchPoseCallback(const geometry_msgs::PoseStampedConstPtr& msg);
-  void perchingPointCallback(const geometry_msgs::PointStampedConstPtr& msg);
-
   void manualPitchDeltaCallback(const std_msgs::Float64ConstPtr& msg);
 
   bool hasPitchCommand(const aerial_robot_msgs::FlightNav& nav_msg) const;
@@ -96,26 +93,13 @@ private:
   tf::Vector3 getCurrentBaselinkPos() const;
   tf::Matrix3x3 getCurrentBaselinkRot() const;
 
-  tf::Vector3 computeHandPerchingCenterWorldFromBaselink() const;
-
-  bool isManualPivotMode() const;
-  bool isBranchPivotMode() const;
-  bool hasBranchPivotSource() const;
-
-  tf::Vector3 computeLockPivotWorld() const;
-
-  double clamp(double value, double min_value, double max_value) const;
-
   void publishLockedDebugPose();
   void publishLockedPivot();
   void publishCommandedDebugPose(const perching_geometry::Pose& pose);
   bool activePose(perching_geometry::Pose& pose) const;
-  void setPoseCommand(aerial_robot_msgs::FlightNav& msg, const perching_geometry::Pose& pose);
 
   ros::Subscriber perching_enable_sub_;
   ros::Subscriber perching_slanted_enable_sub_;
-  ros::Subscriber branch_pose_sub_;
-  ros::Subscriber perching_point_sub_;
   ros::Subscriber relock_sub_;
   ros::Subscriber reset_sub_;
   ros::Subscriber manual_pitch_delta_sub_;
@@ -130,7 +114,6 @@ private:
   bool perching_locked_;
   bool perching_lock_once_;
 
-  bool require_branch_point_;
   bool command_pitch_as_delta_;
   bool use_pitch_command_for_arc_;
 
@@ -142,27 +125,16 @@ private:
   double arc_pitch_sign_;
   double command_pitch_sign_;
 
-  std::string pivot_source_;
-
-  
   std::string perching_enable_topic_;
   std::string perching_slanted_enable_topic_;
-  std::string branch_pose_topic_;
-  std::string perching_point_topic_;
   std::string locked_pivot_topic_;
   std::string relock_topic_;
   std::string reset_topic_;
   std::string manual_pitch_delta_topic_;
 
-  bool has_branch_pose_;
-  bool has_perching_point_;
-
   double active_pitch_delta_;
   ros::Time lock_stamp_;
   ros::Time last_lock_stamp_;  // Never reuse a lock identity, even with paused ROS time.
-
-  tf::Vector3 branch_pos_world_;
-  tf::Vector3 perching_point_world_;
 
   tf::Vector3 locked_robot_pos_world_;
   tf::Vector3 reference_locked_rpy_;  // Reference Euler angles for NORMAL commands and logging.
@@ -202,7 +174,7 @@ private:
   bool configureGeometry(std::string& reason);
   bool geometryFrames(const Vector&, std::map<std::string, KDL::Frame>&) const;
   bool bodyContact(const Vector&, Pose&, Eigen::Vector3d&) const;
-  bool lockGeometry(const Pose&, const Vector&, const Eigen::Vector3d* world_pivot = nullptr);
+  bool lockGeometry(const Pose&, const Vector&);
   bool evaluateReference(const Vector&, Reference&) const;
   bool estimateCoordinates(const Pose&, Vector&, double&, double&) const;
   bool angularJacobian(const Vector&, Eigen::MatrixXd&) const;

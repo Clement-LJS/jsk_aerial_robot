@@ -68,8 +68,6 @@ navigation:
   # NORMAL preserves target roll/yaw; SLANTED latches full measured orientation.
   perching_enable_topic: "perching/enable"
   perching_slanted_enable_topic: "perching/slanted_enable"
-  perching_branch_pose_topic: "perching/branch_pose"
-  perching_point_topic: "perching/point"
   perching_relock_topic: "perching/relock"
   perching_reset_topic: "perching/reset"
 
@@ -77,9 +75,6 @@ navigation:
 
   perching_accept_uav_nav_pitch_command: false
   perching_manual_pitch_delta_topic: perching/manual_pitch_delta
-  
-  perching_pivot_source: manual
-  perching_require_branch_point: false
 
   # Pivot geometry comes from the URDF perching_pivot marker.
 

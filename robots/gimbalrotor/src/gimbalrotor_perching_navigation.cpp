@@ -38,7 +38,6 @@ GimbalrotorPerchingNavigator::GimbalrotorPerchingNavigator():
   perching_locked_(false),
   perching_lock_once_(true),
 
-  require_branch_point_(true),
   command_pitch_as_delta_(false),
   use_pitch_command_for_arc_(true),
 
@@ -51,26 +50,16 @@ GimbalrotorPerchingNavigator::GimbalrotorPerchingNavigator():
   arc_pitch_sign_(1.0),
   command_pitch_sign_(1.0),
 
-  pivot_source_("manual"),
-
   perching_enable_topic_("perching/enable"),
   perching_slanted_enable_topic_("perching/slanted_enable"),
-  branch_pose_topic_("perching/branch_pose"),
-  perching_point_topic_("perching/point"),
   locked_pivot_topic_("perching/locked_pivot"),
   relock_topic_("perching/relock"),
   reset_topic_("perching/reset"),
   manual_pitch_delta_topic_("perching/manual_pitch_delta"),
 
-  has_branch_pose_(false),
-  has_perching_point_(false),
-
   active_pitch_delta_(0.0),
   locked_radius_(0.0)
 {
-  branch_pos_world_.setValue(0.0, 0.0, 0.0);
-  perching_point_world_.setValue(0.0, 0.0, 0.0);
-
   locked_robot_pos_world_.setValue(0.0, 0.0, 0.0);
   reference_locked_rpy_.setValue(0.0, 0.0, 0.0);
   locked_pivot_world_.setValue(0.0, 0.0, 0.0);
@@ -91,8 +80,6 @@ void GimbalrotorPerchingNavigator::initialize(
 
   perching_enable_sub_ = nh_.subscribe(perching_enable_topic_, 1, &GimbalrotorPerchingNavigator::perchingEnableCallback, this);
   perching_slanted_enable_sub_ = nh_.subscribe(perching_slanted_enable_topic_, 1, &GimbalrotorPerchingNavigator::perchingSlantedEnableCallback, this);
-  branch_pose_sub_ = nh_.subscribe(branch_pose_topic_, 1, &GimbalrotorPerchingNavigator::branchPoseCallback, this);
-  perching_point_sub_ = nh_.subscribe(perching_point_topic_, 1, &GimbalrotorPerchingNavigator::perchingPointCallback, this);
   relock_sub_ = nh_.subscribe(relock_topic_, 1, &GimbalrotorPerchingNavigator::relockCallback, this);
   reset_sub_ = nh_.subscribe(reset_topic_, 1, &GimbalrotorPerchingNavigator::resetCallback, this);
 
@@ -110,8 +97,6 @@ void GimbalrotorPerchingNavigator::initialize(
   ROS_WARN("[GimbalrotorPerchingNavigator] initialized");
   ROS_WARN("[GimbalrotorPerchingNavigator] NORMAL enable topic: %s", perching_enable_topic_.c_str());
   ROS_WARN("[GimbalrotorPerchingNavigator] SLANTED enable topic: %s", perching_slanted_enable_topic_.c_str());
-  ROS_WARN("[GimbalrotorPerchingNavigator] branch pose topic: %s", branch_pose_topic_.c_str());
-  ROS_WARN("[GimbalrotorPerchingNavigator] perching point topic: %s", perching_point_topic_.c_str());
   ROS_WARN("[GimbalrotorPerchingNavigator] manual pitch delta topic: %s", manual_pitch_delta_topic_.c_str());
 }
 
@@ -125,7 +110,6 @@ void GimbalrotorPerchingNavigator::rosParamInit()
   getParam<bool>(navi_nh, "perching_enable", perching_enable, false);
   perching_mode_ = perching_enable ? perching_geometry::Mode::NORMAL : perching_geometry::Mode::DISABLED;
   getParam<bool>(navi_nh, "perching_lock_once", perching_lock_once_, true);
-  getParam<bool>(navi_nh, "perching_require_branch_point", require_branch_point_, true);
   getParam<bool>(navi_nh, "perching_command_pitch_as_delta", command_pitch_as_delta_, false);
   getParam<bool>(navi_nh, "perching_use_pitch_command_for_arc", use_pitch_command_for_arc_, true);
 
@@ -158,12 +142,8 @@ void GimbalrotorPerchingNavigator::rosParamInit()
   command_pitch_sign_ = command_pitch_sign_ >= 0.0 ? 1.0 : -1.0;
   if(!std::isfinite(y_compliance_deadband_) || y_compliance_deadband_ < 0.0) y_compliance_deadband_ = 0.03;
 
-  getParam<std::string>(navi_nh, "perching_pivot_source", pivot_source_, std::string("hand_center"));
-
   getParam<std::string>(navi_nh, "perching_enable_topic", perching_enable_topic_, "perching/enable");
   getParam<std::string>(navi_nh, "perching_slanted_enable_topic", perching_slanted_enable_topic_, "perching/slanted_enable");
-  getParam<std::string>(navi_nh, "perching_branch_pose_topic", branch_pose_topic_, "perching/branch_pose");
-  getParam<std::string>(navi_nh, "perching_point_topic", perching_point_topic_, "perching/point");
   getParam<std::string>(navi_nh, "perching_relock_topic", relock_topic_, "perching/relock");
   getParam<std::string>(navi_nh, "perching_reset_topic", reset_topic_, "perching/reset");
 
@@ -237,28 +217,6 @@ void GimbalrotorPerchingNavigator::selectPerchingMode(perching_geometry::Mode mo
     resetPerchingLock();
     ROS_ERROR("[GimbalrotorPerchingNavigator] perching enable failed: invalid lock");
   }
-}
-
-void GimbalrotorPerchingNavigator::branchPoseCallback(const geometry_msgs::PoseStampedConstPtr& msg)
-{
-
-  std::lock_guard<std::recursive_mutex> lock(perching_state_mutex_);
-  branch_pos_world_.setValue(msg->pose.position.x,
-                             msg->pose.position.y,
-                             msg->pose.position.z);
-
-  has_branch_pose_ = true;
-}
-
-void GimbalrotorPerchingNavigator::perchingPointCallback(const geometry_msgs::PointStampedConstPtr& msg)
-{
-
-  std::lock_guard<std::recursive_mutex> lock(perching_state_mutex_);
-  perching_point_world_.setValue(msg->point.x,
-                                 msg->point.y,
-                                 msg->point.z);
-
-  has_perching_point_ = true;
 }
 
 void GimbalrotorPerchingNavigator::relockCallback(const std_msgs::EmptyConstPtr& msg)
@@ -402,42 +360,6 @@ bool GimbalrotorPerchingNavigator::tryLockRigid(const std::string& reason)
     return true;
   }
 
-  /*
-   * Pivot source logic:
-   *
-   * manual:
-   *   Use FK from base_link to the URDF perching_pivot marker.
-   *   Branch mocap is NOT required and is NOT used.
-   *
-   * branch:
-   *   Use /perching/point if available.
-   *   Otherwise use /perching/branch_pose.
-   *   Branch/perching point info is required.
-   *
-   * Supported legacy aliases:
-   *   hand_center     -> manual
-   *   perching_point  -> branch
-   */
-  if(!isManualPivotMode() && !isBranchPivotMode())
-  {
-    ROS_WARN_THROTTLE(
-        1.0,
-        "[GimbalrotorPerchingNavigator] cannot lock: invalid perching_pivot_source '%s'. "
-        "Use 'manual' or 'branch'. Legacy aliases: 'hand_center', 'perching_point'.",
-        pivot_source_.c_str());
-    return false;
-  }
-
-  if(isBranchPivotMode() && !hasBranchPivotSource())
-  {
-    ROS_WARN_THROTTLE(
-        1.0,
-        "[GimbalrotorPerchingNavigator] cannot lock: pivot_source='%s' requires "
-        "/perching/point or /perching/branch_pose, but neither exists.",
-        pivot_source_.c_str());
-    return false;
-  }
-
   if(!model_ || !fresh(estimator_->getImuLatestTimeStamp(), steadyTime())) return false;
   model_valid_ = resolveMechanismModel();
   if(!model_valid_) return false;
@@ -448,19 +370,9 @@ bool GimbalrotorPerchingNavigator::tryLockRigid(const std::string& reason)
   tf::vectorTFToEigen(getCurrentBaselinkPos(), body_position);
   body.linear() = body_rotation;
   body.translation() = body_position;
-  if(isManualPivotMode())
-  {
-    Pose contact;
-    Eigen::Vector3d cog;
-    if(!bodyContact(Vector::Zero(1), contact, cog)) return false;
-    const Eigen::Vector3d point = body * contact.translation();
-    locked_pivot_world_.setValue(point.x(), point.y(), point.z());
-  }
-  else locked_pivot_world_ = computeLockPivotWorld();
-  perching_point_world_ = locked_pivot_world_;
-  Eigen::Vector3d pivot;
-  tf::vectorTFToEigen(locked_pivot_world_, pivot);
-  if(!lockGeometry(body, Vector::Zero(1), &pivot)) return false;
+  if(!lockGeometry(body, Vector::Zero(1))) return false;
+  const Eigen::Vector3d pivot = pivot_.translation();
+  locked_pivot_world_.setValue(pivot.x(), pivot.y(), pivot.z());
   Reference anchored;
   if(!evaluateReference(Vector::Zero(1), anchored)) return false;
   const auto& position = anchored.cog.translation();
@@ -489,7 +401,6 @@ bool GimbalrotorPerchingNavigator::tryLockRigid(const std::string& reason)
 
   ROS_WARN("[GimbalrotorPerchingNavigator] perching mode: %s, locked by %s",
            perching_mode_ == perching_geometry::Mode::NORMAL ? "NORMAL" : "SLANTED", reason.c_str());
-  ROS_WARN("[GimbalrotorPerchingNavigator] pivot source: %s", pivot_source_.c_str());
   ROS_WARN("[GimbalrotorPerchingNavigator] locked pivot: x %.3f, y %.3f, z %.3f",
            locked_pivot_world_.x(),
            locked_pivot_world_.y(),
@@ -551,17 +462,13 @@ void GimbalrotorPerchingNavigator::naviCallback(const aerial_robot_msgs::FlightN
     if(accept_uav_nav_pitch_command_ && hasPitchCommand(*msg)) applyManualPitchDelta(msg->target_pitch);
     return;
   }
-  aerial_robot_msgs::FlightNav nav_msg = *msg;
-
   if(perching_mode_ != perching_geometry::Mode::DISABLED && navi_state_ == HOVER_STATE)
   {
-    if(applyPerchingConstraint(nav_msg)) rigid_command_pending_ = true;
+    if(applyPerchingConstraint(*msg)) rigid_command_pending_ = true;
     return;
   }
 
-  aerial_robot_msgs::FlightNavConstPtr nav_msg_ptr(new aerial_robot_msgs::FlightNav(nav_msg));
-
-  GimbalrotorNavigator::naviCallback(nav_msg_ptr);
+  GimbalrotorNavigator::naviCallback(msg);
 }
 
 tf::Vector3 GimbalrotorPerchingNavigator::getCurrentBaselinkPos() const
@@ -574,85 +481,7 @@ tf::Matrix3x3 GimbalrotorPerchingNavigator::getCurrentBaselinkRot() const
   return estimator_->getOrientation(Frame::BASELINK, estimate_mode_);
 }
 
-tf::Vector3 GimbalrotorPerchingNavigator::computeHandPerchingCenterWorldFromBaselink() const
-{
-  const tf::Vector3 baselink_pos_world = getCurrentBaselinkPos();
-  const tf::Matrix3x3 baselink_rot_world = getCurrentBaselinkRot();
-
-  Pose marker;
-  Eigen::Vector3d cog;
-  if(!bodyContact(Vector::Zero(1), marker, cog)) return tf::Vector3(NAN, NAN, NAN);
-  const auto& p = marker.translation();
-  return baselink_pos_world + baselink_rot_world * tf::Vector3(p.x(), p.y(), p.z());
-}
-
-bool GimbalrotorPerchingNavigator::isManualPivotMode() const
-{
-  /*
-   * manual:
-   *   New clear name.
-   *
-   * hand_center:
-   *   Legacy alias from previous implementation.
-   */
-  return pivot_source_ == "manual" ||
-         pivot_source_ == "hand_center";
-}
-
-bool GimbalrotorPerchingNavigator::isBranchPivotMode() const
-{
-  /*
-   * branch:
-   *   New clear name.
-   *
-   * perching_point:
-   *   Legacy alias from previous implementation.
-   */
-  return pivot_source_ == "branch" ||
-         pivot_source_ == "perching_point";
-}
-
-bool GimbalrotorPerchingNavigator::hasBranchPivotSource() const
-{
-  return has_perching_point_ || has_branch_pose_;
-}
-
-tf::Vector3 GimbalrotorPerchingNavigator::computeLockPivotWorld() const
-{
-  if(isManualPivotMode())
-  {
-    /*
-     * Manual mode:
-     *
-     * Use only robot geometry.
-     * Branch mocap is ignored.
-     */
-    return computeHandPerchingCenterWorldFromBaselink();
-  }
-
-  if(isBranchPivotMode())
-  {
-    /*
-     * Branch mode:
-     *
-     * Prefer corrected /perching/point if it exists.
-     * Otherwise use raw /perching/branch_pose.
-     */
-    if(has_perching_point_)
-    {
-      return perching_point_world_;
-    }
-
-    return branch_pos_world_;
-  }
-
-  /*
-   * Should never reach here because tryLockPerching() checks source validity.
-   */
-  return computeHandPerchingCenterWorldFromBaselink();
-}
-
-bool GimbalrotorPerchingNavigator::applyPerchingConstraint(aerial_robot_msgs::FlightNav& msg)
+bool GimbalrotorPerchingNavigator::applyPerchingConstraint(const aerial_robot_msgs::FlightNav& msg)
 {
   if(perching_mode_ == perching_geometry::Mode::DISABLED || navi_state_ != HOVER_STATE) return false;
   if(!perching_locked_ && !tryLockPerching("first perching command")) return false;
@@ -680,7 +509,7 @@ bool GimbalrotorPerchingNavigator::applyPerchingConstraint(aerial_robot_msgs::Fl
     }
     active_pitch_delta_ = pose.delta;
     velocity_active_ = false;
-    setPoseCommand(msg, pose);
+    publishCommandedDebugPose(pose);
     return true;
   }
 
@@ -690,12 +519,12 @@ bool GimbalrotorPerchingNavigator::applyPerchingConstraint(aerial_robot_msgs::Fl
        !hinge_arc_.target(active_pitch_delta_, max_pitch_delta_, arc_pitch_sign_, pose)) return false;
     active_pitch_delta_ = pose.delta;
     velocity_active_ = false;
-    setPoseCommand(msg, pose);
+    publishCommandedDebugPose(pose);
   }
   else if(!position_command && !velocity_command)
   {
     if(!activePose(pose)) return false;
-    setPoseCommand(msg, pose);
+    publishCommandedDebugPose(pose);
     return true;
   }
 
@@ -707,13 +536,7 @@ bool GimbalrotorPerchingNavigator::applyPerchingConstraint(aerial_robot_msgs::Fl
     velocity_command_ = std::clamp(direction.dot(tangent) / direction.length2(), -rate_limit_, rate_limit_);
     velocity_active_ = std::abs(velocity_command_) > 1e-9;
     velocity_expires_ = ros::Time::now().toSec() + velocity_duration_;
-    setPoseCommand(msg, pose);
-    msg.pos_xy_nav_mode = position_command ? NAV_MODE_POS_VEL : NAV_MODE_VEL;
-    msg.pos_z_nav_mode = position_command ? NAV_MODE_POS_VEL : NAV_MODE_VEL;
-    msg.control_frame = aerial_robot_msgs::FlightNav::WORLD_FRAME;
-    msg.target_vel_x = tangent.x();
-    msg.target_vel_y = tangent.y();
-    msg.target_vel_z = tangent.z();
+    publishCommandedDebugPose(pose);
   }
   return true;
 }
@@ -797,21 +620,6 @@ tf::Vector3 GimbalrotorPerchingNavigator::getDesiredVelocity(const aerial_robot_
   return desired_vel;
 }
 
-double GimbalrotorPerchingNavigator::clamp(double value, double min_value, double max_value) const
-{
-  if(value < min_value)
-  {
-    return min_value;
-  }
-
-  if(value > max_value)
-  {
-    return max_value;
-  }
-
-  return value;
-}
-
 void GimbalrotorPerchingNavigator::publishLockedDebugPose()
 {
   geometry_msgs::PoseStamped msg;
@@ -866,28 +674,6 @@ bool GimbalrotorPerchingNavigator::activePose(perching_geometry::Pose& pose) con
   if(!perching_locked_ || !hinge_arc_.target(active_pitch_delta_, max_pitch_delta_, arc_pitch_sign_, pose))
     return false;
   return true;
-}
-
-
-void GimbalrotorPerchingNavigator::setPoseCommand(
-    aerial_robot_msgs::FlightNav& msg, const perching_geometry::Pose& pose)
-{
-  msg.control_frame = aerial_robot_msgs::FlightNav::WORLD_FRAME;
-  msg.target = aerial_robot_msgs::FlightNav::COG;
-  msg.pos_xy_nav_mode = NAV_MODE_POS;
-  msg.pos_z_nav_mode = NAV_MODE_POS;
-  msg.target_pos_x = pose.position.x();
-  msg.target_pos_y = pose.position.y();
-  msg.target_pos_z = pose.position.z();
-  msg.target_vel_x = msg.target_vel_y = msg.target_vel_z = 0.0;
-  msg.roll_nav_mode = msg.pitch_nav_mode = msg.yaw_nav_mode = NAV_MODE_POS;
-  double roll, pitch, yaw;
-  tf::Matrix3x3(pose.orientation).getRPY(roll, pitch, yaw);
-  // The physical revolute arc can change every Euler component.
-  msg.target_roll = roll;
-  msg.target_pitch = pitch;
-  msg.target_yaw = yaw;
-  publishCommandedDebugPose(pose);
 }
 
 perching_geometry::Session GimbalrotorPerchingNavigator::perchingSession() const
@@ -1131,7 +917,7 @@ bool GimbalrotorPerchingNavigator::bodyContact(const Vector& q, Pose& contact, E
   return perching_geometry::poseValid(contact) && cog.allFinite();
 }
 
-bool GimbalrotorPerchingNavigator::lockGeometry(const Pose& body, const Vector& q, const Eigen::Vector3d* world_pivot)
+bool GimbalrotorPerchingNavigator::lockGeometry(const Pose& body, const Vector& q)
 {
   Pose contact;
   Eigen::Vector3d cog;
@@ -1139,7 +925,6 @@ bool GimbalrotorPerchingNavigator::lockGeometry(const Pose& body, const Vector& 
   Pose rotation = Pose::Identity();
   rotation.linear() = perching_geometry::expSO3(-Eigen::Vector3d::UnitY() * q[0]);
   pivot_ = body * contact * rotation;
-  if(world_pivot) pivot_.translation() = *world_pivot;
   return perching_geometry::poseValid(pivot_);
 }
 
