@@ -5,10 +5,38 @@
 #include <urdf/model.h>
 #include <algorithm>
 #include <cmath>
+#include <chrono>
 #include <set>
 #include <kdl/treefksolverpos_recursive.hpp>
 #include <tf_conversions/tf_eigen.h>
 #include <stdexcept>
+
+namespace perching_geometry
+{
+bool Lock::targetOrientation(const tf::Quaternion& desired, double limit, double sign, Pose& pose) const
+{
+  const tf::Quaternion relative = desired * orientation.inverse();
+  const double angle = 2 * std::atan2(tf::Vector3(relative.x(), relative.y(), relative.z()).dot(axis), relative.w());
+  return target(std::atan2(std::sin(angle), std::cos(angle)) / sign, limit, sign, pose);
+}
+}  // namespace perching_geometry
+
+namespace perching_dynamics
+{
+Eigen::Matrix<double, 6, 1> rotateWrench(const Eigen::Matrix3d& rotation, const Eigen::Matrix<double, 6, 1>& wrench)
+{
+  Eigen::Matrix<double, 6, 1> rotated;
+  rotated.head<3>() = rotation * wrench.head<3>();
+  rotated.tail<3>() = rotation * wrench.tail<3>();
+  return rotated;
+}
+
+Eigen::Vector3d shiftMoment(const Eigen::Vector3d& moment, const Eigen::Vector3d& source_minus_target,
+                            const Eigen::Vector3d& force)
+{
+  return moment + source_minus_target.cross(force);
+}
+}  // namespace perching_dynamics
 
 using namespace aerial_robot_model;
 using namespace aerial_robot_navigation;

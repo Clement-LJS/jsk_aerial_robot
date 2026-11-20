@@ -1,4 +1,3 @@
-#include <gimbalrotor/gimbalrotor_perching.h>
 #include <gimbalrotor/control/gimbalrotor_multilink_perching_observer.h>
 #include <gimbalrotor/model/gimbalrotor_multilink_perching_model.h>
 #include <cmath>
@@ -12,17 +11,8 @@ namespace
 {
 constexpr double difference_step = 1e-5;
 const Eigen::Vector3d gravity_world(0, 0, -9.80665);
-bool poseValid(const Eigen::Isometry3d& p)
-{
-  return p.matrix().allFinite() &&
-         (p.linear().transpose() * p.linear() - Eigen::Matrix3d::Identity()).norm() < 1e-7 &&
-         std::abs(p.linear().determinant() - 1) < 1e-7;
-}
-Eigen::Vector3d logSO3(const Eigen::Matrix3d& rotation)
-{
-  const Eigen::AngleAxisd angle(rotation);
-  return angle.angle() * angle.axis();
-}
+using perching_geometry::logSO3;
+using perching_geometry::poseValid;
 }
 
 bool MultilinkModel::configure(std::vector<std::string> coordinates, std::vector<Link> links,
