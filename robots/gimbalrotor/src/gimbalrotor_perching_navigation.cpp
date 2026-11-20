@@ -382,6 +382,7 @@ void GimbalrotorPerchingNavigator::applyManualPitchDelta(double delta)
     return;
   active_pitch_delta_ = pose.delta;
   velocity_active_ = false;
+  rigid_command_pending_ = true;
 }
 
 bool GimbalrotorPerchingNavigator::tryLockRigid(const std::string& reason)
@@ -554,7 +555,7 @@ void GimbalrotorPerchingNavigator::naviCallback(const aerial_robot_msgs::FlightN
 
   if(perching_mode_ != perching_geometry::Mode::DISABLED && navi_state_ == HOVER_STATE)
   {
-    applyPerchingConstraint(nav_msg);
+    if(applyPerchingConstraint(nav_msg)) rigid_command_pending_ = true;
     return;
   }
 
@@ -1476,6 +1477,7 @@ void GimbalrotorPerchingNavigator::resetMotion()
   body_destination_ = body_progress_ = body_rate_ = 0;
   applied_pitch_offset_ = applied_offset_rate_ = 0;
   applied_stamp_ = last_update_ = 0; rigid_applied_valid_ = false;
+  rigid_command_pending_ = false;
   reference_velocity_.setZero(); reference_acceleration_.setZero();
   reference_omega_.setZero(); reference_angular_acceleration_.setZero();
   servo_.reset(); phase_ = "FREE_FLIGHT"; prepared_motion_ = paused_ = false;
@@ -1838,7 +1840,11 @@ bool GimbalrotorPerchingNavigator::applyPerchingReference(double pitch_offset, d
     {
       perching_geometry::Pose candidate;
       if(hinge_arc_.target(active_pitch_delta_ + velocity_command_ * cycle_dt_ / arc_pitch_sign_,
-                          max_pitch_delta_, arc_pitch_sign_, candidate)) active_pitch_delta_ = candidate.delta;
+                          max_pitch_delta_, arc_pitch_sign_, candidate))
+      {
+        active_pitch_delta_ = candidate.delta;
+        rigid_command_pending_ = true;
+      }
       if(std::abs(active_pitch_delta_) >= max_pitch_delta_) velocity_active_ = false;
     }
     perching_geometry::Pose pose;
@@ -1847,16 +1853,22 @@ bool GimbalrotorPerchingNavigator::applyPerchingReference(double pitch_offset, d
        std::abs(active_pitch_delta_ + pitch_offset / arc_pitch_sign_) > max_pitch_delta_ ||
        !perchingAdmittanceTarget(lock_stamp_, pitch_offset, nominal_position, pose))
     {
-      if(rigid_applied_valid_) publishApplied();
+      if(active_perching_hold_enable_ && rigid_applied_valid_) publishApplied();
       publishDiagnostics();
       return false;
     }
-    if(applied_stamp_ == 0) pose = rigid_applied_pose_;
+    const bool first_reference = applied_stamp_ == 0;
+    if(first_reference) pose = rigid_applied_pose_;
     applied_pitch_offset_ = pitch_offset; applied_offset_rate_ = rate;
     rigid_applied_pose_ = pose;
     rigid_applied_valid_ = true;
     applied_stamp_ = now;
-    publishApplied();
+    if(active_perching_hold_enable_ || first_reference || rigid_command_pending_)
+    {
+      publishApplied();
+      // The first cycle installs the lock pose; a staged command still follows it.
+      if(!first_reference) rigid_command_pending_ = false;
+    }
     publishCommandedDebugPose(pose);
     publishDiagnostics();
     return true;

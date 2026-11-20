@@ -244,6 +244,7 @@ private:
   Reference applied_state_;
   perching_geometry::Pose rigid_applied_pose_;
   bool rigid_applied_valid_ = false;
+  bool rigid_command_pending_ = false;
   double applied_pitch_offset_ = 0, applied_offset_rate_ = 0;
   double body_destination_ = 0, body_progress_ = 0, proposed_progress_ = 0, body_rate_ = 0, proposed_body_rate_ = 0;
   double body_rate_limit_ = .03;
