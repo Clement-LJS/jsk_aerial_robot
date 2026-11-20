@@ -1,10 +1,63 @@
-# Shared navigation/perching_* defaults stay in NavigationConfig.yaml for all airframes.
+# Shared navigation/perching_* defaults apply to all airframes in hardware and simulation.
 # Merge only the selected profile at the root. The explicit empty profiles map
 # replaces the anchor definitions, so roslaunch publishes no profile namespace.
 <<:
   - profiles:
+      common_navigation: &common_navigation
+        perching_configuration: baseline
+
+        ############################# PERCHING NAV #############################
+        # Keep false by default. Enable only when robot is near branch and ready for perching/cutting.
+        perching_enable: false
+
+        # If true, first enable locks pivot/radius once. Use /gimbalrotor/perching/relock to relock manually.
+        perching_lock_once: true
+
+        # false: project the requested absolute RPY attitude onto the locked local-Y arc.
+        # true: target_pitch is a logical locked local +Y rotation delta [rad].
+        perching_command_pitch_as_delta: true
+
+        # Locked position and velocity commands always follow the model hinge arc.
+
+        # Main cutting mode: target_pitch command creates target position around branch arc.
+        perching_use_pitch_command_for_arc: true
+
+        # Safety: invalid branch/robot distance below this will not lock.
+        perching_min_valid_radius: 0.05
+
+        # Max logical rotation about locked local +Y from the locked pose [rad].
+        # 0.5236 = 30 deg
+        # 0.7854 = 45 deg
+        # 1.0472 = 60 deg
+        perching_max_pitch_delta: 0.5235987756
+
+        # If pitch arc direction is reversed, change to -1.0.
+        perching_arc_pitch_sign: 1.0
+        perching_command_pitch_sign: 1.0
+
+        # NORMAL preserves target roll/yaw; SLANTED latches full measured orientation.
+        perching_enable_topic: "perching/enable"
+        perching_slanted_enable_topic: "perching/slanted_enable"
+        perching_relock_topic: "perching/relock"
+        perching_reset_topic: "perching/reset"
+
+        perching_active_hold_enable: true
+
+        perching_accept_uav_nav_pitch_command: false
+        perching_manual_pitch_delta_topic: perching/manual_pitch_delta
+
+        # Pivot geometry comes from the URDF perching_pivot marker.
+
+        # Latched pivot topic published by perching navigator after lock.
+        # Perching admittance controller uses this so both navigator and controller
+        # use exactly the same pivot.
+        perching_locked_pivot_topic: perching/locked_pivot
+
+        perching_pivot_wrench_frame_id: perching_locked_wrench
+
       baseline: &baseline
         navigation:
+          <<: *common_navigation
           perching:
             active_joints: []
 
@@ -12,7 +65,7 @@
         # Model radians. Exclusive servo mappings copied from the existing documented alternatives.
         # Verify hardware wiring and physical hinge calibration before hardware use.
         navigation:
-          perching_enable: false
+          <<: *common_navigation
           perching:
             pitch_command_sign: 1.0
             joint_command_topic: joints_ctrl
@@ -76,7 +129,7 @@
         # Model radians. Exclusive servo mappings copied from the existing documented alternatives.
         # Verify hardware wiring and physical hinge calibration before hardware use.
         navigation: &active_pitch_navigation
-          perching_enable: false
+          <<: *common_navigation
           perching: &active_pitch_perching
             joint_command_topic: joints_ctrl
             joint_state_topic: joint_states
@@ -169,7 +222,7 @@
           gimbal_calc_in_fc: true
           command_wrench_topic: perching/roll_yaw/command_wrench_estimate
         navigation:
-          perching_enable: false
+          <<: *common_navigation
           perching:
             body_pitch_jog_max_delta: 0.0174532925199433
             body_pitch_velocity_command_duration: 8.0

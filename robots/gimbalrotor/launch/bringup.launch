@@ -73,11 +73,10 @@
    ###########  Navigation  ###########
    <param name="aerial_robot_control_name" value="aerial_robot_control/gimbalrotor_controller" if="$(eval arg('airframe') == 'beetle')"/>
    <rosparam file="$(arg config_dir)/NavigationConfig.yaml" command="load" />
-   <rosparam param="navigation/perching/active_joints" unless="$(eval arg('airframe') == 'beetle')">[]</rosparam>
+   <!-- Fixed internal selectors preserve the public flags and their guard. -->
+   <arg name="beetle_perching_profile" value="$(eval 'baseline' if arg('airframe') != 'beetle' else ('pitch_only' if arg('pitch_only_perching') else ('active_pitch_' + arg('multilink_secondary') if arg('multilink_perching') else ('roll_yaw' if arg('roll_yaw_perching') else 'baseline'))))"/>
+   <rosparam file="$(arg config_dir)/beetle/Perching.yaml" command="load" subst_value="true"/>
    <group if="$(eval arg('airframe') == 'beetle')">
-     <!-- Fixed internal selectors preserve the public flags and their guard. -->
-     <arg name="beetle_perching_profile" value="$(eval 'pitch_only' if arg('pitch_only_perching') else ('active_pitch_' + arg('multilink_secondary') if arg('multilink_perching') else ('roll_yaw' if arg('roll_yaw_perching') else 'baseline')))"/>
-     <rosparam file="$(arg config_dir)/beetle/Perching.yaml" command="load" subst_value="true"/>
      <group unless="$(eval arg('beetle_perching_profile') == 'baseline')">
        <!-- Hardware retains its existing init keys; only simulation selects Gazebo overrides. -->
        <arg name="beetle_control_section" value="$(eval ('sim_' if arg('simulation') else 'init_') + arg('beetle_perching_profile'))"/>
