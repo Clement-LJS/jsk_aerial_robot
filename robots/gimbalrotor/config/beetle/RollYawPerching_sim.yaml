@@ -1,8 +1,0 @@
-# Retain the existing simulation servo tuning; effort contract is in Perching_sim.yaml.
-servo_controller:
-  joints:
-    simulation:
-      pid:
-        p: 20.0
-        i: 0.0
-        d: 0.5

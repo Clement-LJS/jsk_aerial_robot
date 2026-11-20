@@ -1,132 +1,109 @@
-# Flight gains retained; perching uses the same signed pitch law as the hardware profile.
-aerial_robot_control_name: aerial_robot_control/gimbalrotor_controller
-controller:
-  torque_allocation_matrix_inv_pub_interval: 0.05
-  wrench_allocation_matrix_pub_interval: 0.1
-  gimbal_calc_in_fc: false
-  wrench_estimate_flag: true
-  compensate_multilink_inertia: true
-  inertia_dot_lpf_rate: 0.15
-  nonlinear_ang_acc_limit: 5.0
-  xy:
-    p_gain: 2.0
-    i_gain: 0.05
-    d_gain: 1.5
-    limit_sum: 4.0
-    limit_p: 12.0
-    limit_i: 12.0
-    limit_d: 12.0
-  z:
-    p_gain: 5.0
-    i_gain: 1.0
-    d_gain: 2.5
-    limit_err_p: 1.0
-    limit_sum: 25.0
-    limit_p: 25.0
-    limit_i: 25.0
-    limit_d: 25.0
-    force_landing_descending_rate: -0.5
-  roll:
-    p_gain: 15.0
-    i_gain: 1.0
-    d_gain: 10.0
-    limit_sum: 20.0
-    limit_p: 20.0
-    limit_i: 20.0
-    limit_d: 20.0
-  pitch:
-    p_gain: 15.0
-    i_gain: 1.0
-    d_gain: 10.0
-    limit_sum: 20.0
-    limit_p: 20.0
-    limit_i: 20.0
-    limit_d: 20.0
-    start_rp_integration_height: 0.01
-  yaw:
-    p_gain: 5.0
-    i_gain: 1.0
-    d_gain: 4.0
-    limit_err_p: 0.4
-    limit_sum: 20.0
-    limit_p: 20.0
-    limit_i: 20.0
-    limit_d: 20.0
-    need_d_control: true
-  admittance:
-    use_admittance: true
-    external_wrench_timeout: 0.15
-    admittance_enable_topic: admittance_enable
-    external_wrench_topic: estimated_external_wrench
-    external_wrench_frame: world
-    compliance_frame: world
-    force_lpf_alpha: 0.15
-    torque_lpf_alpha: 0.1
-    enable_x: 0
-    enable_y: 0
-    enable_z: 0
-    enable_roll: 0
-    enable_pitch: 1
-    enable_yaw: 0
-    force_ref_x: 0.0
-    force_ref_y: 0.0
-    force_ref_z: 0.0
-    torque_ref_roll: 0.0
-    torque_ref_pitch: 0.0
-    torque_ref_yaw: 0.0
-    mass_x: 5.0
-    mass_y: 5.0
-    mass_z: 5.0
-    damping_x: 50.0
-    damping_y: 50.0
-    damping_z: 50.0
-    stiffness_x: 100.0
-    stiffness_y: 100.0
-    stiffness_z: 100.0
-    inertia_roll: 0.08
-    inertia_pitch: 0.4
-    inertia_yaw: 0.08
-    rot_damping_roll: 0.5
-    rot_damping_pitch: 5.0
-    rot_damping_yaw: 0.5
-    rot_stiffness_roll: 1.0
-    rot_stiffness_pitch: 4.5
-    rot_stiffness_yaw: 1.0
-    force_limit_x: 0.0
-    force_limit_y: 0.0
-    force_limit_z: 0.0
-    torque_limit_roll: 0.0
-    torque_limit_pitch: 0.18
-    torque_limit_yaw: 0.0
-    pos_offset_limit_x: 0.0
-    pos_offset_limit_y: 0.0
-    pos_offset_limit_z: 0.0
-    vel_offset_limit_x: 0.0
-    vel_offset_limit_y: 0.0
-    vel_offset_limit_z: 0.0
-    angle_offset_limit_roll: 0.0
-    angle_offset_limit_pitch: 0.0383972
-    angle_offset_limit_yaw: 0.0
-    angular_vel_offset_limit_roll: 0.0
-    angular_vel_offset_limit_pitch: 0.15
-    angular_vel_offset_limit_yaw: 0.0
-    perching:
-      perching_enable_topic: perching/enable
-      perching_slanted_enable_topic: perching/slanted_enable
-      perching_admittance_enable_topic: perching/admittance_enable
-      perching_point_topic: perching/point
-      perching_branch_pose_topic: perching/branch_pose
-      perching_locked_pose_topic: perching/locked_pose
-      perching_locked_pivot_topic: perching/locked_pivot
-      use_branch_pose_if_no_point: false
-      require_perching_lock: true
-      maximum_lock_stamp_difference: 0.05
-      equilibrium_wrench_required_samples: 80
-      contact_torque_filter_alpha: 0.1
-      contact_on_threshold: 0.04
-      contact_off_threshold: 0.02
-      contact_on_duration: 0.1
-      contact_off_duration: 0.2
-      recovery_angle_epsilon: 0.00174533
-      recovery_rate_epsilon: 0.01
-      perching_pitch_torque_sign: 1.0
+# bringup.launch loads flight first, then only the selected perching overlay.
+# YAML merge defaults hold the anchors; the explicit empty profiles map keeps
+# unselected sections out of the ROS parameter tree.
+<<:
+  - profiles:
+      flight: &flight
+        # Flight gains retained; perching uses the same signed pitch law as the hardware profile.
+        aerial_robot_control_name: aerial_robot_control/gimbalrotor_controller
+        controller:
+          torque_allocation_matrix_inv_pub_interval: 0.05
+          wrench_allocation_matrix_pub_interval: 0.1
+          gimbal_calc_in_fc: false
+          wrench_estimate_flag: true
+          compensate_multilink_inertia: true
+          inertia_dot_lpf_rate: 0.15
+          nonlinear_ang_acc_limit: 5.0
+          xy:
+            p_gain: 2.0
+            i_gain: 0.05
+            d_gain: 1.5
+            limit_sum: 4.0
+            limit_p: 12.0
+            limit_i: 12.0
+            limit_d: 12.0
+          z:
+            p_gain: 5.0
+            i_gain: 1.0
+            d_gain: 2.5
+            limit_err_p: 1.0
+            limit_sum: 25.0
+            limit_p: 25.0
+            limit_i: 25.0
+            limit_d: 25.0
+            force_landing_descending_rate: -0.5
+          roll:
+            p_gain: 15.0
+            i_gain: 1.0
+            d_gain: 10.0
+            limit_sum: 20.0
+            limit_p: 20.0
+            limit_i: 20.0
+            limit_d: 20.0
+          pitch:
+            p_gain: 15.0
+            i_gain: 1.0
+            d_gain: 10.0
+            limit_sum: 20.0
+            limit_p: 20.0
+            limit_i: 20.0
+            limit_d: 20.0
+            start_rp_integration_height: 0.01
+          yaw:
+            p_gain: 5.0
+            i_gain: 1.0
+            d_gain: 4.0
+            limit_err_p: 0.4
+            limit_sum: 20.0
+            limit_p: 20.0
+            limit_i: 20.0
+            limit_d: 20.0
+            need_d_control: true
+
+      # These integer init values were also present in hardware profiles.
+      init_pitch_only: &init_pitch_only
+        servo_controller:
+          joints:
+            controller1: &joint_init
+              simulation:
+                init_value: 0
+
+      init_active_pitch_roll: &init_active_pitch_roll
+        servo_controller:
+          joints: &two_joint_init
+            controller1: *joint_init
+            controller2: *joint_init
+      init_active_pitch_yaw: &init_active_pitch_yaw
+        <<: *init_active_pitch_roll
+      init_roll_yaw: &init_roll_yaw
+        <<: *init_active_pitch_roll
+
+      articulated: &articulated
+        # Verified simulation effort contract; no hardware actuator IDs are introduced.
+        navigation:
+          perching:
+            dynamics:
+              joint_effort_contract: joint_side_actuation_nm
+              joint_effort:
+                source: gazebo_ode_joint_states
+                topic: joint_states
+                producer: /gazebo
+                units: Nm
+                sign: urdf
+
+      sim_pitch_only: &sim_pitch_only
+        <<: [*init_pitch_only, *articulated]
+      sim_active_pitch_roll: &sim_active_pitch_roll
+        <<: [*init_active_pitch_roll, *articulated]
+      sim_active_pitch_yaw: &sim_active_pitch_yaw
+        <<: *sim_active_pitch_roll
+      sim_roll_yaw: &sim_roll_yaw
+        <<: *articulated
+        servo_controller:
+          joints:
+            <<: *two_joint_init
+            simulation:
+              pid: {p: 20.0, i: 0.0, d: 0.5}
+
+  - *$(arg beetle_control_section)
+profiles: {}

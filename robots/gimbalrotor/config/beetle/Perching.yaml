@@ -1,0 +1,262 @@
+# Shared navigation/perching_* defaults stay in NavigationConfig.yaml for all airframes.
+# Merge only the selected profile at the root. The explicit empty profiles map
+# replaces the anchor definitions, so roslaunch publishes no profile namespace.
+<<:
+  - profiles:
+      baseline: &baseline
+        navigation:
+          perching:
+            active_joints: []
+
+      pitch_only: &pitch_only
+        # Model radians. Exclusive servo mappings copied from the existing documented alternatives.
+        # Verify hardware wiring and physical hinge calibration before hardware use.
+        navigation:
+          perching_enable: false
+          perching:
+            pitch_command_sign: 1.0
+            joint_command_topic: joints_ctrl
+            joint_state_topic: joint_states
+            world_frame: world
+            body_pitch_lower_limit: -0.5235988
+            body_pitch_upper_limit: 0.5235988
+            joint_state_timeout: 0.15
+            joint_state_future_tolerance: 0.02
+            pitch_position_tolerance: 0.02
+            pitch_velocity_tolerance: 0.05
+            pitch_zero_tolerance: 0.02
+            pitch_rezero_target_pitch: 0.0
+            pitch_rezero_command_sign: -1.0
+            pitch_rezero_kp: 1.0
+            pitch_rezero_rate_limit: 0.1745329
+            pitch_rezero_max_delta: 0.5235988
+            pitch_rezero_pitch_tolerance: 0.0349066
+            pitch_rezero_rate_tolerance: 0.05
+            pitch_rezero_stable_duration: 0.3
+            pitch_rezero_timeout: 5.0
+            passive_lower_limit: -1.745329
+            passive_upper_limit: 1.745329
+            passive_rate_limit: 0.1745329
+            active_joints:
+            - joint_pitch_only
+            pitch_coordinates:
+            - alpha
+            manual_coordinate: alpha
+            positioning_joint: joint_pitch_only
+            debug_prefix: perching/pitch_only
+            diagnostic_name: pitch_only_perching
+            feedback_timeout: 0.15
+            future_tolerance: 0.02
+            position_lower:
+            - -1.745329
+            - -1.57079632679
+            position_upper:
+            - 1.745329
+            - 1.57079632679
+            velocity_caps:
+            - 0.1745329
+            - 0.1
+            dynamics:
+              observer_gain: 10.0
+              joint_effort:
+                source: servo_bridge_joint_states
+                topic: joint_states
+          pitch_only_perching:
+            pitch_command_sign: 1.0
+        controller:
+          command_wrench_topic: perching/pitch_only/command_wrench_estimate
+        servo_controller:
+          joints:
+            controller1:
+              id: 6
+              name: joint_pitch_only
+              angle_sgn: -1
+
+      active_pitch_roll: &active_pitch_roll
+        # Model radians. Exclusive servo mappings copied from the existing documented alternatives.
+        # Verify hardware wiring and physical hinge calibration before hardware use.
+        navigation: &active_pitch_navigation
+          perching_enable: false
+          perching: &active_pitch_perching
+            joint_command_topic: joints_ctrl
+            joint_state_topic: joint_states
+            secondary_joint_target_topic: perching/multilink/secondary_joint_target
+            secondary_position_tolerance: 0.02
+            secondary_velocity_tolerance: 0.05
+            secondary_settle_duration: 0.3
+            joint_state_timeout: 0.15
+            joint_state_future_tolerance: 0.02
+            pitch_command_sign: 1.0
+            secondary_command_sign: 1.0
+            pitch_rezero_topic: perching/multilink/pitch_rezero
+            pitch_rezero_target_pitch: 0.0
+            pitch_rezero_command_sign: -1.0
+            pitch_rezero_kp: 1.0
+            pitch_rezero_rate_limit: 0.1745329
+            pitch_rezero_max_delta: 0.5235988
+            pitch_rezero_pitch_tolerance: 0.0349066
+            pitch_rezero_rate_tolerance: 0.05
+            pitch_rezero_stable_duration: 0.3
+            pitch_rezero_timeout: 5.0
+            pitch_rezero_pitch_joint_hold_tolerance: 0.02
+            pitch_rezero_secondary_joint_hold_tolerance: 0.02
+            active_joints:
+            - joint_pitch
+            - joint_roll
+            pitch_coordinates:
+            - joint_pitch
+            manual_coordinate: joint_pitch
+            debug_prefix: perching/multilink
+            diagnostic_name: multilink_perching
+            feedback_timeout: 0.15
+            future_tolerance: 0.02
+            coordinate_topics:
+              perching/multilink/secondary_joint_target: joint_roll
+            dynamics:
+              observer_gain: 10.0
+              joint_effort:
+                source: servo_bridge_joint_states
+                topic: joint_states
+            position_lower:
+            - -0.5235988
+            - -1.57079632679
+            - -1.57079632679
+            position_upper:
+            - 0.5235988
+            - 1.57079632679
+            - 1.57079632679
+            velocity_caps:
+            - 0.1745329
+            - 0.1
+            - 0.1
+          multilink_perching:
+            pitch_command_sign: 1.0
+            pitch_rezero_topic: perching/multilink/pitch_rezero
+        controller:
+          command_wrench_topic: perching/multilink/command_wrench_estimate
+        servo_controller:
+          joints: &active_pitch_joints
+            controller1:
+              id: 6
+              name: joint_pitch
+              angle_sgn: -1
+            controller2: &active_pitch_secondary
+              id: 7
+              name: joint_roll
+              angle_scale: 0.001534
+
+      active_pitch_yaw: &active_pitch_yaw
+        <<: *active_pitch_roll
+        navigation:
+          <<: *active_pitch_navigation
+          perching:
+            <<: *active_pitch_perching
+            active_joints: [joint_pitch, joint_yaw]
+            coordinate_topics:
+              perching/multilink/secondary_joint_target: joint_yaw
+        servo_controller:
+          joints:
+            <<: *active_pitch_joints
+            controller2:
+              <<: *active_pitch_secondary
+              name: joint_yaw
+              angle_scale: 0.00076699
+
+      roll_yaw: &roll_yaw
+        # Configured coordinates are [alpha, active_joints...]; geometry comes from the URDF perching_pivot marker.
+        # Servo mappings retain the existing hardware IDs/signs. Hinge calibration and tuning require hardware verification.
+        controller:
+          gimbal_calc_in_fc: true
+          command_wrench_topic: perching/roll_yaw/command_wrench_estimate
+        navigation:
+          perching_enable: false
+          perching:
+            body_pitch_jog_max_delta: 0.0174532925199433
+            body_pitch_velocity_command_duration: 8.0
+            max_execution_step: 0.05
+            max_execution_gap: 0.15
+            observer_max_interval: 0.15
+            dynamics:
+              observer_gain: 10.0
+              joint_effort:
+                source: servo_bridge_joint_states
+                topic: joint_states
+            pitch_rezero_target_pitch: 0.0
+            pitch_rezero_kp: 1.0
+            pitch_rezero_command_sign: -1.0
+            pitch_rezero_rate_limit: 0.1745329
+            pitch_rezero_max_delta: 0.5235988
+            pitch_rezero_pitch_tolerance: 0.0349066
+            pitch_rezero_rate_tolerance: 0.05
+            pitch_rezero_stable_duration: 0.3
+            pitch_rezero_timeout: 5.0
+            joint_state_topic: joint_states
+            joint_command_topic: joints_ctrl
+            body_state_topic: uav/baselink/odom
+            world_frame: world
+            debug_prefix: perching/roll_yaw
+            position_lower:
+            - -1.2
+            - -1.57079632679
+            - -1.57079632679
+            position_upper:
+            - 1.2
+            - 1.57079632679
+            - 1.57079632679
+            velocity_caps:
+            - 0.15
+            - 0.1
+            - 0.1
+            acceleration_caps:
+            - 0.1
+            - 0.1
+            - 0.1
+            body_max_tilt: 0.9
+            cog_speed_limit: 0.1
+            cog_acceleration_limit: 0.2
+            feedback_timeout: 0.15
+            future_tolerance: 0.02
+            feedback_sync_tolerance: 0.05
+            tracking_tolerance: 0.04
+            body_tracking_tolerance: 0.04
+            request:
+              pitch_increment: 0.349065850399
+              pitch_rate: 0.03
+              pitch_acceleration: 0.02
+            active_joints:
+            - joint_roll
+            - joint_yaw
+            pitch_coordinates:
+            - alpha
+            - joint_roll
+            - joint_yaw
+            manual_coordinate: alpha
+            wire_coordinates:
+              '0': alpha
+              '1': joint_roll
+              '2': joint_yaw
+            wire_angles:
+            - joint_roll
+            - alpha
+            - joint_yaw
+            diagnostic_name: roll_yaw_perching
+            coordinate_topics:
+              perching/roll_yaw/alpha_target: alpha
+              perching/roll_yaw/roll_target: joint_roll
+              perching/roll_yaw/yaw_target: joint_yaw
+            pitch_rate: 0.03
+            pitch_acceleration: 0.02
+          roll_yaw_perching: {}
+        servo_controller:
+          joints:
+            controller1:
+              id: 6
+              name: joint_yaw
+              angle_sgn: -1
+            controller2:
+              id: 7
+              name: joint_roll
+              angle_scale: 0.001534
+
+  - *$(arg beetle_perching_profile)
+profiles: {}
