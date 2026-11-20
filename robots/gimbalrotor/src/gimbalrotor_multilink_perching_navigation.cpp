@@ -39,7 +39,7 @@ void GimbalrotorMultilinkPerchingNavigator::relockCallback(const std_msgs::Empty
 
 void GimbalrotorMultilinkPerchingNavigator::applyManualPitchDelta(double delta)
 {
-  if(navi_state_ != HOVER_STATE || !perching_locked_)
+  if(navi_state_ != HOVER_STATE || !perching_locked_ || !motion_.source.empty())
     return;
   if(positioning_) servo_.cut(delta, servoSample());
   else
@@ -153,7 +153,7 @@ void GimbalrotorMultilinkPerchingNavigator::initializeMechanism()
     { std::lock_guard<std::recursive_mutex> l(perching_state_mutex_);
       if(!motion_.source.empty() || !std::isfinite(m->data)) return;
       if(m->data == 0) stopMotion();
-      else if(perching_locked_) { velocity_active_ = true; body_target_valid_ = false;
+      else if(perching_locked_ && !rezero_active_) { velocity_active_ = true; body_target_valid_ = false;
         velocity_command_ = std::clamp(m->data, -rate_limit_, rate_limit_); velocity_expires_ = ros::Time::now().toSec() + velocity_duration_; } }));
   for(const std::string action : {"cancel", "stop", "pause", "resume", "prepare", "start"})
     subscriptions_.push_back(nh_.subscribe<std_msgs::UInt64>(prefix_ + "/" + action, 1,
@@ -445,21 +445,56 @@ bool GimbalrotorMultilinkPerchingNavigator::motionFeedbackValid() const
       allowed(sample.q, max_tilt_, min_body_pitch_, max_body_pitch_);
 }
 
-bool GimbalrotorMultilinkPerchingNavigator::tryLockPerching(const std::string& reason)
+bool GimbalrotorMultilinkPerchingNavigator::tryLockPerching(const std::string& reason, bool)
 {
-  if(navi_state_ != HOVER_STATE || !model_valid_ || !observation(measured_) ||
-     !measured_.q.allFinite() || !measured_.rate.allFinite()) return false;
-  const double body_pitch = std::asin(std::clamp(-measured_.body.linear()(2, 0), -1.0, 1.0));
-  if(measured_.body.linear()(2, 2) < std::cos(max_tilt_) || body_pitch < min_body_pitch_ || body_pitch > max_body_pitch_) return false;
-  if(!resolveMechanismModel()) return false; // Snapshot the remaining joints for candidate FK.
-  measured_.q[0] = 0;
+  Sample measured;
+  if(navi_state_ != HOVER_STATE || !model_valid_ || !observation(measured) ||
+     !measured.q.allFinite() || !measured.rate.allFinite()) return false;
+  const double body_pitch = std::asin(std::clamp(-measured.body.linear()(2, 0), -1.0, 1.0));
+  if(measured.body.linear()(2, 2) < std::cos(max_tilt_) || body_pitch < min_body_pitch_ || body_pitch > max_body_pitch_) return false;
+  const Vector previous_lower = coordinate_lower_, previous_upper = coordinate_upper_;
+  const Vector previous_velocity = coordinate_velocity_, previous_acceleration = coordinate_acceleration_;
+  const auto previous_moving = moving_;
+  const auto previous_body_frame = body_frame_;
+  const auto previous_servo = servo_;
+  auto candidate_servo = servo_;
   Reference initial;
-  if(!lockGeometry(measured_.body, measured_.q, initial)) return false;
-  if(!allowed(measured_.q, max_tilt_, min_body_pitch_, max_body_pitch_)) return false;
+  const bool accepted = [&]()
+  {
+    if(!resolveMechanismModel()) return false; // Snapshot the remaining joints for candidate FK.
+    measured.q[0] = 0;
+    if(!lockGeometry(measured.body, measured.q, initial)) return false;
+    if(!allowed(measured.q, max_tilt_, min_body_pitch_, max_body_pitch_)) return false;
+    if(positioning_)
+    {
+      candidate_servo = servo_;
+      // The existing servo FK adapter reads nominal coordinates under the same mutex.
+      const Vector previous_nominal = nominal_;
+      nominal_ = measured.q;
+      const bool enabled = candidate_servo.enable(servoSample());
+      nominal_ = previous_nominal;
+      if(!enabled) return false;
+    }
+    return true;
+  }();
+  if(!accepted)
+  {
+    // The relock caller restores the shared geometry caches and pivot.
+    coordinate_lower_ = previous_lower;
+    coordinate_upper_ = previous_upper;
+    coordinate_velocity_ = previous_velocity;
+    coordinate_acceleration_ = previous_acceleration;
+    moving_ = previous_moving;
+    body_frame_ = previous_body_frame;
+    servo_ = previous_servo;
+    return false;
+  }
+  if(perching_locked_) resetMotion();
+  measured_ = measured;
   nominal_ = destination_ = proposed_ = applied_ = locked_q_ = measured_.q;
   nominal_rate_ = proposed_rate_ = applied_rate_ = applied_acceleration_ = Vector::Zero(nominal_.size());
   applied_state_ = initial;
-  if(positioning_ && !servo_.enable(servoSample())) return false;
+  if(positioning_) servo_ = candidate_servo;
   commitFixedContactLock(tfVector(applied_state_.cog.translation()), perching_geometry::tfQuaternion(applied_state_.cog.linear()),
                          tfVector(pivot_.translation()));
   session_ = lock_stamp_.toNSec();
@@ -536,7 +571,7 @@ bool GimbalrotorMultilinkPerchingNavigator::coordinateCommand(int index, double 
 
 bool GimbalrotorMultilinkPerchingNavigator::bodyPitchCommand(double angle, double rate, std::uint64_t frame)
 {
-  if(!perching_locked_ || !std::isfinite(angle) || !std::isfinite(rate) || rate <= 0 || rezero_active_) return false;
+  if(positioning_ || !perching_locked_ || !std::isfinite(angle) || !std::isfinite(rate) || rate <= 0 || rezero_active_) return false;
   const bool new_frame = !body_target_valid_ || frame != body_frame_id_;
   const Vector start = new_frame ? nominal_ : body_start_;
   Vector endpoint;
@@ -576,6 +611,10 @@ void GimbalrotorMultilinkPerchingNavigator::motionCallback(const gimbalrotor::Ro
   if(!perching_locked_ || m.session != session_) why = "invalid contact session";
   if(!std::isfinite(m.value)) why = "nonfinite command";
   if(why.empty() && m.mode == Command::CLAIM && !nominalHeld()) why = "nominal motion is not held";
+  if(why.empty() && rezero_active_ && m.value != 0 && (m.mode == Command::VELOCITY || m.mode == Command::PULSE))
+    why = "pitch rezero is active";
+  if(why.empty() && positioning_ && (m.mode == Command::BODY_PITCH || m.mode == Command::JOG))
+    why = "body pitch commands are unavailable for positioning profiles";
   if(why.empty())
   {
     if(m.mode == Command::STOP) stopMotion();

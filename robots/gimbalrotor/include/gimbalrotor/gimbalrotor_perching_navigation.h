@@ -93,7 +93,7 @@ public:
   virtual void publishDiagnostics();
 
 protected:
-  virtual bool tryLockPerching(const std::string& reason);
+  virtual bool tryLockPerching(const std::string& reason, bool relock = false);
   virtual bool supportsPerchingMode(perching_geometry::Mode) const;
   virtual void readProfile();
   virtual void initializeMechanism();

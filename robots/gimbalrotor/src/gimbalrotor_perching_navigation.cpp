@@ -242,10 +242,20 @@ void GimbalrotorPerchingNavigator::relockCallback(const std_msgs::EmptyConstPtr&
     return;
   }
 
-  resetPerchingLock();
-
-  if(!tryLockPerching("manual relock"))
+  if(!perching_locked_) resetPerchingLock();
+  // Model resolution and candidate validation share these caches under this mutex.
+  const auto previous_tree = geometry_tree_;
+  const auto previous_joints = held_joints_;
+  const auto previous_cog_to_body = cog_to_body_;
+  const auto previous_pivot = pivot_;
+  const bool previous_model_valid = model_valid_;
+  if(!tryLockPerching("manual relock", true))
   {
+    geometry_tree_ = previous_tree;
+    held_joints_ = previous_joints;
+    cog_to_body_ = previous_cog_to_body;
+    pivot_ = previous_pivot;
+    model_valid_ = previous_model_valid;
     ROS_ERROR(
         "[GimbalrotorPerchingNavigator] "
         "manual perching relock failed");
@@ -757,7 +767,7 @@ bool GimbalrotorPerchingNavigator::motionFeedbackValid() const
   return observation(sample);
 }
 
-bool GimbalrotorPerchingNavigator::tryLockPerching(const std::string& reason)
+bool GimbalrotorPerchingNavigator::tryLockPerching(const std::string& reason, bool relock)
 {
   if(navi_state_ != HOVER_STATE)
   {
@@ -769,7 +779,7 @@ bool GimbalrotorPerchingNavigator::tryLockPerching(const std::string& reason)
     return false;
   }
 
-  if(perching_locked_ && perching_lock_once_)
+  if(perching_locked_ && perching_lock_once_ && !relock)
   {
     return true;
   }
@@ -787,18 +797,24 @@ bool GimbalrotorPerchingNavigator::tryLockPerching(const std::string& reason)
   Reference anchored;
   if(!lockGeometry(body, Vector::Zero(1), anchored)) return false;
   const Eigen::Vector3d pivot = pivot_.translation();
-  locked_pivot_world_.setValue(pivot.x(), pivot.y(), pivot.z());
+  const tf::Vector3 contact_position(pivot.x(), pivot.y(), pivot.z());
   const auto& position = anchored.cog.translation();
-  locked_robot_pos_world_.setValue(position.x(), position.y(), position.z());
+  const tf::Vector3 cog_position(position.x(), position.y(), position.z());
   const Eigen::Quaterniond orientation(anchored.cog.linear());
   const tf::Quaternion reference_orientation(orientation.x(), orientation.y(), orientation.z(), orientation.w());
   const Eigen::Vector3d axis = pivot_.linear().col(1);
-  if(!hinge_arc_.initialize(locked_robot_pos_world_, locked_pivot_world_, reference_orientation,
-                                  min_valid_radius_, tf::Vector3(axis.x(), axis.y(), axis.z())))
+  perching_geometry::Lock hinge_arc;
+  if(!hinge_arc.initialize(cog_position, contact_position, reference_orientation,
+                           min_valid_radius_, tf::Vector3(axis.x(), axis.y(), axis.z())))
   {
     ROS_WARN("[GimbalrotorPerchingNavigator] rejected invalid perching geometry");
     return false;
   }
+  // Retire the old motion only after the replacement geometry is accepted.
+  if(perching_locked_) resetMotion();
+  hinge_arc_ = hinge_arc;
+  locked_pivot_world_ = contact_position;
+  locked_robot_pos_world_ = cog_position;
   double roll, pitch, yaw;
   tf::Matrix3x3(reference_orientation).getRPY(roll, pitch, yaw);
   reference_locked_rpy_.setValue(roll, pitch, yaw);

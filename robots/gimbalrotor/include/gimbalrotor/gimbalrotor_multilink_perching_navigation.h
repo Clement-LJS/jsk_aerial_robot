@@ -51,7 +51,7 @@ public:
   void publishDiagnostics() override;
 
 protected:
-  bool tryLockPerching(const std::string& reason) override;
+  bool tryLockPerching(const std::string& reason, bool relock = false) override;
   bool supportsPerchingMode(perching_geometry::Mode) const override;
   void readProfile() override;
   void initializeMechanism() override;
