@@ -678,29 +678,30 @@ bool GimbalrotorPerchingNavigator::bodyContact(const Vector& q, Pose& contact, E
   return perching_geometry::poseValid(contact) && cog.allFinite();
 }
 
-bool GimbalrotorPerchingNavigator::lockGeometry(const Pose& body, const Vector& q)
+bool GimbalrotorPerchingNavigator::lockGeometry(const Pose& body, const Vector& q, Reference& initial)
 {
   Pose contact;
-  Eigen::Vector3d cog;
-  if(!perching_geometry::poseValid(body) || !bodyContact(q, contact, cog)) return false;
+  Eigen::Vector3d cog_body;
+  if(!perching_geometry::poseValid(body) || !bodyContact(q, contact, cog_body)) return false;
   Pose rotation = Pose::Identity();
   rotation.linear() = perching_geometry::expSO3(-Eigen::Vector3d::UnitY() * q[0]);
-  pivot_ = body * contact * rotation;
-  return perching_geometry::poseValid(pivot_);
+  const Pose pivot = body * contact * rotation;
+  const Pose cog_pose = worldCogPose(body, cog_body);
+  if(!perching_geometry::poseValid(pivot) || !perching_geometry::poseValid(cog_pose)) return false;
+
+  pivot_ = pivot;
+  initial.body = body;
+  initial.cog = cog_pose;
+  return true;
 }
 
-bool GimbalrotorPerchingNavigator::evaluateReference(const Vector& q, Reference& out) const
+GimbalrotorPerchingNavigator::Pose GimbalrotorPerchingNavigator::worldCogPose(
+    const Pose& body, const Eigen::Vector3d& cog_body) const
 {
-  Pose contact;
-  Eigen::Vector3d cog;
-  if(!bodyContact(q, contact, cog)) return false;
-  Pose rotation = Pose::Identity();
-  rotation.linear() = perching_geometry::expSO3(Eigen::Vector3d::UnitY() * q[0]);
-  out.body = pivot_ * rotation * contact.inverse();
-  out.cog = Pose::Identity();
-  out.cog.translation() = out.body * cog;
-  out.cog.linear() = out.body.linear() * cog_to_body_;
-  return perching_geometry::poseValid(out.body) && perching_geometry::poseValid(out.cog);
+  Pose cog = Pose::Identity();
+  cog.translation() = body * cog_body;
+  cog.linear() = body.linear() * cog_to_body_;
+  return cog;
 }
 
 bool GimbalrotorPerchingNavigator::estimateCoordinates(const Pose& body, Vector& q, double& pivot_error, double& hinge_error) const
@@ -785,11 +786,10 @@ bool GimbalrotorPerchingNavigator::tryLockPerching(const std::string& reason)
   tf::vectorTFToEigen(getCurrentBaselinkPos(), body_position);
   body.linear() = body_rotation;
   body.translation() = body_position;
-  if(!lockGeometry(body, Vector::Zero(1))) return false;
+  Reference anchored;
+  if(!lockGeometry(body, Vector::Zero(1), anchored)) return false;
   const Eigen::Vector3d pivot = pivot_.translation();
   locked_pivot_world_.setValue(pivot.x(), pivot.y(), pivot.z());
-  Reference anchored;
-  if(!evaluateReference(Vector::Zero(1), anchored)) return false;
   const auto& position = anchored.cog.translation();
   locked_robot_pos_world_.setValue(position.x(), position.y(), position.z());
   const Eigen::Quaterniond orientation(anchored.cog.linear());

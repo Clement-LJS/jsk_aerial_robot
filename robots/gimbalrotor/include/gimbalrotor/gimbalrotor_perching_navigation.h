@@ -66,8 +66,8 @@ protected:
     Pose body = Pose::Identity(), cog = Pose::Identity();
   };
   bool bodyContact(const Vector&, Pose&, Eigen::Vector3d&) const;
-  bool lockGeometry(const Pose&, const Vector&);
-  bool evaluateReference(const Vector&, Reference&) const;
+  bool lockGeometry(const Pose& body, const Vector& q, Reference& initial);
+  Pose worldCogPose(const Pose& body, const Eigen::Vector3d& cog_body) const;
   bool estimateCoordinates(const Pose&, Vector&, double&, double&) const;
 
   boost::shared_ptr<GimbalrotorRobotModel> model_;

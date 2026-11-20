@@ -185,6 +185,18 @@ void GimbalrotorMultilinkPerchingNavigator::initializeMechanism()
     number_pubs_[key] = nh_.advertise<std_msgs::Float64>(prefix_ + "/" + key, 1);
 }
 
+bool GimbalrotorMultilinkPerchingNavigator::evaluateReference(const Vector& q, Reference& out) const
+{
+  Pose contact;
+  Eigen::Vector3d cog_body;
+  if(!bodyContact(q, contact, cog_body)) return false;
+  Pose rotation = Pose::Identity();
+  rotation.linear() = perching_geometry::expSO3(Eigen::Vector3d::UnitY() * q[0]);
+  out.body = pivot_ * rotation * contact.inverse();
+  out.cog = worldCogPose(out.body, cog_body);
+  return perching_geometry::poseValid(out.body) && perching_geometry::poseValid(out.cog);
+}
+
 bool GimbalrotorMultilinkPerchingNavigator::angularJacobian(const Vector& q, Eigen::MatrixXd& angular) const
 {
   Reference state;
@@ -454,10 +466,12 @@ bool GimbalrotorMultilinkPerchingNavigator::tryLockPerching(const std::string& r
   if(measured_.body.linear()(2, 2) < std::cos(max_tilt_) || body_pitch < min_body_pitch_ || body_pitch > max_body_pitch_) return false;
   if(!resolveMechanismModel()) return false; // Snapshot the remaining joints for candidate FK.
   measured_.q[0] = 0;
-  if(!lockGeometry(measured_.body, measured_.q) || !allowed(measured_.q, max_tilt_, min_body_pitch_, max_body_pitch_)) return false;
+  Reference initial;
+  if(!lockGeometry(measured_.body, measured_.q, initial)) return false;
+  if(!allowed(measured_.q, max_tilt_, min_body_pitch_, max_body_pitch_)) return false;
   nominal_ = destination_ = proposed_ = applied_ = locked_q_ = measured_.q;
   nominal_rate_ = proposed_rate_ = applied_rate_ = applied_acceleration_ = Vector::Zero(nominal_.size());
-  if(!evaluateReference(applied_, applied_state_)) return false;
+  applied_state_ = initial;
   if(positioning_ && !servo_.enable(servoSample())) return false;
   commitFixedContactLock(tfVector(applied_state_.cog.translation()), tfQuaternion(applied_state_.cog.linear()),
                          tfVector(pivot_.translation()));

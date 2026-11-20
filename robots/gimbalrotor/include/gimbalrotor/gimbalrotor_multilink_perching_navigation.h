@@ -53,6 +53,7 @@ private:
   bool servoModel(double, KDL::Frame&, KDL::Vector&) const;
   void publishApplied();
   bool candidateAllowed(const Vector&, double) const;
+  bool evaluateReference(const Vector& q, Reference& out) const;
   bool angularJacobian(const Vector&, Eigen::MatrixXd&) const;
   bool pitchTangent(const Vector&, const std::vector<bool>&, Vector&) const;
   bool orient(const Vector&, const Eigen::Matrix3d&, const std::vector<bool>&, Vector&) const;
