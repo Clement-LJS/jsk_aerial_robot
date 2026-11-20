@@ -94,8 +94,9 @@
    <!-- Beetle uses ordinary flight dynamics for every perching profile. -->
    <param name="robot_model_plugin_name" value="gimbalrotor_robot_model" if="$(eval arg('airframe') == 'beetle')"/>
 
-   <!-- Enforce the canonical navigator after profiles. -->
-   <param name="flight_navigation_plugin_name" value="aerial_robot_navigation/gimbalrotor_perching_navigation"/>
+   <!-- Select the navigator after all profile overlays. -->
+   <param name="flight_navigation_plugin_name"
+          value="$(eval 'aerial_robot_navigation/gimbalrotor_multilink_perching_navigation' if arg('pitch_only_perching') or arg('multilink_perching') or arg('roll_yaw_perching') else 'aerial_robot_navigation/gimbalrotor_perching_navigation')"/>
 
   </group>
 

@@ -1,0 +1,104 @@
+// -*- mode: c++ -*-
+#pragma once
+#include <gimbalrotor/gimbalrotor_perching_navigation.h>
+#include <gimbalrotor/RollYawMotion.h>
+#include <geometry_msgs/Vector3Stamped.h>
+#include <nav_msgs/Odometry.h>
+#include <sensor_msgs/JointState.h>
+#include <std_msgs/UInt64.h>
+
+namespace aerial_robot_navigation
+{
+class GimbalrotorMultilinkPerchingNavigator : public GimbalrotorPerchingNavigator
+{
+public:
+  bool perchingAdmittanceTarget(const ros::Time&, double, const tf::Vector3&, perching_geometry::Pose&) const override;
+  bool motionFeedbackValid() const override;
+  bool observation(Sample&) const override;
+  const Vector& appliedCoordinates() const { return applied_; }
+  const Vector& appliedRates() const { return applied_rate_; }
+  const Vector& appliedAccelerations() const { return applied_acceleration_; }
+  bool jointCommand(sensor_msgs::JointState& command) const;
+  const std::vector<bool>& movingCoordinates() const { return moving_; }
+  bool nominalHeld() const override;
+  bool trackingHeld() const override;
+  bool applyPerchingReference(double pitch_offset, double rate, double acceleration) override;
+  void publishDiagnostics() override;
+
+protected:
+  bool tryLockPerching(const std::string& reason) override;
+  bool supportsPerchingMode(perching_geometry::Mode) const override;
+  void readProfile() override;
+  void initializeMechanism() override;
+  bool resolveMechanismModel() override;
+  void resetMotion() override;
+  void applyManualPitchDelta(double delta) override;
+  void relockCallback(const std_msgs::EmptyConstPtr& msg) override;
+  void onNonHover() override;
+  void onClockRewind() override;
+  void naviCallback(const aerial_robot_msgs::FlightNavConstPtr& msg) override;
+
+private:
+  void jointCallback(const ros::MessageEvent<sensor_msgs::JointState const>&);
+  void bodyCallback(const nav_msgs::OdometryConstPtr&);
+  void motionCallback(const gimbalrotor::RollYawMotionConstPtr&);
+  void coordinateCommand(int, double);
+  bool bodyPitchCommand(double angle, double rate, std::uint64_t frame);
+  void stopMotion();
+  void followCoordinates(const Vector&, double);
+  void advanceNominal(double);
+  void workflowCommand(const std::string&);
+  void planCommand(const std::string&, std::uint64_t);
+  perching_servo::Sample servoSample() const;
+  bool servoModel(double, KDL::Frame&, KDL::Vector&) const;
+  void publishApplied();
+  bool candidateAllowed(const Vector&, double) const;
+  bool angularJacobian(const Vector&, Eigen::MatrixXd&) const;
+  bool pitchTangent(const Vector&, const std::vector<bool>&, Vector&) const;
+  bool orient(const Vector&, const Eigen::Matrix3d&, const std::vector<bool>&, Vector&) const;
+  bool pitch(const Vector&, double, const std::vector<bool>&, Vector&) const;
+  bool allowed(const Vector&, double, double, double) const;
+
+  Vector coordinate_lower_, coordinate_upper_, coordinate_velocity_, coordinate_acceleration_;
+  std::vector<bool> moving_;
+  std::map<std::string, int> coordinate_map_;
+  std::map<int, std::string> wire_coordinates_;
+  std::vector<std::string> wire_angles_;
+  std::vector<ros::Subscriber> subscriptions_;
+  std::map<std::string, ros::Publisher> bool_pubs_, number_pubs_;
+  ros::Publisher joints_pub_;
+  ros::Publisher reference_pub_, measured_pub_, cog_pub_;
+  ros::Publisher session_pub_, epoch_pub_, ack_pub_, nominal_pub_, angles_pub_, lower_pub_, upper_pub_, body_pose_pub_;
+  std::string body_frame_, joint_topic_, manual_coordinate_ = "alpha", positioning_joint_;
+  bool positioning_ = false, body_target_valid_ = false, stopping_ = false;
+  bool rezero_active_ = false, rezero_ready_ = false, rezero_failed_ = false;
+  bool proposal_valid_ = false, prepared_motion_ = false, paused_ = false;
+  Vector paused_destination_;
+  std::string paused_phase_;
+  double paused_body_destination_ = 0, prepared_increment_ = 0;
+  std::string phase_ = "FREE_FLIGHT";
+  Sample measured_;
+  std::deque<Sample> joint_history_, body_history_;
+  Vector nominal_, destination_, proposed_, nominal_rate_, proposed_rate_, applied_, applied_rate_, applied_acceleration_;
+  Vector body_start_, locked_q_;
+  Reference applied_state_;
+  double body_destination_ = 0, body_progress_ = 0, proposed_progress_ = 0, body_rate_ = 0, proposed_body_rate_ = 0;
+  double body_rate_limit_ = .03, body_tracking_tolerance_ = .04;
+  double acceleration_limit_ = .02, sync_tolerance_ = .05;
+  double max_tilt_ = .9, min_body_pitch_ = -M_PI / 2, max_body_pitch_ = M_PI / 2;
+  double cog_speed_limit_ = .1, cog_acceleration_limit_ = .2;
+  double rezero_started_ = 0, rezero_stable_since_ = 0, rezero_origin_ = 0, secondary_stable_since_ = 0;
+  double rezero_target_ = 0, rezero_sign_ = -1, rezero_rate_ = .1745329, rezero_range_ = .5235988;
+  double rezero_tolerance_ = .0349066, rezero_timeout_ = 5, hold_tolerance_ = .02;
+  double rezero_kp_ = 1, rezero_stable_duration_ = .3;
+  double jog_limit_ = .01745329252;
+  gimbalrotor::RollYawMotionConstPtr last_motion_request_;
+  std_msgs::String last_motion_ack_;
+  std::uint64_t session_ = 0, body_frame_id_ = 0;
+  perching_geometry::MotionIdentity motion_;
+  perching_servo::Core servo_;
+  perching_servo::Core previous_servo_;
+  Eigen::Vector3d reference_velocity_ = Eigen::Vector3d::Zero(), reference_omega_ = Eigen::Vector3d::Zero();
+  Eigen::Vector3d reference_acceleration_ = Eigen::Vector3d::Zero(), reference_angular_acceleration_ = Eigen::Vector3d::Zero();
+};
+}
