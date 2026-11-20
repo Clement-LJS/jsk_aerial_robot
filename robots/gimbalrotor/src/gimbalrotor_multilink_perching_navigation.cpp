@@ -153,7 +153,7 @@ void GimbalrotorMultilinkPerchingNavigator::initializeMechanism()
     { std::lock_guard<std::recursive_mutex> l(perching_state_mutex_);
       if(!motion_.source.empty() || !std::isfinite(m->data)) return;
       if(m->data == 0) stopMotion();
-      else if(perching_locked_ && !rezero_active_) { velocity_active_ = true; body_target_valid_ = false;
+      else if(perching_locked_ && !rezero_active_ && !positioning_) { velocity_active_ = true; body_target_valid_ = false;
         velocity_command_ = std::clamp(m->data, -rate_limit_, rate_limit_); velocity_expires_ = ros::Time::now().toSec() + velocity_duration_; } }));
   for(const std::string action : {"cancel", "stop", "pause", "resume", "prepare", "start"})
     subscriptions_.push_back(nh_.subscribe<std_msgs::UInt64>(prefix_ + "/" + action, 1,
@@ -390,7 +390,7 @@ void GimbalrotorMultilinkPerchingNavigator::bodyCallback(const nav_msgs::Odometr
   while(body_history_.size() > 64) body_history_.pop_front();
 }
 
-bool GimbalrotorMultilinkPerchingNavigator::observation(Sample& sample) const
+bool GimbalrotorMultilinkPerchingNavigator::readSynchronizedSample(Sample& sample) const
 {
   if(body_history_.empty() || joint_history_.empty()) return false;
   const auto& body = body_history_.back(); const auto& joint = joint_history_.back();
@@ -424,6 +424,12 @@ bool GimbalrotorMultilinkPerchingNavigator::observation(Sample& sample) const
   Sample b, j;
   if(!bracket(body_history_, b, true) || !bracket(joint_history_, j, false)) return false;
   sample = j; sample.body = b.body; sample.omega = b.omega; sample.receipt = std::min(b.receipt, j.receipt);
+  return true;
+}
+
+bool GimbalrotorMultilinkPerchingNavigator::observation(Sample& sample) const
+{
+  if(!readSynchronizedSample(sample)) return false;
   if(perching_locked_)
   {
     double pivot, hinge;
@@ -445,10 +451,12 @@ bool GimbalrotorMultilinkPerchingNavigator::motionFeedbackValid() const
       allowed(sample.q, max_tilt_, min_body_pitch_, max_body_pitch_);
 }
 
-bool GimbalrotorMultilinkPerchingNavigator::tryLockPerching(const std::string& reason, bool)
+bool GimbalrotorMultilinkPerchingNavigator::tryLockPerching(const std::string& reason, bool relock)
 {
   Sample measured;
-  if(navi_state_ != HOVER_STATE || !model_valid_ || !observation(measured) ||
+  // A replacement contact must not depend on reconstruction against the old pivot.
+  if(navi_state_ != HOVER_STATE || !model_valid_ ||
+     !(relock && perching_locked_ ? readSynchronizedSample(measured) : observation(measured)) ||
      !measured.q.allFinite() || !measured.rate.allFinite()) return false;
   const double body_pitch = std::asin(std::clamp(-measured.body.linear()(2, 0), -1.0, 1.0));
   if(measured.body.linear()(2, 2) < std::cos(max_tilt_) || body_pitch < min_body_pitch_ || body_pitch > max_body_pitch_) return false;
@@ -471,7 +479,7 @@ bool GimbalrotorMultilinkPerchingNavigator::tryLockPerching(const std::string& r
       // The existing servo FK adapter reads nominal coordinates under the same mutex.
       const Vector previous_nominal = nominal_;
       nominal_ = measured.q;
-      const bool enabled = candidate_servo.enable(servoSample());
+      const bool enabled = candidate_servo.enable(servoSample(&measured));
       nominal_ = previous_nominal;
       if(!enabled) return false;
     }
@@ -613,7 +621,8 @@ void GimbalrotorMultilinkPerchingNavigator::motionCallback(const gimbalrotor::Ro
   if(why.empty() && m.mode == Command::CLAIM && !nominalHeld()) why = "nominal motion is not held";
   if(why.empty() && rezero_active_ && m.value != 0 && (m.mode == Command::VELOCITY || m.mode == Command::PULSE))
     why = "pitch rezero is active";
-  if(why.empty() && positioning_ && (m.mode == Command::BODY_PITCH || m.mode == Command::JOG))
+  if(why.empty() && positioning_ && (m.mode == Command::BODY_PITCH || m.mode == Command::JOG ||
+      (m.value != 0 && (m.mode == Command::VELOCITY || m.mode == Command::PULSE))))
     why = "body pitch commands are unavailable for positioning profiles";
   if(why.empty())
   {
@@ -671,12 +680,13 @@ void GimbalrotorMultilinkPerchingNavigator::motionCallback(const gimbalrotor::Ro
   publishDiagnostics();
 }
 
-perching_servo::Sample GimbalrotorMultilinkPerchingNavigator::servoSample() const
+perching_servo::Sample GimbalrotorMultilinkPerchingNavigator::servoSample(const Sample* synchronized) const
 {
   perching_servo::Sample s;
   s.now = ros::Time::now().toSec(); s.hover = navi_state_ == HOVER_STATE;
-  Sample measured;
-  s.model_valid = model_valid_ && observation(measured);
+  Sample observed;
+  const Sample& measured = synchronized ? *synchronized : observed;
+  s.model_valid = model_valid_ && (synchronized || observation(observed));
   if(!s.model_valid || !coordinate_map_.count(positioning_joint_)) return s;
   const int i = coordinate_map_.at(positioning_joint_);
   s.joint_stamp = measured.stamp; s.q = measured.q[i]; s.qdot = measured.rate[i];

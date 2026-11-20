@@ -66,6 +66,7 @@ protected:
 private:
   void jointCallback(const ros::MessageEvent<sensor_msgs::JointState const>&);
   void bodyCallback(const nav_msgs::OdometryConstPtr&);
+  bool readSynchronizedSample(Sample&) const;
   void motionCallback(const gimbalrotor::RollYawMotionConstPtr&);
   bool coordinateCommand(int, double);
   bool bodyPitchCommand(double angle, double rate, std::uint64_t frame);
@@ -74,7 +75,7 @@ private:
   void advanceNominal(double);
   void workflowCommand(const std::string&);
   void planCommand(const std::string&, std::uint64_t);
-  perching_servo::Sample servoSample() const;
+  perching_servo::Sample servoSample(const Sample* synchronized = nullptr) const;
   bool servoModel(double, KDL::Frame&, KDL::Vector&) const;
   void publishApplied();
   bool candidateAllowed(const Vector&, double) const;
