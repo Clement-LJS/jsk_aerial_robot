@@ -816,7 +816,7 @@ void GimbalrotorMultilinkPerchingNavigator::advanceNominal(double dt)
 {
   proposed_ = nominal_; proposed_rate_ = nominal_rate_; proposed_progress_ = body_progress_; proposed_body_rate_ = body_rate_;
   const double now = ros::Time::now().toSec();
-  if(!trackingHeld())
+  if((positioning_ || rezero_active_) && !trackingHeld())
   {
     proposed_rate_.setZero(); proposed_body_rate_ = 0;
     proposal_valid_ = true; status_ = "nominal held for tracking";

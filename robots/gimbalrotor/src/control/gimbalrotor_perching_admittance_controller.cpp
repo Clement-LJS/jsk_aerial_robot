@@ -207,6 +207,13 @@ void GimbalrotorPerchingAdmittanceController::preparePerchingAdmittanceInput()
   }
   if(!input_valid_)
   {
+    if(holdContactLoadOnGap() && perching_admittance_enabled_ && equilibrium_wrench_ready_)
+    {
+      // Hold the last finite, tared and filtered torque; this is not a new observer sample.
+      if(contact_active_) prepared_perching_admittance_wrench_world_[4] = residual_pitch_torque_filtered_;
+      reason_ += "; holding last tared contact torque until the observer advances";
+      return;
+    }
     contact_active_ = false; contact_on_timer_ = contact_off_timer_ = 0; residual_pitch_torque_filtered_ = 0;
     recovery_active_ = true; reason_ += "; zero-input recovery, tare and arming retained";
     return;
@@ -219,8 +226,12 @@ void GimbalrotorPerchingAdmittanceController::preparePerchingAdmittanceInput()
   }
   else if(fresh_load)
   {
-    contact_active_ = false;
-    contact_on_timer_ = contact_off_timer_ = residual_pitch_torque_filtered_ = 0;
+    contact_on_timer_ = contact_off_timer_ = 0;
+    if(!holdContactLoadOnGap())
+    {
+      contact_active_ = false;
+      residual_pitch_torque_filtered_ = 0;
+    }
   }
   if(contact_active_) prepared_perching_admittance_wrench_world_[4] = residual_pitch_torque_filtered_;
   reason_ += contact_active_ ? "; contact" : "; armed; zero-input recovery/hold";
@@ -323,8 +334,10 @@ void GimbalrotorPerchingAdmittanceController::updateAdmittance()
       !std::isfinite(dt) || dt <= 0 || dt > observer_max_interval_)
   { admittance_output_.valid = false; return; }
   const auto& config = admittance_config_;
-  if(!admittance_enabled_ || !input_valid_ || !contact_active_) pitch_torque_lpf_ = 0;
-  else pitch_torque_lpf_ += config.torque_lpf_alpha * (prepared_perching_admittance_wrench_world_[4] - pitch_torque_lpf_);
+  if(!admittance_enabled_ || !contact_active_) pitch_torque_lpf_ = 0;
+  else if(input_valid_ || !holdContactLoadOnGap())
+    pitch_torque_lpf_ += config.torque_lpf_alpha * (prepared_perching_admittance_wrench_world_[4] - pitch_torque_lpf_);
+  // Multilink without a new load holds the previous filtered forcing state.
   const double torque = std::clamp(pitch_torque_lpf_, -config.torque_limit.y(), config.torque_limit.y());
   const double x = perching_navigator_->appliedPitchOffset(), v = perching_navigator_->appliedPitchOffsetRate();
   const double inertia = config.rot_virtual_inertia.y(), damping = config.rot_damping.y(), stiffness = config.rot_stiffness.y();

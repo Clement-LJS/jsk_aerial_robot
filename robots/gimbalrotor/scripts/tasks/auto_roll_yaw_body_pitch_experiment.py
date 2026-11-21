@@ -1,29 +1,20 @@
 #!/usr/bin/env python3
-"""Send cumulative body-local pitch destinations in one nominal command frame.
+"""Request one relative body-local pitch step, then wait interval_sec.
 
-interval_sec is hold time AFTER nominal completion and bounded braking.
-Ctrl+C/errors stop this owner's motion; normal completion releases the hold.
-An accepted destination remains onboard if this process dies without cleanup.
-Optional use_admittance reuses valid tare or collects it unloaded, then verifies enable.
+The navigator accepts steps only without a motion owner and while nominally held.
+Requests have no acknowledgement; motion uses navigation/perching/pitch_rate.
+Normal completion leaves the final destination held; interruption requests braking.
+Optional use_admittance performs unloaded tare/enable once before the first step.
 """
 
 import math
-import os
 import signal
-import sys
 import threading
 import time
 
 import rospy
 from diagnostic_msgs.msg import DiagnosticArray
-from nav_msgs.msg import Odometry
-from std_msgs.msg import Bool, Empty
-from tf.transformations import quaternion_conjugate, quaternion_multiply
-try:
-    from roll_yaw_motion import MotionClient, RollYawMotion
-except ModuleNotFoundError:
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from roll_yaw_motion import MotionClient, RollYawMotion
+from std_msgs.msg import Bool, Empty, Float64
 
 
 def finite_number(value, name):
@@ -38,128 +29,22 @@ def finite_number(value, name):
     return number
 
 
-def orientation(message):
-    q = message.pose.pose.orientation
-    values = (q.x, q.y, q.z, q.w)
-    if not all(math.isfinite(x) for x in values) or abs(sum(x*x for x in values) - 1) > .002:
-        raise ValueError('invalid body orientation')
-    return values
-
-
-def local_pitch(start, current):
-    relative = quaternion_multiply(quaternion_conjugate(start), current)
-    if math.hypot(relative[1], relative[3]) < 1e-6:
-        raise ValueError('body-local pitch is undefined at this orientation')
-    angle = 2 * math.atan2(relative[1], relative[3])
-    return (angle + math.pi) % (2 * math.pi) - math.pi
-
-
 class Feedback:
     def __init__(self, prefix):
         self.lock = threading.Lock()
         self.status = None
-        self.poses = {}
-        self.subscribers = [
-            rospy.Subscriber(prefix + '/diagnostics_status', DiagnosticArray, self.diagnostic, queue_size=1),
-            rospy.Subscriber(prefix + '/body_reference', Odometry, self.pose, callback_args='reference', queue_size=1),
-            rospy.Subscriber(prefix + '/body_measured', Odometry, self.pose, callback_args='measured', queue_size=1),
-        ]
+        self.subscriber = rospy.Subscriber(prefix + '/diagnostics_status', DiagnosticArray, self.diagnostic, queue_size=1)
 
     def diagnostic(self, message):
         for status in message.status:
             if status.name.endswith('/roll_yaw_perching'):
                 values = {v.key: v.value for v in status.values}
                 with self.lock:
-                    self.status = (time.monotonic(), message.header.stamp.to_sec(), status.message, values)
-
-    def pose(self, message, kind):
-        try:
-            value = orientation(message)
-        except ValueError:
-            return  # Invalid data must not refresh the preceding valid sample.
-        with self.lock:
-            self.poses[kind] = (time.monotonic(), message.header.stamp.to_sec(), value)
+                    self.status = (time.monotonic(), status.message, values)
 
     def snapshot(self):
         with self.lock:
-            return self.status, dict(self.poses)
-
-
-class AngleSequence:
-    """One acknowledged destination at a time, followed by a full nominal hold."""
-    def __init__(self, count, hold, settle=.3):
-        self.count, self.hold, self.settle = count, hold, settle
-        self.sent = self.sequence = 0
-        self.command = None
-        self.accepted = False
-        self.progress = self.previous_progress = 0.
-        self.hold_since = self.ready_since = None
-
-    def submitted(self, command, stamp):
-        self.sent += 1
-        self.command, self.sequence, self.sent_at = command, command.sequence, stamp
-        self.accepted = False
-        self.previous_progress = self.progress
-        self.hold_since = self.ready_since = None
-
-    def acknowledge(self, ack):
-        if not MotionClient.matches_ack(ack, self.command) or ack[0] < self.sent_at:
-            return False
-        if ack[1].get('accepted') != 'true':
-            raise ValueError(ack[2])
-        value = float(ack[1].get('accepted_value', 'nan'))
-        if not math.isfinite(value) or abs(value - self.command.value) > 1e-9:
-            raise ValueError('Navigator acknowledged a different body-pitch target')
-        self.accepted = True
-        return True
-
-    def matches_status(self, values):
-        command = self.command
-        target = float(values.get('body_pitch_target_rad', 'nan'))
-        return (values.get('body_pitch_target_valid') == '1' and
-                all(values.get(key) == str(value) for key, value in (
-                    ('session_id', command.session), ('motion_source', command.source),
-                    ('motion_epoch', command.epoch), ('motion_sequence', command.sequence),
-                    ('body_pitch_target_frame', command.frame))) and
-                math.isfinite(target) and abs(target - command.value) <= 1e-9)
-
-    def ready(self, stamp, values, held):
-        if self.sequence:
-            if not self.accepted or not self.matches_status(values):
-                self.ready_since = None
-                return False
-            self.progress = float(values.get('body_pitch_target_progress_rad', 'nan'))
-            if not math.isfinite(self.progress):
-                raise ValueError('Nominal body-pitch progress is unavailable')
-            if (values.get('body_pitch_target_reference_complete') != '1' or
-                    abs(self.command.value - self.progress) > 1e-5 or
-                    values.get('body_pitch_velocity_active') != '0' or values.get('stopping') != '0'):
-                self.hold_since = self.ready_since = None
-                return False
-            if self.hold_since is None:
-                self.hold_since = stamp
-        if held:
-            if self.ready_since is None:
-                self.ready_since = stamp
-        else:
-            self.ready_since = None
-        return (self.ready_since is not None and stamp - self.ready_since >= self.settle and
-                (self.hold_since is None or stamp - self.hold_since >= self.hold))
-
-    def describe(self, state, values):
-        progress = self.progress
-        try:
-            if self.sequence and self.matches_status(values):
-                reported = float(values.get('body_pitch_target_progress_rad', 'nan'))
-                if math.isfinite(reported):
-                    progress = reported  # Report motion even if its acknowledgement was lost.
-        except (ValueError, TypeError):
-            pass  # Malformed feedback must not prevent the scoped-stop cleanup.
-        remaining = (self.command.value - progress) if self.sequence else 0.
-        return ('step %d/%d, last reported remaining %+.6f deg; %s; hold_reason=%s; %s; %s' %
-                (self.sent, self.count, math.degrees(remaining), state,
-                 values.get('hold_reason', 'unavailable'), values.get('body_pitch_velocity_limit', ''),
-                 values.get('admittance_status', '')))
+            return self.status
 
 
 class AdmittanceStartup:
@@ -178,8 +63,7 @@ class AdmittanceStartup:
         generation = int(values['tare_generation'])
         if self.started is None:
             self.started = now
-        # Planner retirement is not a physical model change. The navigator
-        # validates contact/model identity; this task pins session and tare.
+        # The controller validates contact/model identity; startup pins the tare.
         if values.get('admittance_configured') != '1':
             raise ValueError('Admittance configuration unavailable: ' + values.get('admittance_status', ''))
         if self.pending:
@@ -237,10 +121,12 @@ class AdmittanceStartup:
 
 def main():
     rospy.init_node('auto_roll_yaw_body_pitch_experiment', disable_signals=True)
+    if rospy.has_param('~body_pitch_rate_deg_s'):
+        raise ValueError('~body_pitch_rate_deg_s is unsupported by direct body_pitch_delta commands; '
+                         'the rate is set by navigation/perching/pitch_rate')
     if any(rospy.has_param(key) for key in ('~angular_velocity_deg_s', '~feed_duration_sec')):
-        raise ValueError('Pulse parameters removed: use ~step_deg and optional ~body_pitch_rate_deg_s; ~interval_sec is hold time')
+        raise ValueError('Pulse parameters removed: use ~step_deg and ~interval_sec for step and hold')
     step = math.radians(finite_number(rospy.get_param('~step_deg', None), '~step_deg'))
-    rate = math.radians(finite_number(rospy.get_param('~body_pitch_rate_deg_s', .5), '~body_pitch_rate_deg_s'))
     limit = math.radians(finite_number(rospy.get_param('~body_pitch_limit_deg', 20.), '~body_pitch_limit_deg'))
     hold = finite_number(rospy.get_param('~interval_sec', 8.), '~interval_sec')
     if rospy.has_param('~hold_duration_sec'):
@@ -249,172 +135,83 @@ def main():
             raise ValueError('~hold_duration_sec and ~interval_sec conflict; specify one hold duration')
         hold = alias
     count = rospy.get_param('~num_steps', 8)
-    if step == 0 or rate <= 0 or not 0 < limit < math.pi or hold < 0:
-        raise ValueError('Require nonzero step_deg, positive body_pitch_rate_deg_s, 0 < body_pitch_limit_deg < 180 and nonnegative interval_sec')
+    if step <= 0 or not 0 < limit < math.pi or hold <= 0:
+        raise ValueError('Require positive step_deg and interval_sec, and 0 < body_pitch_limit_deg < 180')
     if isinstance(count, bool) or not isinstance(count, int) or count < 1:
         raise ValueError('~num_steps must be a positive integer')
     try:
         total = finite_number(step * count, 'Total requested angle')
-        default_timeout = finite_number(abs(total) / rate + count * (hold + 10.) + 30., 'Default timeout')
     except OverflowError as exc:
-        raise ValueError('Total requested travel/duration must be finite') from exc
-    if abs(total) > limit:
+        raise ValueError('Total requested travel must be finite') from exc
+    if total > limit:
         raise ValueError('Requested total %+.6g deg exceeds body-pitch command limit %.6g deg' %
                          (math.degrees(total), math.degrees(limit)))
     ns = rospy.get_param('~robot_namespace', '/gimbalrotor').rstrip('/')
     prefix = rospy.get_param('~debug_prefix', 'perching/roll_yaw').rstrip('/')
     prefix = prefix if prefix.startswith('/') else ns + '/' + prefix
+    jog_limit = finite_number(rospy.get_param(ns + '/navigation/perching/body_pitch_jog_max_delta', .01745329252),
+                              'navigation/perching/body_pitch_jog_max_delta')
+    if jog_limit <= 0 or step > jog_limit:
+        raise ValueError('~step_deg must be within navigation/perching/body_pitch_jog_max_delta (%.6g deg)' %
+                         math.degrees(jog_limit))
     feedback_timeout = finite_number(rospy.get_param('~feedback_timeout_sec', 1.), '~feedback_timeout_sec')
-    timeout = finite_number(rospy.get_param('~timeout_sec', default_timeout), '~timeout_sec')
+    timeout = finite_number(rospy.get_param('~timeout_sec', 30.), '~timeout_sec')
     if min(feedback_timeout, timeout) <= 0:
-        raise ValueError('Timeouts must be positive')
+        raise ValueError('Startup timeouts must be positive')
     use_admittance = rospy.get_param('~use_admittance', False)
     if not isinstance(use_admittance, bool):
         raise ValueError('~use_admittance must be a boolean')
-    feedback, motion = Feedback(prefix), MotionClient(prefix)
+    motion = rospy.Publisher(prefix + '/body_pitch_delta', Float64, queue_size=1)
+    stop = rospy.Publisher(prefix + '/body_pitch_velocity', Float64, queue_size=1)
+    feedback = Feedback(prefix) if use_admittance else None
     tare = rospy.Publisher(prefix + '/admittance_tare', Empty, queue_size=1)
     enable = rospy.Publisher(ns + '/perching/admittance_enable', Bool, queue_size=1)
-    task = AngleSequence(count, hold)
     interrupted = threading.Event()
     handlers = {number: signal.signal(number, lambda *_: interrupted.set())
                 for number in (signal.SIGINT, signal.SIGTERM)}
     started = time.monotonic()
-    previous = rospy.get_time()
-    connection_deadline = None
     normal_exit = False
     startup = AdmittanceStartup()
     startup_complete = not use_admittance
-    measured_start = None
-    state, values = 'waiting for navigator feedback', {}
-    next_report = started
-    rospy.loginfo('Step %+.6g deg, maximum slew %.6g deg/s, hold %.3g s after nominal completion; %d steps. Ctrl+C stops motion.',
-                  math.degrees(step), math.degrees(rate), hold, count)
+    rospy.loginfo('Requesting %d relative steps of %+.6g deg, with %.3g s between requests; '
+                  'navigator pitch_rate applies. Steps require no motion owner and nominal hold; no acknowledgement.',
+                  count, math.degrees(step), hold)
     try:
         while not rospy.is_shutdown() and not interrupted.is_set():
-            now, ros_now = time.monotonic(), rospy.get_time()
-            if ros_now < previous:
-                raise ValueError('Clock moved backwards')
-            previous = ros_now
-            status, poses = feedback.snapshot()
-            with motion.lock:
-                ack = motion.ack
-                if motion.epoch is not None and motion.epoch != motion.current_epoch:
-                    raise ValueError('Motion cancelled by operator or contact transition; task abandoned')
-            if status:
-                received, stamp, state, values = status
+            now = time.monotonic()
             if now - started > timeout:
-                raise ValueError('Angle sequence blocked/timed out')
-            if connection_deadline is not None and now >= connection_deadline:
-                raise RuntimeError('Timed out waiting for motion subscriber on ' + prefix + '/motion')
-            if not status:
-                time.sleep(.02)
-                continue
-            session = int(values.get('session_id', '0'))
-            fresh = (0 <= now - received <= feedback_timeout and -.02 <= ros_now - stamp <= feedback_timeout)
-            if motion.session is not None and (session != motion.session or not state.startswith('CONTACT_LOCKED')):
-                raise ValueError('Navigation left the active contact: ' + state)
-            if not fresh:
-                if task.sequence:
-                    raise ValueError('Navigator feedback lost; stopping sequence')
-                time.sleep(.02)
-                continue
-            if not session or not state.startswith('CONTACT_LOCKED') or motion.current_epoch is None:
-                time.sleep(.02)
-                continue
-            if motion.session is None:
-                motion.rearm(session)  # Pin once, including while waiting for an older owner.
-            if not motion.claimed:
-                if connection_deadline is None:
-                    connection_deadline = now + feedback_timeout + 1
-                if not motion.publisher.get_num_connections():
-                    interrupted.wait(.02)
-                    continue
-                if interrupted.is_set() or rospy.is_shutdown():
-                    break
-                if not motion.claim(session, timeout=min(2., timeout - (time.monotonic() - started)),
-                                    interrupted=interrupted):
-                    break
-                connection_deadline = None
-                continue  # Recheck cancellation and feedback after the acknowledgement wait.
-            if task.sequence:
-                if not task.accepted:
-                    if not task.acknowledge(ack):
-                        if now - task.sent_at > feedback_timeout + 1:
-                            raise ValueError('Angle acknowledgement missing; destination is not retried')
-                        time.sleep(.02)
-                        continue
-                    rospy.loginfo('Step %d/%d acknowledged: target %+.4f deg.', task.sent, count,
-                                  math.degrees(task.command.value))
-                if received < task.sent_at or not task.matches_status(values):
-                    if now - task.sent_at > feedback_timeout + 1:
-                        raise ValueError('Current angle status identity/frame/target unavailable')
-                    time.sleep(.02)
-                    continue
-            if use_admittance and startup_complete and (values.get('admittance_enabled') != '1' or values.get('baseline_ready') != '1'):
-                raise ValueError('Admittance calibration or enable was lost; sequence stopped')
-            if use_admittance and startup.generation is not None and int(values['tare_generation']) != startup.generation:
-                raise ValueError('Admittance baseline or contact model changed; sequence stopped')
-            if interrupted.is_set() or rospy.is_shutdown():
-                break
+                raise ValueError('Timed out waiting for command subscribers or unloaded admittance startup')
             if not startup_complete:
-                startup_complete = startup.ready(now, values, tare, enable)
-                if not startup_complete:
-                    time.sleep(.02)
-                    continue
-            pose = poses.get('measured')
-            measured_fresh = pose and 0 <= now - pose[0] <= feedback_timeout and -.02 <= ros_now - pose[1] <= feedback_timeout
-            if task.sequence and not measured_fresh:
-                raise ValueError('Measured body pose feedback lost; stopping sequence')
-            # This gate checks nominal hold/contact/model and effective tracking,
-            # allowing vibration and correction motion even without auto-enable.
-            held = values.get('admittance_hold_eligible') == '1'
-            previous_hold = task.hold_since
-            ready = task.ready(stamp, values, held and bool(measured_fresh))
-            completed = previous_hold is None and task.hold_since is not None
-            if task.sequence and (completed or ready or now >= next_report):
-                offset = float(values.get('effective_offset_rad', 'nan'))
-                measured = local_pitch(measured_start, pose[2])
-                rospy.loginfo('Step %d/%d: target %+.4f deg; nominal advance %+.4f deg (run %+.4f), remaining %+.6f deg; '
-                              'admittance offset %+.4f deg; measured body-local change since run start %+.4f deg; %s.',
-                              task.sent, count, math.degrees(task.command.value),
-                              math.degrees(task.progress - task.previous_progress), math.degrees(task.progress),
-                              math.degrees(task.command.value - task.progress), math.degrees(offset), math.degrees(measured),
-                              'nominal complete, holding' if task.hold_since is not None else 'nominal moving/waiting')
-                next_report = now + 2.
-            if ready and task.sent == count:
-                if interrupted.is_set() or rospy.is_shutdown():
-                    break
-                rospy.loginfo('Completed %d nominal angle destinations and full holds; measured travel may differ under load.', count)
-                normal_exit = True
+                status = feedback.snapshot()
+                if status:
+                    received, state, values = status
+                    if 0 <= now - received <= feedback_timeout and state.startswith('CONTACT_LOCKED'):
+                        startup_complete = startup.ready(now, values, tare, enable)
+            if startup_complete and motion.get_num_connections() and stop.get_num_connections():
+                break
+            interrupted.wait(.02)
+
+        for number in range(1, count + 1):
+            if rospy.is_shutdown() or interrupted.is_set():
                 return
-            if ready and motion.publisher.get_num_connections():
-                if interrupted.is_set() or rospy.is_shutdown():
+            motion.publish(Float64(data=step))
+            rospy.loginfo('Step %d/%d requested: relative %+.6g deg, requested total %+.6g deg; hold %.3g s.',
+                          number, count, math.degrees(step), math.degrees(step * number), hold)
+            deadline = time.monotonic() + hold
+            while not rospy.is_shutdown() and not interrupted.is_set():
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
                     break
-                if measured_start is None:
-                    measured_start = pose[2]
-                target = step * (task.sent + 1)
-                with motion.lock:
-                    sequence = motion.send(session, RollYawMotion.BODY_PITCH, target, rate)
-                    command = RollYawMotion(session=session, epoch=motion.epoch, source=motion.source,
-                                            sequence=sequence, mode=RollYawMotion.BODY_PITCH, value=target,
-                                            frame=motion.frame, rate_limit=rate)
-                task.submitted(command, now)
-                rospy.loginfo('Step %d/%d dispatched: target %+.4f deg; awaiting navigator acknowledgement.',
-                              task.sent, count, math.degrees(target))
-            time.sleep(.02)
-    except (ValueError, RuntimeError) as exc:
-        raise type(exc)(str(exc) + '; ' + task.describe(state, values)) from exc
+                interrupted.wait(min(.1, remaining))
+        if rospy.is_shutdown() or interrupted.is_set():
+            return
+        normal_exit = True
+        rospy.loginfo('Finished %d step requests and holds; leaving the nominal destination with the navigator.', count)
     finally:
         try:
-            if normal_exit:
-                if not motion.release():
-                    rospy.logwarn('Ownership release unconfirmed; final nominal destination remains held onboard.')
-            else:
-                rospy.loginfo('Stopping this client: %s', task.describe(state, values))
-                if not motion.stop(wait=True):
-                    rospy.logerr('Scoped stop was not confirmed; accepted destination may remain active onboard.')
-                elif not motion.release():
-                    rospy.logwarn('Ownership release after stop unconfirmed; inspect navigator hold status.')
+            if not normal_exit and not rospy.is_shutdown():
+                stop.publish(Float64(data=0.))
+                rospy.loginfo('Requested brake/hold with one zero body_pitch_velocity message.')
         finally:
             for number, handler in handlers.items():
                 signal.signal(number, handler)
