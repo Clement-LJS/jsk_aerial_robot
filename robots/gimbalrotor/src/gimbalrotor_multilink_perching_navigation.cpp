@@ -1002,6 +1002,7 @@ bool GimbalrotorMultilinkPerchingNavigator::applyPerchingReference(double pitch_
     rezero_stable_since_ = 0;
     reference_velocity_.setZero(); reference_acceleration_.setZero(); reference_omega_.setZero(); reference_angular_acceleration_.setZero();
     applied_rate_.setZero(); applied_acceleration_.setZero(); nominal_rate_.setZero(); body_rate_ = 0;
+    applied_offset_rate_ = 0;
     status_ = fresh ? "coordinated reference rejected; holding last feasible output" : "waiting for motion feedback";
   }
   proposal_valid_ = false;

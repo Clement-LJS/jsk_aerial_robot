@@ -27,8 +27,6 @@ void GimbalrotorPerchingAdmittanceController::initialize(ros::NodeHandle nh, ros
   pn.param("equilibrium_wrench_required_samples", equilibrium_wrench_required_samples_, equilibrium_wrench_required_samples_);
   pn.param("perching_pitch_torque_sign", perching_pitch_torque_sign_, perching_pitch_torque_sign_);
   pn.param("pitch_acceleration_limit", pitch_acceleration_limit_, pitch_acceleration_limit_);
-  nh_.param("navigation/perching/dynamics/observer_gain", observer_gain_, observer_gain_);
-  nh_.param("navigation/perching/observer_max_interval", observer_max_interval_, observer_max_interval_);
   nh_.param("navigation/perching/feedback_sync_tolerance", synchronization_tolerance_, synchronization_tolerance_);
   world_ = perching_navigator_->worldFrame();
   nh_.param<std::string>("navigation/perching_pivot_wrench_frame_id", pivot_frame_, "perching_locked_wrench");
@@ -63,12 +61,15 @@ void GimbalrotorPerchingAdmittanceController::initialize(ros::NodeHandle nh, ros
   generalized_valid_pub_ = nh_.advertise<std_msgs::Bool>(perching_navigator_->prefix() + "/generalized_external_load_valid", 1);
   const double positive[] = {admittance_config_.rot_virtual_inertia.y(), admittance_config_.rot_damping.y(),
       admittance_config_.rot_stiffness.y(), admittance_config_.torque_limit.y(), admittance_config_.angle_offset_limit.y(),
-      admittance_config_.angular_vel_offset_limit.y(), contact_torque_filter_alpha_, pitch_acceleration_limit_, observer_gain_, observer_max_interval_};
+      admittance_config_.angular_vel_offset_limit.y(), admittance_config_.torque_lpf_alpha, contact_torque_filter_alpha_,
+      pitch_acceleration_limit_, synchronization_tolerance_, external_wrench_timeout_, recovery_angle_epsilon_, recovery_rate_epsilon_};
   for(double value : positive) if(!std::isfinite(value) || value <= 0) throw std::invalid_argument("invalid perching admittance configuration");
-  if(contact_torque_filter_alpha_ > 1 || equilibrium_wrench_required_samples_ < 1 ||
-      !std::isfinite(contact_off_threshold_) || contact_off_threshold_ < 0 || contact_on_threshold_ <= contact_off_threshold_ ||
+  if(contact_torque_filter_alpha_ > 1 || admittance_config_.torque_lpf_alpha > 1 || equilibrium_wrench_required_samples_ < 1 ||
+      !std::isfinite(contact_on_threshold_) || !std::isfinite(contact_off_threshold_) ||
+      contact_off_threshold_ < 0 || contact_on_threshold_ <= contact_off_threshold_ ||
       !std::isfinite(contact_on_duration_) || contact_on_duration_ < 0 || !std::isfinite(contact_off_duration_) || contact_off_duration_ < 0 ||
-      std::abs(perching_pitch_torque_sign_) != 1 || std::abs(admittance_config_.torque_ref.y()) > 1e-9)
+      std::abs(perching_pitch_torque_sign_) != 1 || !std::isfinite(admittance_config_.torque_ref.y()) ||
+      std::abs(admittance_config_.torque_ref.y()) > 1e-9)
     throw std::invalid_argument("invalid perching contact/tare parameters");
 }
 
@@ -110,48 +111,63 @@ void GimbalrotorPerchingAdmittanceController::perchingAdmittanceEnableCallback(c
   reason_ = "armed; waiting for contact";
 }
 
+bool GimbalrotorPerchingAdmittanceController::synchronizedExternalWrench(
+    ExternalWrenchSnapshot& wrench, aerial_robot_navigation::GimbalrotorPerchingNavigator::Sample& measured)
+{
+  wrench = getExternalWrenchSnapshot();
+  const double now = ros::Time::now().toSec();
+  const double stamp = wrench.measurement_stamp.toSec();
+  const auto session = perching_navigator_->perchingSession();
+  // The existing estimator publishes world axes, moment about CoG, with IMU time.
+  // A configured frame name alone cannot establish another source's origin.
+  reason_ = "awaiting fresh world/CoG external wrench and synchronized pose";
+  if(session.mode == perching_geometry::Mode::DISABLED || session.lock_stamp.isZero() ||
+      session.mode != session_.mode || session.lock_stamp != session_.lock_stamp || !perching_model_->locked() ||
+      !wrench.available || wrench.measurement_stamp.isZero() || wrench.receive_stamp.isZero() ||
+      wrench.frame_id != world_ || external_wrench_frame_ != world_ || !wrench.raw_wrench.allFinite() ||
+      stamp <= session.lock_stamp.toSec() || stamp < last_load_stamp_ ||
+      now - wrench.receive_stamp.toSec() < 0 || now - wrench.receive_stamp.toSec() > external_wrench_timeout_ ||
+      now - stamp < -.02 || now - stamp > external_wrench_timeout_) return false;
+  return perching_navigator_->observation(measured) && measured.stamp >= session.lock_stamp.toSec() &&
+      std::abs(measured.stamp - stamp) <= synchronization_tolerance_ &&
+      measured.q.size() == static_cast<int>(perching_model_->coordinates().size()) && measured.q.allFinite() &&
+      measured.rate.allFinite() && perching_geometry::poseValid(measured.body);
+}
+
 bool GimbalrotorPerchingAdmittanceController::externalLoad(Eigen::VectorXd& load, Eigen::VectorXd& tangent, double& stamp)
 {
-  const auto sample = getExternalWrenchSnapshot();
-  const double now = ros::Time::now().toSec();
-  const double measurement = sample.measurement_stamp.toSec();
-  // PoseLinearController publishes world axes, moment about CoG, with IMU time.
-  // Do not reinterpret another origin/frame through a parameter-only transform.
-  reason_ = "awaiting fresh world/CoG external wrench and synchronized pose";
-  if(sample.available && !sample.measurement_stamp.isZero() && sample.frame_id == world_ && external_wrench_frame_ == world_ &&
-      measurement >= session_.lock_stamp.toSec() && measurement >= last_load_stamp_ &&
-      now - sample.receive_stamp.toSec() >= 0 && now - sample.receive_stamp.toSec() <= external_wrench_timeout_ &&
-      now - measurement >= -.02 && now - measurement <= external_wrench_timeout_)
+  ExternalWrenchSnapshot sample;
+  aerial_robot_navigation::GimbalrotorPerchingNavigator::Sample measured;
+  if(!synchronizedExternalWrench(sample, measured)) return false;
+  const auto& geometry = perching_navigator_->rigidLock();
+  GimbalrotorPerchingModel::Pose contact;
+  Eigen::Vector3d cog_body;
+  if(!geometry.valid || !perching_model_->bodyContact(measured.q, contact, cog_body)) return false;
+  const Eigen::Vector3d pivot = tfVector3ToEigen(geometry.pivot);
+  const Eigen::Vector3d cog = measured.body * cog_body;
+  load = sample.raw_wrench;
+  load.tail<3>() = perching_dynamics::shiftMoment(load.tail<3>(), cog - pivot, load.head<3>());
+  tangent = Eigen::VectorXd::Zero(6);
+  tangent.tail<3>() = tfVector3ToEigen(geometry.axis);
+  stamp = sample.measurement_stamp.toSec();
+  const bool raw_valid = load.allFinite() && tangent.allFinite();
+  if(raw_valid && stamp > last_load_stamp_)
   {
-    aerial_robot_navigation::GimbalrotorPerchingNavigator::Sample measured;
-    if(!perching_model_->locked() || !perching_navigator_->observation(measured) ||
-       std::abs(measured.stamp - measurement) > synchronization_tolerance_) return false;
-    const auto& geometry = perching_navigator_->rigidLock();
-    const Eigen::Vector3d pivot = tfVector3ToEigen(geometry.pivot);
-    const Eigen::Vector3d cog = tfVector3ToEigen(estimator_->getPos(Frame::COG, estimate_mode_));
-    load = sample.raw_wrench;
-    load.tail<3>() = perching_dynamics::shiftMoment(load.tail<3>(), cog - pivot, load.head<3>());
-    tangent = Eigen::VectorXd::Zero(6); tangent.tail<3>() = tfVector3ToEigen(geometry.axis);
-    stamp = measurement; const bool raw_valid = load.allFinite() && tangent.allFinite();
-    if(raw_valid && stamp > last_load_stamp_)
-    {
-      geometry_msgs::WrenchStamped raw;
-      raw.header.stamp.fromSec(stamp); raw.header.frame_id = pivot_frame_;
-      Eigen::Matrix3d rotation;
-      rotation.col(0) = tfVector3ToEigen(geometry.radial().normalized());
-      rotation.col(1) = tfVector3ToEigen(geometry.axis);
-      rotation.col(2) = rotation.col(0).cross(rotation.col(1));
-      const Eigen::Matrix<double, 6, 1> wrench = perching_dynamics::rotateWrench(rotation.transpose(), load);
-      raw.wrench.force.x = wrench[0]; raw.wrench.force.y = wrench[1]; raw.wrench.force.z = wrench[2];
-      raw.wrench.torque.x = wrench[3]; raw.wrench.torque.y = wrench[4]; raw.wrench.torque.z = wrench[5];
-      const Eigen::Quaterniond orientation(rotation);
-      pivot_tf_.sendTransform(tf::StampedTransform(tf::Transform(tf::Quaternion(orientation.x(), orientation.y(), orientation.z(), orientation.w()), geometry.pivot),
-                                                   raw.header.stamp, world_, pivot_frame_));
-      pivot_wrench_pub_.publish(raw);
-    }
-    return raw_valid;
+    geometry_msgs::WrenchStamped raw;
+    raw.header.stamp.fromSec(stamp); raw.header.frame_id = pivot_frame_;
+    Eigen::Matrix3d rotation;
+    rotation.col(0) = tfVector3ToEigen(geometry.radial().normalized());
+    rotation.col(1) = tfVector3ToEigen(geometry.axis);
+    rotation.col(2) = rotation.col(0).cross(rotation.col(1));
+    const Eigen::Matrix<double, 6, 1> wrench = perching_dynamics::rotateWrench(rotation.transpose(), load);
+    raw.wrench.force.x = wrench[0]; raw.wrench.force.y = wrench[1]; raw.wrench.force.z = wrench[2];
+    raw.wrench.torque.x = wrench[3]; raw.wrench.torque.y = wrench[4]; raw.wrench.torque.z = wrench[5];
+    const Eigen::Quaterniond orientation(rotation);
+    pivot_tf_.sendTransform(tf::StampedTransform(tf::Transform(tf::Quaternion(orientation.x(), orientation.y(), orientation.z(), orientation.w()), geometry.pivot),
+                                                 raw.header.stamp, world_, pivot_frame_));
+    pivot_wrench_pub_.publish(raw);
   }
-  return false;
+  return raw_valid;
 }
 
 void GimbalrotorPerchingAdmittanceController::preparePerchingAdmittanceInput()
@@ -161,13 +177,15 @@ void GimbalrotorPerchingAdmittanceController::preparePerchingAdmittanceInput()
   double stamp = 0;
   const bool raw_valid = externalLoad(load, tangent, stamp);
   const bool fresh_load = raw_valid && stamp > last_load_stamp_;
-  std_msgs::Bool valid; valid.data = raw_valid; generalized_valid_pub_.publish(valid);
+  // This live task load is not an n-dimensional generalized momentum residual.
+  std_msgs::Bool valid; valid.data = false; generalized_valid_pub_.publish(valid);
   const double dt = previous_contact_gate_time_.isZero() ? 0 : stamp - previous_contact_gate_time_.toSec();
   if(fresh_load) previous_contact_gate_time_.fromSec(stamp);
+  if(!raw_valid) previous_contact_gate_time_ = ros::Time();
   if(raw_valid)
   {
     last_load_stamp_ = std::max(last_load_stamp_, stamp);
-    if(!perching_admittance_enabled_ && !equilibrium_wrench_ready_ && stamp > last_tare_stamp_ &&
+    if(fresh_load && !perching_admittance_enabled_ && !equilibrium_wrench_ready_ && stamp > last_tare_stamp_ &&
         std::abs(admittance_output_.angle_offset_compliance.y()) <= recovery_angle_epsilon_ &&
         std::abs(admittance_output_.angular_vel_offset_compliance.y()) <= recovery_rate_epsilon_ &&
         perching_navigator_->nominalHeld() && perching_navigator_->trackingHeld() && perching_navigator_->motionFeedbackValid())
@@ -223,6 +241,8 @@ void GimbalrotorPerchingAdmittanceController::controlCore()
     session_ = session;
     resetCalibration();
     admittance_output_ = AdmittanceCoreOutput();
+    admittance_output_.valid = true;
+    prev_admittance_time_ = ros::Time::now();
     last_load_stamp_ = last_tare_stamp_ = 0;
     pid_controllers_.at(PITCH).reset();
   }
@@ -244,7 +264,7 @@ void GimbalrotorPerchingAdmittanceController::controlCore()
   {
     admittance_core_.reset();
     pitch_torque_lpf_ = 0;
-    prev_admittance_time_ = ros::Time::now(); reset_requested_ = false;
+    reset_requested_ = false;
   }
   preparePerchingAdmittanceInput();
   admittance_enabled_ = perching_admittance_enabled_ && equilibrium_wrench_ready_;
@@ -271,10 +291,12 @@ void GimbalrotorPerchingAdmittanceController::preparePerchingReference()
 {
   if(!perching_active_)
   { GimbalrotorController::preparePerchingReference(); return; }
-  applyAdmittanceOutputToNavigator(navigator_->getTargetPos(), navigator_->getTargetRPY(), admittance_output_);
+  output_accepted_ = false;
+  if(admittance_output_.valid)
+    applyAdmittanceOutputToNavigator(navigator_->getTargetPos(), navigator_->getTargetRPY(), admittance_output_);
   if(!output_accepted_)
   {
-    // The navigator held the complete accepted reference, including its offset.
+    // Retain the complete accepted reference if either scalar or mechanism limits reject it.
     admittance_output_.angle_offset_compliance.y() = perching_navigator_->appliedPitchOffset();
     admittance_output_.angular_vel_offset_compliance.setZero();
     admittance_output_.angular_acc_offset_compliance.setZero();
@@ -302,13 +324,23 @@ void GimbalrotorPerchingAdmittanceController::updateAdmittance()
   const double limit = std::min(pitch_acceleration_limit_, perching_navigator_->pitchAccelerationLimit());
   acceleration = std::clamp(acceleration, -limit, limit);
   const double rate_limit = std::min(config.angular_vel_offset_limit.y(), perching_navigator_->pitchRateLimit());
-  rate = std::clamp(rate + acceleration * dt, -rate_limit, rate_limit);
+  // Reserve braking distance before the hard angle limit. The dt term also
+  // accounts for this semi-implicit step: dt*v + v*v/(2*limit) <= distance.
+  const double angle_limit = config.angle_offset_limit.y();
+  const double step_rate = limit * dt;
+  const double lower_rate = -std::min(rate_limit, std::sqrt(step_rate * step_rate +
+      2 * limit * std::max(0.0, angle_limit + pitch_offset)) - step_rate);
+  const double upper_rate = std::min(rate_limit, std::sqrt(step_rate * step_rate +
+      2 * limit * std::max(0.0, angle_limit - pitch_offset)) - step_rate);
+  rate = std::clamp(rate + acceleration * dt, lower_rate, upper_rate);
   pitch_offset = std::clamp(pitch_offset + rate * dt, -config.angle_offset_limit.y(), config.angle_offset_limit.y());
   rate = (pitch_offset - previous_offset) / dt;
   acceleration = (rate - previous_rate) / dt;
   admittance_output_.angular_acc_offset_compliance.y() = acceleration;
   admittance_output_.torque_compliance.y() = torque;
-  admittance_output_.valid = std::isfinite(pitch_offset) && std::isfinite(rate) && std::isfinite(acceleration);
+  // A hard clamp or a changed time step must not silently exceed acceleration.
+  admittance_output_.valid = std::isfinite(pitch_offset) && std::isfinite(rate) && std::isfinite(acceleration) &&
+      std::abs(pitch_offset) <= angle_limit && std::abs(rate) <= rate_limit + 1e-9 && std::abs(acceleration) <= limit + 1e-9;
 }
 
 void GimbalrotorPerchingAdmittanceController::applyAdmittanceOutputToNavigator(
@@ -334,6 +366,9 @@ void GimbalrotorPerchingAdmittanceController::publishContactAdmittanceDiagnostic
   value("tare_generation", tare_generation_); value("tare_request_sequence", tare_request_sequence_); value("enable_request_sequence", enable_request_sequence_);
   value("reference_accepted", output_accepted_);
   value("task_torque_valid", input_valid_); value("admittance_status", reason_);
+  value("task_load_source", perching_navigator_->articulated() ? "world/CoG wrench: articulated virtual work" :
+      "world/CoG wrench: locked pivot hinge projection");
+  value("generalized_observer_status", "unavailable: verified effective wrench and calibrated joint torque required");
   value("offset_rad", admittance_output_.angle_offset_compliance.y()); value("offset_rate_rad_s", admittance_output_.angular_vel_offset_compliance.y());
   value("offset_acceleration_rad_s2", admittance_output_.angular_acc_offset_compliance.y());
   perching_navigator_->setAdmittanceDiagnostics(values);

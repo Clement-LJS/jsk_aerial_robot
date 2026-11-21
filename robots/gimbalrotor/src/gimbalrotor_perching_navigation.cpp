@@ -185,6 +185,7 @@ void GimbalrotorPerchingNavigator::update()
   {
     onClockRewind();
     resetPerchingLock();
+    last_lock_stamp_ = ros::Time();
   }
   cycle_dt_ = elapsed > 0 && elapsed <= max_gap_ ? std::min(elapsed, max_step_) : 0;
   // Reference acceptance is called from the active controller cycle, after its
@@ -900,7 +901,7 @@ void GimbalrotorPerchingNavigator::navigationTargetConflict(const char* source)
 
 bool GimbalrotorPerchingNavigator::nominalHeld() const
 {
-  return !velocity_active_;
+  return !velocity_active_ && !rigid_command_pending_;
 }
 
 bool GimbalrotorPerchingNavigator::trackingHeld() const

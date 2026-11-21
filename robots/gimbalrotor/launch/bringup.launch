@@ -28,7 +28,7 @@
   <arg name="multilink_perching" default="false" />
   <arg name="pitch_only_perching" default="false" />
   <arg name="roll_yaw_perching" default="false" />
-  <!-- Reference admittance uses ordinary PID; multilink requires effective wrench telemetry. -->
+  <!-- Reference admittance uses the existing CoG wrench estimator and ordinary PID. -->
   <arg name="perching_admittance" default="false" />
   <arg name="multilink_secondary" default="roll" />
   <arg name="pitch_only_model_options" default="" />

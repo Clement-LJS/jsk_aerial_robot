@@ -1,11 +1,9 @@
 // -*- mode: c++ -*-
 #pragma once
 #include <gimbalrotor/control/gimbalrotor_admittance_controller.h>
-#include <gimbalrotor/control/gimbalrotor_multilink_perching_observer.h>
 #include <gimbalrotor/gimbalrotor_perching_navigation.h>
 #include <gimbalrotor/model/gimbalrotor_perching_model.h>
 #include <std_msgs/Empty.h>
-#include <deque>
 #include <tf/transform_broadcaster.h>
 
 namespace aerial_robot_control
@@ -24,6 +22,7 @@ protected:
   const char* controllerName() const override { return "GimbalrotorPerchingAdmittanceController"; }
   void preparePerchingAdmittanceInput();
   void updateAdmittance();
+  bool synchronizedExternalWrench(ExternalWrenchSnapshot&, aerial_robot_navigation::GimbalrotorPerchingNavigator::Sample&);
   virtual bool externalLoad(Eigen::VectorXd&, Eigen::VectorXd&, double&);
   boost::shared_ptr<GimbalrotorPerchingModel> perching_model_;
   void updateContactGate(double residual_pitch_torque, double dt);
@@ -51,7 +50,7 @@ protected:
   double contact_on_duration_ = .1, contact_off_duration_ = .2;
   double recovery_angle_epsilon_ = .00174533, recovery_rate_epsilon_ = .01;
   double residual_pitch_torque_raw_ = 0, residual_pitch_torque_filtered_ = 0, perching_pitch_torque_sign_ = 1;
-  double pitch_acceleration_limit_ = .1, observer_gain_ = 10, observer_max_interval_ = .15, synchronization_tolerance_ = .05;
+  double pitch_acceleration_limit_ = .1, synchronization_tolerance_ = .05;
   ros::Time previous_contact_gate_time_;
   Eigen::Matrix<double, 6, 1> prepared_perching_admittance_wrench_world_ = Eigen::Matrix<double, 6, 1>::Zero();
   tf::TransformBroadcaster pivot_tf_;
