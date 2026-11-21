@@ -27,6 +27,24 @@ void GimbalrotorMultilinkPerchingAdmittanceController::initialize(ros::NodeHandl
   command_wrench_sub_ = nh_.subscribe(topic, 64, &GimbalrotorMultilinkPerchingAdmittanceController::commandWrenchCallback, this);
 }
 
+void GimbalrotorMultilinkPerchingAdmittanceController::reset()
+{
+  std::lock_guard<std::recursive_mutex> lock(perching_state_mutex_);
+  GimbalrotorPerchingAdmittanceController::reset();
+  ++observation_epoch_;
+  observation_worker_.cancel();
+  observation_filter_.reset();
+  observer_.reset();
+  observer_lock_stamp_ = ros::Time();
+  observation_stamp_ = published_observer_stamp_ = 0;
+  observation_model_.reset();
+  observation_result_.reset();
+  {
+    std::lock_guard<std::mutex> command_lock(command_mutex_);
+    command_history_.clear();
+  }
+}
+
 void GimbalrotorMultilinkPerchingAdmittanceController::commandWrenchCallback(const ros::MessageEvent<geometry_msgs::WrenchStamped const>& event)
 {
   if(event.getPublisherName() != ros::this_node::getName()) return;
@@ -52,22 +70,52 @@ bool GimbalrotorMultilinkPerchingAdmittanceController::externalLoad(Eigen::Vecto
   const double now = ros::Time::now().toSec();
   reason_ = "awaiting locked articulated model";
   if(session.lock_stamp.isZero() || !articulated_model_->locked()) return false;
-  if(observer_lock_stamp_ != session.lock_stamp || observation_stamp_ > now + future_tolerance_)
+  if(!observation_model_ || observer_lock_stamp_ != session.lock_stamp || observation_stamp_ > now + future_tolerance_)
   {
+    ++observation_epoch_;
+    observation_worker_.cancel();
     observation_filter_.reset();
     observer_.reset();
+    observer_lock_stamp_ = ros::Time();
     observation_stamp_ = published_observer_stamp_ = 0;
+    observation_model_.reset();
+    observation_result_.reset();
     {
       std::lock_guard<std::mutex> lock(command_mutex_);
       command_history_.clear();
     }
-    if(!articulated_model_->dynamics(dynamics_, reason_)) return false;
+    auto model = std::make_shared<perching_dynamics::MultilinkModel>();
+    if(!articulated_model_->dynamics(*model, reason_)) return false;
+    observation_model_ = std::move(model);
     observer_lock_stamp_ = session.lock_stamp;
+  }
+  const auto fresh = [this](const ObservationResult& result)
+  {
+    const double now = ros::Time::now().toSec();
+    const double receipt_age = ros::SteadyTime::now().toSec() - result.receipt;
+    return std::isfinite(result.stamp) && result.stamp > 0 && result.command_stamp > 0 &&
+        result.command_stamp <= result.stamp && now - result.stamp >= -future_tolerance_ &&
+        now - result.stamp <= feedback_timeout_ && now - result.command_stamp <= feedback_timeout_ &&
+        result.receipt > 0 && receipt_age >= 0 && (ros::Time::isSimTime() || receipt_age <= feedback_timeout_);
+  };
+  // Consume before submitting, so continuous input cannot starve completed work.
+  if(auto result = observation_worker_.take())
+  {
+    observation_result_.reset();
+    reason_ = result->ok ? "stale/obsolete articulated observer result" : result->reason;
+    if(!result->ok || result->lock_stamp != session.lock_stamp || result->epoch != observation_epoch_ ||
+        result->stamp < session.lock_stamp.toSec() || result->stamp <= observer_.stamp() || !fresh(*result)) return false;
+    reason_ = "invalid articulated momentum result";
+    if(result->q.size() != static_cast<int>(observation_model_->coordinates().size()) || !result->q.allFinite() ||
+        result->evaluation.momentum.size() != result->q.size() || result->evaluation.predicted_rate.size() != result->q.size() ||
+        !result->evaluation.momentum.allFinite() || !result->evaluation.predicted_rate.allFinite()) return false;
+    if(observer_.observe(result->evaluation.momentum, result->evaluation.predicted_rate, result->stamp,
+                         observer_gain_, observer_max_interval_)) observation_result_ = std::move(result);
   }
   aerial_robot_navigation::GimbalrotorPerchingNavigator::Sample sample;
   reason_ = "awaiting fresh synchronized measured body/joints";
   if(!articulated_navigator_->observation(sample) || sample.stamp < session.lock_stamp.toSec() ||
-      sample.stamp < observation_stamp_ || sample.q.size() != static_cast<int>(dynamics_.coordinates().size()) ||
+      sample.stamp < observation_stamp_ || sample.q.size() != static_cast<int>(observation_model_->coordinates().size()) ||
       !sample.q.allFinite() || !sample.rate.allFinite() || !sample.omega.allFinite()) return false;
   reason_ = "missing/nonfinite synchronized nominal joint effort";
   if(!sample.effort_valid || sample.effort.size() != sample.q.size() || !sample.effort.allFinite()) return false;
@@ -88,6 +136,10 @@ bool GimbalrotorMultilinkPerchingAdmittanceController::externalLoad(Eigen::Vecto
     if(!observation_filter_.observe(sample.q, sample.body.linear(), sample.omega, sample.effort,
                                     command.wrench, sample.stamp, observer_max_interval_))
     {
+      // A derivative warmup/gap retires old work, without touching completed tare.
+      ++observation_epoch_;
+      observation_worker_.cancel();
+      observation_result_.reset();
       observer_.reset("observer warmup: measured derivatives settling after initialization/gap");
       reason_ = observer_.reason();
       return false;
@@ -95,22 +147,31 @@ bool GimbalrotorMultilinkPerchingAdmittanceController::externalLoad(Eigen::Vecto
     GimbalrotorPerchingModel::State state;
     reason_ = "invalid filtered articulated geometry";
     if(!articulated_model_->evaluate(observation_filter_.q, state))
-    { observer_.reset(reason_); return false; }
+    { observation_result_.reset(); return false; }
     const Eigen::Vector3d cog_offset_body = state.body.linear().transpose() * (state.cog.translation() - state.body.translation());
-    perching_dynamics::MultilinkModel::Evaluation evaluation;
-    // evaluate shifts this CoG command to the body material origin exactly once.
-    if(!dynamics_.evaluate(observation_filter_.q, observation_filter_.rate, observation_filter_.effort,
-                          observation_filter_.wrench.head<3>(), observation_filter_.wrench.tail<3>(),
-                          cog_offset_body, evaluation, reason_))
-    { observer_.reset(reason_); return false; }
-    observer_.observe(evaluation.momentum, evaluation.predicted_rate, sample.stamp, observer_gain_, observer_max_interval_);
+    ObservationResult input;
+    input.lock_stamp = session.lock_stamp;
+    input.epoch = observation_epoch_;
+    input.stamp = sample.stamp;
+    input.command_stamp = command.stamp;
+    input.receipt = std::min(sample.receipt, command.receipt);
+    input.q = observation_filter_.q;
+    observation_worker_.submit([input = std::move(input), model = observation_model_, rate = observation_filter_.rate,
+                                effort = observation_filter_.effort, wrench = observation_filter_.wrench, cog_offset_body]() mutable
+    {
+      // Modeled world/CoG actuation; evaluate shifts its moment to the body once.
+      input.ok = model->evaluate(input.q, rate, effort, wrench.head<3>(), wrench.tail<3>(), cog_offset_body,
+                                 input.evaluation, input.reason);
+      return std::move(input);
+    });
   }
   reason_ = observer_.reason();
-  if(!observer_.ready() || observer_.stamp() != sample.stamp) return false;
-  // Model evaluation must not turn an admitted measurement into a stale output.
+  if(!observation_result_ || !observer_.ready() || observer_.stamp() != observation_result_->stamp) return false;
+  const bool tangent_valid = articulated_navigator_->pitchTangent(observation_result_->q, articulated_navigator_->movingCoordinates(), tangent) &&
+      tangent.size() == observer_.load().size() && tangent.allFinite();
+  // Recheck after live geometry work, before publishing or using this residual.
   reason_ = "stale articulated observer result";
-  if(ros::Time::now().toSec() - sample.stamp > feedback_timeout_ ||
-      (!ros::Time::isSimTime() && ros::SteadyTime::now().toSec() - command.receipt > feedback_timeout_)) return false;
+  if(!fresh(*observation_result_)) return false;
   raw_load_valid_ = true;
   load = observer_.load();
   stamp = observer_.stamp();
@@ -118,14 +179,13 @@ bool GimbalrotorMultilinkPerchingAdmittanceController::externalLoad(Eigen::Vecto
   {
     sensor_msgs::JointState msg;
     msg.header.stamp.fromSec(stamp);
-    msg.name = dynamics_.coordinates();
+    msg.name = observation_model_->coordinates();
     msg.effort.assign(load.data(), load.data() + load.size());
     generalized_load_pub_.publish(msg);
     published_observer_stamp_ = stamp;
   }
   reason_ = "body-local +Y pitch tangent unavailable; generalized observer ready";
-  if(!articulated_navigator_->pitchTangent(observation_filter_.q, articulated_navigator_->movingCoordinates(), tangent) ||
-      tangent.size() != load.size() || !tangent.allFinite()) return false;
+  if(!tangent_valid) return false;
   reason_ = "articulated momentum observer ready (commanded actuation estimate)";
   return true;
 }

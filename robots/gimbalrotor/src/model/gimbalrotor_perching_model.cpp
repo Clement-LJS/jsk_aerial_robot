@@ -1,10 +1,88 @@
 #include <gimbalrotor/model/gimbalrotor_perching_model.h>
 #include <Eigen/SVD>
+#include <kdl/treefksolverpos_recursive.hpp>
+#include <memory>
 #include <set>
 #include <pluginlib/class_list_macros.h>
 
 using namespace perching_geometry;
 using perching_dynamics::MultilinkModel;
+
+namespace
+{
+// Physical lock data only; no live model, navigator or FK cache ownership.
+struct LockedGeometry
+{
+  KDL::Tree tree;
+  std::map<std::string, uint32_t> joint_indices;
+  KDL::JntArray held_joints;
+  std::vector<std::string> coordinates, inertia_links;
+  std::vector<Eigen::Vector3d> centers;
+  std::vector<MultilinkModel::Link> links;
+  GimbalrotorPerchingModel::Pose pivot;
+  Eigen::Matrix3d cog_to_body;
+  double mass = 0;
+  std::string body_name, marker_name;
+
+  bool evaluate(const Eigen::VectorXd& q, GimbalrotorPerchingModel::State& out) const
+  {
+    if(q.size() != static_cast<int>(coordinates.size()) || !q.allFinite()) return false;
+    KDL::JntArray joints = held_joints;
+    for(int i = 1; i < q.size(); ++i) joints(joint_indices.at(coordinates[i])) = q[i];
+    // KDL's solver owns a tree copy, isolating even Joint::pose's mutable cache.
+    KDL::TreeFkSolverPos_recursive fk(tree);
+    KDL::Frame root_marker, root_body;
+    if(fk.JntToCart(joints, root_marker, marker_name) < 0 || fk.JntToCart(joints, root_body, body_name) < 0) return false;
+    Eigen::Isometry3d rotation = Eigen::Isometry3d::Identity();
+    rotation.linear() = expSO3(Eigen::Vector3d::UnitY() * q[0]);
+    const Eigen::Isometry3d world_root = pivot * rotation * fromKdl(root_marker).inverse();
+    out.body = world_root * fromKdl(root_body);
+    out.centers.resize(links.size());
+    Eigen::Vector3d center = Eigen::Vector3d::Zero();
+    for(std::size_t i = 0; i < links.size(); ++i)
+    {
+      KDL::Frame root_link;
+      if(fk.JntToCart(joints, root_link, inertia_links[i]) < 0) return false;
+      out.centers[i] = world_root * fromKdl(root_link);
+      out.centers[i].translation() = out.centers[i] * centers[i];
+      center += links[i].mass * out.centers[i].translation();
+    }
+    out.cog = Eigen::Isometry3d::Identity();
+    out.cog.translation() = center / mass;
+    out.cog.linear() = out.body.linear() * cog_to_body;
+    return poseValid(out.body) && poseValid(out.cog);
+  }
+
+  bool differential(const Eigen::VectorXd& q, MultilinkModel::GeometryState& out) const
+  {
+    GimbalrotorPerchingModel::State state;
+    if(!evaluate(q, state)) return false;
+    out.body = state.body;
+    out.centers = state.centers;
+    out.body_linear.resize(3, q.size());
+    out.body_angular.resize(3, q.size());
+    out.linear.assign(links.size(), Eigen::MatrixXd(3, q.size()));
+    out.angular = out.linear;
+    const double h = 1e-5;
+    for(int j = 0; j < q.size(); ++j)
+    {
+      Eigen::VectorXd plus = q, minus = q;
+      plus[j] += h;
+      minus[j] -= h;
+      GimbalrotorPerchingModel::State p, m;
+      if(!evaluate(plus, p) || !evaluate(minus, m)) return false;
+      out.body_linear.col(j) = (p.body.translation() - m.body.translation()) / (2 * h);
+      out.body_angular.col(j) = logSO3(p.body.linear() * m.body.linear().transpose()) / (2 * h);
+      for(std::size_t i = 0; i < links.size(); ++i)
+      {
+        out.linear[i].col(j) = (p.centers[i].translation() - m.centers[i].translation()) / (2 * h);
+        out.angular[i].col(j) = logSO3(p.centers[i].linear() * m.centers[i].linear().transpose()) / (2 * h);
+      }
+    }
+    return true;
+  }
+};
+}
 
 bool GimbalrotorPerchingModel::configure(const std::vector<std::string>& active, std::string& reason)
 {
@@ -227,9 +305,26 @@ bool GimbalrotorPerchingModel::allowed(const Vector& q, double max_tilt, double 
 bool GimbalrotorPerchingModel::dynamics(MultilinkModel& result, std::string& reason) const
 {
   if(!locked_) { reason = "no hinge lock"; return false; }
-  // Callers hold the navigator session mutex throughout evaluation/relock.
+  // The caller holds the session mutex; protect live KDL caches while copying.
+  auto snapshot = std::make_shared<LockedGeometry>();
+  {
+    std::lock_guard<std::mutex> lock(model_update_mutex_);
+    snapshot->tree = getTree();
+    snapshot->joint_indices = getJointIndexMap(); // The map uses KDL TreeElement::q_nr.
+  }
+  snapshot->held_joints = held_joints_;
+  snapshot->coordinates = coordinates_;
+  snapshot->inertia_links = inertia_links_;
+  snapshot->centers = centers_;
+  snapshot->links = links_;
+  snapshot->pivot = pivot_;
+  snapshot->cog_to_body = cog_to_body_;
+  snapshot->mass = mass_;
+  snapshot->body_name = getBaselinkName();
+  snapshot->marker_name = "perching_pivot";
+  const std::shared_ptr<const LockedGeometry> geometry = std::move(snapshot);
   return result.configure(coordinates_, links_, {}, reason,
-      [this](const Vector& q, MultilinkModel::GeometryState& state) { return differential(q, state); });
+      [geometry](const Vector& q, MultilinkModel::GeometryState& state) { return geometry->differential(q, state); });
 }
 
 bool GimbalrotorPerchingModel::effort(const Vector& q, const Vector& rate, const Vector& acceleration,

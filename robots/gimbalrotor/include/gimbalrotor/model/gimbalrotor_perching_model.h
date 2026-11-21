@@ -24,8 +24,7 @@ public:
   // Return world poses at each link CoM, plus the chosen body reference B.
   using Geometry = std::function<bool(const Eigen::VectorXd&, Poses&, Eigen::Isometry3d&)>;
   // Optional differential geometry, all Jacobians world-expressed at their own
-  // material origins/CoMs. The caller serializes evaluation and lock/snapshot
-  // updates through the shared navigator session mutex.
+  // material origins/CoMs. A background evaluator must own immutable geometry.
   struct GeometryState
   {
     Poses centers;

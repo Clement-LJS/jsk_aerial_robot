@@ -2,7 +2,15 @@
 #pragma once
 #include <Eigen/Core>
 #include <Eigen/Geometry>
+#include <atomic>
+#include <condition_variable>
+#include <exception>
+#include <functional>
+#include <memory>
+#include <mutex>
 #include <string>
+#include <thread>
+#include <utility>
 
 namespace perching_dynamics
 {
@@ -45,5 +53,68 @@ private:
   double stamp_ = 0;
   bool ready_ = false;
   std::string reason_ = "awaiting first attached sample";
+};
+
+// One pending/running job and one unread result; control ticks never wait.
+template<class Result> class Worker
+{
+public:
+  Worker() : thread_([this]() { run(); }) {}
+  ~Worker()
+  {
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      quit_ = true;
+    }
+    wake_.notify_one();
+    thread_.join();
+  }
+  bool submit(std::function<Result()> job)
+  {
+    std::unique_lock<std::mutex> lock(mutex_, std::try_to_lock);
+    if(!lock.owns_lock() || busy_ || result_ || quit_) return false;
+    job_ = std::move(job);
+    job_generation_ = generation_.load();
+    busy_ = true;
+    wake_.notify_one();
+    return true;
+  }
+  std::unique_ptr<Result> take()
+  {
+    std::unique_lock<std::mutex> lock(mutex_, std::try_to_lock);
+    if(!lock.owns_lock() || busy_) return {};
+    if(job_generation_ != generation_.load()) result_.reset();
+    return std::move(result_);
+  }
+  void cancel() { ++generation_; }
+private:
+  void run()
+  {
+    std::unique_lock<std::mutex> lock(mutex_);
+    while(true)
+    {
+      wake_.wait(lock, [this]() { return quit_ || static_cast<bool>(job_); });
+      if(quit_) return;
+      std::function<Result()> job;
+      job.swap(job_);
+      const auto generation = job_generation_;
+      lock.unlock();
+      auto result = std::make_unique<Result>();
+      try { *result = job(); }
+      catch(const std::exception& error) { result->ok = false; result->reason = error.what(); }
+      catch(...) { result->ok = false; result->reason = "unknown observation worker exception"; }
+      lock.lock();
+      if(!quit_ && generation == generation_.load()) result_ = std::move(result);
+      busy_ = false;
+    }
+  }
+  std::mutex mutex_;
+  std::condition_variable wake_;
+  std::atomic<std::size_t> generation_{0};
+  std::size_t job_generation_ = 0;
+  bool busy_ = false, quit_ = false;
+  std::function<Result()> job_;
+  std::unique_ptr<Result> result_;
+  std::thread thread_;
 };
 } // namespace perching_dynamics

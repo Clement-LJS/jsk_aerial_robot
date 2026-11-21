@@ -249,12 +249,11 @@ void GimbalrotorPerchingAdmittanceController::controlCore()
     admittance_enabled_ = normal_admittance_enabled_;
     if(reset_requested_) { admittance_core_.reset(); admittance_output_ = AdmittanceCoreOutput(); reset_requested_ = false; }
     admittance_core_.setConfig(admittance_config_);
-    GimbalrotorAdmittanceController::controlCore();
     reason_ = "free flight; perching admittance disarmed";
     raw_load_valid_ = false;
     std_msgs::Bool valid; valid.data = false; generalized_valid_pub_.publish(valid);
     publishContactAdmittanceDiagnostics();
-    perching_navigator_->publishDiagnostics();
+    GimbalrotorAdmittanceController::controlCore();
     return;
   }
   if(reset_requested_)
@@ -269,7 +268,6 @@ void GimbalrotorPerchingAdmittanceController::controlCore()
       (std::abs(perching_navigator_->appliedPitchOffset()) > recovery_angle_epsilon_ ||
        std::abs(perching_navigator_->appliedPitchOffsetRate()) > recovery_rate_epsilon_);
   publishContactAdmittanceDiagnostics();
-  const auto previous_output = admittance_output_;
   const double dt = (ros::Time::now() - prev_admittance_time_).toSec();
   if(std::isfinite(dt) && dt > 0 && dt <= observer_max_interval_ && perching_navigator_->motionFeedbackValid())
     updateAdmittance(); // Exactly one scalar integration per eligible control tick.
@@ -281,13 +279,6 @@ void GimbalrotorPerchingAdmittanceController::controlCore()
   // Bypass the free-flight admittance integration; the pre-PID hook accepts
   // this cycle's scalar correction before the ordinary PID and allocation.
   GimbalrotorController::controlCore();
-  if(!output_accepted_)
-  {
-    admittance_output_ = previous_output;
-    contact_active_ = false;
-    contact_on_timer_ = contact_off_timer_ = residual_pitch_torque_filtered_ = pitch_torque_lpf_ = 0;
-    previous_contact_gate_time_ = ros::Time();
-  }
   if(suppress) pitch_pid.setErrI(0);
   recovery_active_ = !contact_active_ &&
       (std::abs(admittance_output_.angle_offset_compliance.y()) > recovery_angle_epsilon_ ||
