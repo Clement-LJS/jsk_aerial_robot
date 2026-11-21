@@ -8,6 +8,7 @@ using perching_dynamics::MultilinkModel;
 
 bool GimbalrotorPerchingModel::configure(const std::vector<std::string>& active, std::string& reason)
 {
+  unlock();
   reason = "invalid marker, coordinate map, limits or inertia";
   const auto& tree = getTree();
   KDL::Chain chain;
@@ -103,13 +104,14 @@ bool GimbalrotorPerchingModel::bodyContact(const Vector& q, Pose& contact, Eigen
   return poseValid(contact) && cog.allFinite();
 }
 
-bool GimbalrotorPerchingModel::lock(const Pose& body, const Vector& q, const Eigen::Vector3d* world_pivot)
+bool GimbalrotorPerchingModel::lock(const Pose& pivot, const KDL::JntArray& held_joints, const Eigen::Matrix3d& cog_to_body)
 {
-  Pose contact; Eigen::Vector3d cog;
-  if(!poseValid(body) || !bodyContact(q, contact, cog)) return false;
-  Pose rotation = Pose::Identity(); rotation.linear() = expSO3(-Eigen::Vector3d::UnitY() * q[0]);
-  pivot_ = body * contact * rotation;
-  if(world_pivot) pivot_.translation() = *world_pivot;
+  unlock();
+  if(coordinates_.empty() || links_.empty() || !poseValid(pivot) || !rotationValid(cog_to_body) ||
+     held_joints.rows() != getTree().getNrOfJoints() || !held_joints.data.allFinite()) return false;
+  pivot_ = pivot;
+  held_joints_ = held_joints;
+  cog_to_body_ = cog_to_body;
   locked_ = true;
   return true;
 }
@@ -190,7 +192,7 @@ bool GimbalrotorPerchingModel::jacobian(const Vector& q, Eigen::MatrixXd& angula
 
 bool GimbalrotorPerchingModel::pitchTangent(const Vector& q, const std::vector<bool>& moving, Vector& tangent) const
 {
-  if(q.size() != 1 || moving.size() != 1 || !moving[0]) return false;
+  if(!locked_ || q.size() != 1 || moving.size() != 1 || !moving[0]) return false;
   tangent = Vector::Ones(1);
   return q.allFinite();
 }

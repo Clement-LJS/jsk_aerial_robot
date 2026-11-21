@@ -28,10 +28,12 @@
   <arg name="multilink_perching" default="false" />
   <arg name="pitch_only_perching" default="false" />
   <arg name="roll_yaw_perching" default="false" />
+  <!-- Specialized plugins currently refuse startup until Spinal supports constrained commands. -->
+  <arg name="perching_admittance" default="false" />
   <arg name="multilink_secondary" default="roll" />
   <arg name="pitch_only_model_options" default="" />
   <!-- Invalid combinations fail while parsing, before any node starts. -->
-  <arg name="perching_mode_guard" value="$(eval 1 / ((int(arg('pitch_only_perching')) + int(arg('multilink_perching')) + int(arg('roll_yaw_perching')) &lt;= 1) and (not (arg('pitch_only_perching') or arg('roll_yaw_perching') or arg('multilink_perching')) or arg('airframe') == 'beetle') and arg('multilink_secondary') in ['roll', 'yaw']))" />
+  <arg name="perching_mode_guard" value="$(eval 1 / ((int(arg('pitch_only_perching')) + int(arg('multilink_perching')) + int(arg('roll_yaw_perching')) &lt;= 1) and (not (arg('pitch_only_perching') or arg('roll_yaw_perching') or arg('multilink_perching')) or arg('airframe') == 'beetle') and arg('multilink_secondary') in ['roll', 'yaw'] and (not arg('perching_admittance') or arg('airframe') == 'beetle')))" />
 
   ###########  Parameters  ###########
   <group ns="$(arg robot_ns)">
@@ -85,8 +87,14 @@
      </group>
    </group>
 
-   <!-- Beetle uses ordinary flight dynamics for every perching profile. -->
-   <param name="robot_model_plugin_name" value="gimbalrotor_robot_model" if="$(eval arg('airframe') == 'beetle')"/>
+   <!-- Final selectors follow every profile overlay; ordinary PID remains the default. -->
+   <group if="$(eval arg('airframe') == 'beetle')">
+     <arg name="articulated_perching" value="$(eval arg('pitch_only_perching') or arg('multilink_perching') or arg('roll_yaw_perching'))"/>
+     <param name="aerial_robot_control_name"
+            value="$(eval 'aerial_robot_control/gimbalrotor_' + ('multilink_perching_admittance_controller' if arg('articulated_perching') else 'perching_admittance_controller') if arg('perching_admittance') else 'aerial_robot_control/gimbalrotor_controller')"/>
+     <param name="robot_model_plugin_name"
+            value="$(eval ('gimbalrotor_multilink_perching_model' if arg('articulated_perching') else 'gimbalrotor_perching_model') if arg('perching_admittance') else 'gimbalrotor_robot_model')"/>
+   </group>
 
    <!-- Select the navigator after all profile overlays. -->
    <param name="flight_navigation_plugin_name"

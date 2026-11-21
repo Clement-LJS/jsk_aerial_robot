@@ -33,7 +33,6 @@ private:
   {
     double stamp = 0, receipt = 0;
     Eigen::Matrix<double, 6, 1> wrench;
-    Eigen::Vector3d offset;
   };
   std::deque<Command> commands_;
 };

@@ -45,6 +45,7 @@ public:
   const Vector& appliedAccelerations() const { return applied_acceleration_; }
   bool jointCommand(sensor_msgs::JointState& command) const;
   const std::vector<bool>& movingCoordinates() const { return moving_; }
+  double pitchAccelerationLimit() const override { return acceleration_limit_; }
   bool nominalHeld() const override;
   bool trackingHeld() const override;
   bool applyPerchingReference(double pitch_offset, double rate, double acceleration) override;

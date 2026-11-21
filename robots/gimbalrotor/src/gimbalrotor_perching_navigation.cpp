@@ -1,4 +1,5 @@
 #include <gimbalrotor/gimbalrotor_perching_navigation.h>
+#include <gimbalrotor/model/gimbalrotor_perching_model.h>
 #include <pluginlib/class_list_macros.h>
 #include <kdl/chain.hpp>
 #include <kdl_parser/kdl_parser.hpp>
@@ -180,7 +181,11 @@ void GimbalrotorPerchingNavigator::update()
   const double now = ros::Time::now().toSec();
   const double elapsed = last_update_ > 0 ? now - last_update_ : 0;
   last_update_ = now;
-  if(elapsed < 0) onClockRewind();
+  if(elapsed < 0)
+  {
+    onClockRewind();
+    resetPerchingLock();
+  }
   cycle_dt_ = elapsed > 0 && elapsed <= max_gap_ ? std::min(elapsed, max_step_) : 0;
   // Reference acceptance is called from the active controller cycle, after its
   // lifecycle gate and before PID target capture. Callbacks cannot publish joints.
@@ -267,6 +272,9 @@ void GimbalrotorPerchingNavigator::relockCallback(const std_msgs::EmptyConstPtr&
 
 void GimbalrotorPerchingNavigator::resetPerchingLock()
 {
+  auto dynamics = boost::dynamic_pointer_cast<GimbalrotorPerchingModel>(model_);
+  if(dynamics) dynamics->unlock();
+  admittance_diagnostics_.clear();
   resetMotion();
   perching_locked_ = false;
   locked_radius_ = 0.0;
@@ -675,6 +683,17 @@ bool GimbalrotorPerchingNavigator::lockGeometry(const Pose& body, const Vector& 
   return true;
 }
 
+bool GimbalrotorPerchingNavigator::lockDynamicsModel()
+{
+  auto dynamics = boost::dynamic_pointer_cast<GimbalrotorPerchingModel>(model_);
+  if(!dynamics) return true; // Ordinary PID has no constrained dynamics model.
+  std::string reason;
+  if(dynamics->configure(active_joints_, reason) && dynamics->lock(pivot_, held_joints_, cog_to_body_)) return true;
+  ROS_ERROR_STREAM("Perching dynamics lock failed: " << reason);
+  resetPerchingLock();
+  return false;
+}
+
 GimbalrotorPerchingNavigator::Pose GimbalrotorPerchingNavigator::worldCogPose(
     const Pose& body, const Eigen::Vector3d& cog_body) const
 {
@@ -726,6 +745,8 @@ bool GimbalrotorPerchingNavigator::observation(Sample& sample) const
   sample.stamp = estimator_->getImuLatestTimeStamp();
   sample.receipt = steadyTime();
   sample.q = sample.rate = Vector::Zero(1);
+  sample.effort = Vector::Zero(1); // The passive hinge has no actuator.
+  sample.effort_valid = true;
   double pivot, hinge;
   if(!estimateCoordinates(sample.body, sample.q, pivot, hinge)) return false;
   sample.rate[0] = pivot_.linear().col(1).dot(sample.body.linear() * sample.omega);
@@ -783,6 +804,7 @@ bool GimbalrotorPerchingNavigator::tryLockPerching(const std::string& reason, bo
     return false;
   }
   // Retire the old motion only after the replacement geometry is accepted.
+  if(!lockDynamicsModel()) return false;
   if(perching_locked_) resetMotion();
   hinge_arc_ = hinge_arc;
   locked_pivot_world_ = contact_position;
@@ -796,6 +818,7 @@ bool GimbalrotorPerchingNavigator::tryLockPerching(const std::string& reason, bo
   rigid_applied_pose_.position = locked_robot_pos_world_;
   rigid_applied_pose_.orientation = reference_orientation;
   rigid_applied_pose_.delta = 0;
+  rigid_applied_rate_ = rigid_applied_acceleration_ = 0;
   rigid_applied_valid_ = true;
   last_update_ = ros::Time::now().toSec();
   commitPerchingLockIdentity();
@@ -837,6 +860,7 @@ void GimbalrotorPerchingNavigator::resetMotion()
   applied_stamp_ = last_update_ = 0;
   rigid_applied_valid_ = false;
   rigid_command_pending_ = false;
+  rigid_applied_rate_ = rigid_applied_acceleration_ = 0;
 }
 
 bool GimbalrotorPerchingNavigator::supportsPerchingMode(perching_geometry::Mode mode) const
@@ -874,7 +898,7 @@ bool GimbalrotorPerchingNavigator::trackingHeld() const
 bool GimbalrotorPerchingNavigator::applyPerchingReference(double pitch_offset, double rate, double acceleration)
 {
   std::lock_guard<std::recursive_mutex> lock(perching_state_mutex_);
-  if(navi_state_ != HOVER_STATE || pitch_offset != 0 || rate != 0 || acceleration != 0) return false;
+  if(navi_state_ != HOVER_STATE || !std::isfinite(pitch_offset) || !std::isfinite(rate) || !std::isfinite(acceleration)) return false;
   if(perching_mode_ == perching_geometry::Mode::DISABLED || !perching_locked_)
   {
     publishDiagnostics();
@@ -884,7 +908,9 @@ bool GimbalrotorPerchingNavigator::applyPerchingReference(double pitch_offset, d
   const bool feedback = observation(sample);
   if(feedback) estimateCoordinates(sample.body, sample.q, pivot_error_, hinge_error_);
   const double now = ros::Time::now().toSec();
+  if(applied_stamp_ == now) return false;
   if(velocity_active_ && now >= velocity_expires_) velocity_active_ = false;
+  const double previous_nominal = active_pitch_delta_;
   if(applied_stamp_ > 0 && velocity_active_ && cycle_dt_ > 0 && feedback)
   {
     perching_geometry::Pose candidate;
@@ -899,20 +925,30 @@ bool GimbalrotorPerchingNavigator::applyPerchingReference(double pitch_offset, d
   perching_geometry::Pose pose;
   const tf::Vector3 nominal_position = getTargetPos();
   if(cycle_dt_ <= 0 || !feedback ||
+     (applied_stamp_ == 0 && (pitch_offset != 0 || rate != 0 || acceleration != 0)) ||
+     ((pitch_offset != 0 || applied_pitch_offset_ != 0) &&
+      (std::abs(rate) > rate_limit_ + 1e-6 ||
+       std::abs(arc_pitch_sign_ * active_pitch_delta_ + pitch_offset - rigidAngle()) > rate_limit_ * cycle_dt_ + 1e-8)) ||
      std::abs(active_pitch_delta_ + pitch_offset / arc_pitch_sign_) > max_pitch_delta_ ||
      !perchingAdmittanceTarget(lock_stamp_, pitch_offset, nominal_position, pose))
   {
+    active_pitch_delta_ = previous_nominal;
+    rigid_applied_rate_ = rigid_applied_acceleration_ = applied_offset_rate_ = 0;
     if(active_perching_hold_enable_ && rigid_applied_valid_) publishApplied();
     publishDiagnostics();
     return false;
   }
   const bool first_reference = applied_stamp_ == 0;
   if(first_reference) pose = rigid_applied_pose_;
+  const double applied_rate = first_reference ? 0 : arc_pitch_sign_ * (pose.delta - rigid_applied_pose_.delta) / cycle_dt_;
+  rigid_applied_acceleration_ = first_reference ? 0 : (applied_rate - rigid_applied_rate_) / cycle_dt_;
+  rigid_applied_rate_ = applied_rate;
+  const bool correction_changed = pitch_offset != applied_pitch_offset_;
   applied_pitch_offset_ = pitch_offset; applied_offset_rate_ = rate;
   rigid_applied_pose_ = pose;
   rigid_applied_valid_ = true;
   applied_stamp_ = now;
-  if(active_perching_hold_enable_ || first_reference || rigid_command_pending_)
+  if(active_perching_hold_enable_ || first_reference || rigid_command_pending_ || correction_changed || pitch_offset != 0 || rate != 0)
   {
     publishApplied();
     // The first cycle installs the lock pose; a staged command still follows it.
@@ -935,6 +971,16 @@ void GimbalrotorPerchingNavigator::publishApplied()
   setTargetRPY(tf::Vector3(0, 0, yaw));
   setTargetVel(tf::Vector3(0, 0, 0)); setTargetAcc(tf::Vector3(0, 0, 0));
   setTargetOmega(tf::Vector3(0, 0, 0)); setTargetAngAcc(tf::Vector3(0, 0, 0));
+  if(boost::dynamic_pointer_cast<GimbalrotorPerchingModel>(model_))
+  {
+    const tf::Vector3 radial = rigid_applied_pose_.position - hinge_arc_.pivot;
+    const tf::Vector3 tangent = hinge_arc_.axis.cross(radial);
+    setTargetVel(tangent * rigid_applied_rate_);
+    setTargetAcc(tangent * rigid_applied_acceleration_ + hinge_arc_.axis.cross(tangent) * rigid_applied_rate_ * rigid_applied_rate_);
+    const tf::Matrix3x3 target_rotation(tf::createQuaternionFromYaw(yaw));
+    setTargetOmega(target_rotation.inverse() * hinge_arc_.axis * rigid_applied_rate_);
+    setTargetAngAcc(estimator_->getOrientation(Frame::COG, estimate_mode_).inverse() * hinge_arc_.axis * rigid_applied_acceleration_);
+  }
 }
 
 void GimbalrotorPerchingNavigator::publishDiagnostics()
@@ -960,6 +1006,13 @@ void GimbalrotorPerchingNavigator::publishDiagnostics()
   residual.key = "admittance_status";
   residual.value = "unavailable: nominal navigation with ordinary flight controller";
   diagnostic.values.push_back(residual);
+  for(const auto& item : admittance_diagnostics_)
+  {
+    auto existing = std::find_if(diagnostic.values.begin(), diagnostic.values.end(),
+        [&](const diagnostic_msgs::KeyValue& value) { return value.key == item.first; });
+    if(existing != diagnostic.values.end()) existing->value = item.second;
+    else { residual.key = item.first; residual.value = item.second; diagnostic.values.push_back(residual); }
+  }
   array.status.push_back(diagnostic);
   status_pub_.publish(array);
   std_msgs::String state;

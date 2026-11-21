@@ -17,6 +17,8 @@ void GimbalrotorMultilinkPerchingAdmittanceController::initialize(ros::NodeHandl
   if(!articulated_model_) throw std::invalid_argument("articulated controller requires the shared articulated model");
   std::string command_topic;
   nh_.param<std::string>("controller/command_wrench_topic", command_topic, "perching/command_wrench_estimate");
+  // Startup remains blocked: the current Spinal output has no verified producer
+  // of the effective world wrench at CoG, including its added feedback terms.
   command_sub_ = nh_.subscribe(command_topic, 20, &GimbalrotorMultilinkPerchingAdmittanceController::commandWrenchCallback, this);
 }
 
@@ -45,7 +47,7 @@ void GimbalrotorMultilinkPerchingAdmittanceController::controlCore()
     filtered_stamp_ = 0;
     observation_start_ = ros::Time::now().toSec();
     commands_.clear();
-    dynamics_valid_ = !session.lock_stamp.isZero() && articulated_model_->dynamics(dynamics_, reason_);
+    dynamics_valid_ = !session.lock_stamp.isZero() && articulated_model_->locked() && articulated_model_->dynamics(dynamics_, reason_);
     const auto count = articulated_navigator_->movingCoordinates().size();
     joint_pids_.assign(count > 0 ? count - 1 : 0, pid_controllers_.at(PITCH));
     for(auto& pid : joint_pids_)
@@ -62,7 +64,8 @@ void GimbalrotorMultilinkPerchingAdmittanceController::controlCore()
 bool GimbalrotorMultilinkPerchingAdmittanceController::feedbackWrench(Eigen::Matrix<double, 6, 1>& wrench)
 {
   aerial_robot_navigation::GimbalrotorPerchingNavigator::Sample measured;
-  if(!perching_navigator_->observation(measured) || !measured.effort_valid || !measured.rate.allFinite()) return false;
+  if(!articulated_model_->locked() || !perching_navigator_->observation(measured) ||
+     !measured.effort_valid || !measured.effort.allFinite() || !measured.rate.allFinite()) return false;
   const auto& reference = articulated_navigator_->appliedCoordinates();
   const auto& reference_rate = articulated_navigator_->appliedRates();
   const auto& reference_acceleration = articulated_navigator_->appliedAccelerations();
@@ -104,11 +107,8 @@ void GimbalrotorMultilinkPerchingAdmittanceController::commandWrenchCallback(con
   command.receipt = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
   const auto& f = msg->wrench.force; const auto& m = msg->wrench.torque;
   command.wrench << f.x, f.y, f.z, m.x, m.y, m.z;
-  const auto body = estimator_->getPos(Frame::BASELINK, estimate_mode_);
-  const auto cog = estimator_->getPos(Frame::COG, estimate_mode_);
-  tf::vectorTFToEigen(estimator_->getOrientation(Frame::BASELINK, estimate_mode_).inverse() * (cog - body), command.offset);
   if(!commands_.empty() && ros::Time::now().toSec() < commands_.back().stamp) commands_.clear();
-  if(!command.wrench.allFinite() || !command.offset.allFinite() || (!commands_.empty() && command.stamp <= commands_.back().stamp)) return;
+  if(!command.wrench.allFinite() || (!commands_.empty() && command.stamp <= commands_.back().stamp)) return;
   commands_.push_back(command); while(commands_.size() > 64) commands_.pop_front();
 }
 
@@ -117,7 +117,7 @@ bool GimbalrotorMultilinkPerchingAdmittanceController::externalLoad(Eigen::Vecto
   aerial_robot_navigation::GimbalrotorPerchingNavigator::Sample sample;
   auto fail = [&](const std::string& reason)
   { reason_ = reason; observer_.reset(reason); return false; };
-  if(!dynamics_valid_ || !perching_navigator_->observation(sample) || !sample.effort_valid)
+  if(!dynamics_valid_ || !articulated_model_->locked() || !perching_navigator_->observation(sample) || !sample.effort_valid)
     return fail("awaiting synchronized motion and named actuator efforts");
   if(sample.stamp < observation_start_) return false;
   const Command* command = nullptr;
@@ -132,8 +132,13 @@ bool GimbalrotorMultilinkPerchingAdmittanceController::externalLoad(Eigen::Vecto
     if(!observation_filter_.observe(sample.q, sample.body.linear(), sample.omega, sample.effort, command->wrench,
                                    sample.stamp, observer_max_interval_)) return fail("conditioning measured coordinate rates");
     perching_dynamics::MultilinkModel::Evaluation evaluation;
+    GimbalrotorPerchingModel::State state;
+    if(!articulated_model_->evaluate(observation_filter_.q, state)) return fail("invalid synchronized wrench origin");
+    // The input is a world wrench at CoG. Freeze B->CoG at the same filtered
+    // configuration as momentum; evaluate() shifts its moment to B once.
+    const Eigen::Vector3d offset = state.body.linear().transpose() * (state.cog.translation() - state.body.translation());
     if(!dynamics_.evaluate(observation_filter_.q, observation_filter_.rate, observation_filter_.effort,
-        observation_filter_.wrench.head<3>(), observation_filter_.wrench.tail<3>(), command->offset, evaluation, reason_))
+        observation_filter_.wrench.head<3>(), observation_filter_.wrench.tail<3>(), offset, evaluation, reason_))
       return fail(reason_);
     if(!observer_.observe(evaluation.momentum, evaluation.predicted_rate, sample.stamp, observer_gain_, observer_max_interval_)) return false;
     // Projection and momentum use the same filtered observation configuration.

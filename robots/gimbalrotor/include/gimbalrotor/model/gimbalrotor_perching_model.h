@@ -80,7 +80,7 @@ public:
   virtual bool configure(const std::vector<std::string>& active, std::string& reason);
   bool bodyContact(const Vector& q, Pose& contact, Eigen::Vector3d& cog) const;
   Pose bodyPivot() const;
-  bool lock(const Pose& body, const Vector& q, const Eigen::Vector3d* world_pivot = nullptr);
+  bool lock(const Pose& pivot, const KDL::JntArray& held_joints, const Eigen::Matrix3d& cog_to_body);
   void unlock() { locked_ = false; hinge_arc = perching_geometry::Lock(); }
   bool locked() const { return locked_; }
   bool evaluate(const Vector& q, State& state) const;

@@ -70,7 +70,8 @@ public:
     double stamp = 0, receipt = 0;
     Pose body = Pose::Identity();
     Eigen::Vector3d omega = Eigen::Vector3d::Zero();
-    Vector q, rate;
+    Vector q, rate, effort;
+    bool effort_valid = false; // Named, finite samples; the producer must supply joint torque in N.m.
   };
   GimbalrotorPerchingNavigator();
   void initialize(ros::NodeHandle, ros::NodeHandle, boost::shared_ptr<aerial_robot_model::RobotModel>,
@@ -83,7 +84,12 @@ public:
   virtual bool motionFeedbackValid() const;
   virtual bool observation(Sample&) const;
   double rigidAngle() const { return arc_pitch_sign_ * rigid_applied_pose_.delta; }
-  double rigidRate() const { return (velocity_active_ ? velocity_command_ : 0) + applied_offset_rate_; }
+  double rigidRate() const { return rigid_applied_rate_; }
+  double rigidAcceleration() const { return rigid_applied_acceleration_; }
+  const perching_geometry::Lock& rigidLock() const { return hinge_arc_; }
+  double pitchRateLimit() const { return rate_limit_; }
+  virtual double pitchAccelerationLimit() const { return INFINITY; }
+  void setAdmittanceDiagnostics(const std::map<std::string, std::string>& values) { admittance_diagnostics_ = values; }
   const std::string& prefix() const { return prefix_; }
   const std::string& worldFrame() const { return world_; }
   virtual bool nominalHeld() const;
@@ -115,6 +121,7 @@ protected:
   };
   bool bodyContact(const Vector&, Pose&, Eigen::Vector3d&) const;
   bool lockGeometry(const Pose& body, const Vector& q, Reference& initial);
+  bool lockDynamicsModel();
   Pose worldCogPose(const Pose& body, const Eigen::Vector3d& cog_body) const;
   bool estimateCoordinates(const Pose&, Vector&, double&, double&) const;
 
@@ -131,6 +138,7 @@ protected:
   ros::Publisher status_pub_, state_pub_;
   std::string prefix_ = "perching", world_ = "world", status_name_ = "perching";
   std::string status_ = "free flight";
+  std::map<std::string, std::string> admittance_diagnostics_;
   bool model_valid_ = false, velocity_active_ = false;
   double applied_pitch_offset_ = 0, applied_offset_rate_ = 0;
   double tracking_tolerance_ = .04, rezero_rate_tolerance_ = .05;
@@ -188,6 +196,7 @@ private:
   tf::Vector3 reference_locked_rpy_;  // Reference Euler angles for NORMAL commands and logging.
   tf::Vector3 locked_pivot_world_;
   double locked_radius_;
+  double rigid_applied_rate_ = 0, rigid_applied_acceleration_ = 0;
   KDL::Tree geometry_tree_;
   KDL::JntArray held_joints_;
   Eigen::Matrix3d cog_to_body_ = Eigen::Matrix3d::Identity();

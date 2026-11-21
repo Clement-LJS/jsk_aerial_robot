@@ -99,7 +99,6 @@ namespace aerial_robot_control
     else
       target_wrench_acc_cog.tail(3) = Eigen::Vector3d(target_ang_acc_x, target_ang_acc_y, target_ang_acc_z) + gyro;
 
-    setTargetWrenchAccCog(target_wrench_acc_cog);
     pid_msg_.roll.total.at(0) = target_ang_acc_x;
     pid_msg_.roll.p_term.at(0) = pid_controllers_.at(ROLL).getPTerm();
     pid_msg_.roll.i_term.at(0) = pid_controllers_.at(ROLL).getITerm();
@@ -117,6 +116,14 @@ namespace aerial_robot_control
     pid_msg_.pitch.target_d = target_omega_.y();
     pid_msg_.pitch.err_d = pid_controllers_.at(PITCH).getErrD();
 
+    allocateWrench(target_wrench_acc_cog);
+  }
+
+  void GimbalrotorController::allocateWrench(Eigen::VectorXd target_wrench_acc_cog)
+  {
+    setTargetWrenchAccCog(target_wrench_acc_cog);
+    const Eigen::Matrix3d inertia = gimbalrotor_robot_model_->getInertia<Eigen::Matrix3d>();
+    const tf::Vector3 target_acc_dash(target_wrench_acc_cog[0], target_wrench_acc_cog[1], target_wrench_acc_cog[2]);
     Eigen::MatrixXd full_q_mat = Eigen::MatrixXd::Zero(6, 3 * motor_num_);
 
     double mass_inv = 1 / gimbalrotor_robot_model_->getMass();

@@ -27,7 +27,6 @@ protected:
   void updateAdmittance();
   virtual bool externalLoad(Eigen::VectorXd&, Eigen::VectorXd&, double&);
   virtual bool feedbackWrench(Eigen::Matrix<double, 6, 1>&);
-  void sendTorqueAllocationMatrixInv() override;
   boost::shared_ptr<GimbalrotorPerchingModel> perching_model_;
   void updateContactGate(double residual_pitch_torque, double dt);
   void perchingAdmittanceEnableCallback(const std_msgs::BoolConstPtr&);

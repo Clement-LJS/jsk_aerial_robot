@@ -63,6 +63,8 @@ void GimbalrotorMultilinkPerchingNavigator::naviCallback(const aerial_robot_msgs
 bool GimbalrotorMultilinkPerchingNavigator::perchingAdmittanceTarget(
     const ros::Time&, double, const tf::Vector3&, perching_geometry::Pose&) const
 {
+  // A body-only preview cannot commit the coordinated joint reference. The
+  // controller uses applyPerchingReference(); no active caller uses this API.
   return false;
 }
 
@@ -372,6 +374,8 @@ void GimbalrotorMultilinkPerchingNavigator::jointCallback(const ros::MessageEven
   if(!joint_history_.empty() && sample.stamp <= joint_history_.back().stamp) return;
   const int n = active_joints_.size() + 1;
   sample.q = sample.rate = Vector::Zero(n);
+  sample.effort = Vector::Zero(n); // Coordinate zero is the unactuated hinge.
+  sample.effort_valid = true;
   for(int i = 1; i < n; ++i)
   {
     const auto it = std::find(msg.name.begin(), msg.name.end(), active_joints_[i - 1]);
@@ -379,6 +383,8 @@ void GimbalrotorMultilinkPerchingNavigator::jointCallback(const ros::MessageEven
     const std::size_t index = std::distance(msg.name.begin(), it);
     if(index >= msg.position.size() || !std::isfinite(msg.position[index])) return;
     sample.q[i] = msg.position[index];
+    if(index < msg.effort.size() && std::isfinite(msg.effort[index])) sample.effort[i] = msg.effort[index];
+    else sample.effort_valid = false;
     if(index < msg.velocity.size() && std::isfinite(msg.velocity[index])) sample.rate[i] = msg.velocity[index];
     else if(!joint_history_.empty() && sample.stamp - joint_history_.back().stamp <= max_gap_)
       sample.rate[i] = (sample.q[i] - joint_history_.back().q[i]) / (sample.stamp - joint_history_.back().stamp);
@@ -433,6 +439,8 @@ bool GimbalrotorMultilinkPerchingNavigator::readSynchronizedSample(Sample& sampl
       else
       {
         result.q = (1 - u) * a.q + u * b.q; result.rate = (1 - u) * a.rate + u * b.rate;
+        result.effort_valid = a.effort_valid && b.effort_valid;
+        result.effort = (1 - u) * a.effort + u * b.effort;
       }
       return true;
     }
@@ -514,6 +522,7 @@ bool GimbalrotorMultilinkPerchingNavigator::tryLockPerching(const std::string& r
     servo_ = previous_servo;
     return false;
   }
+  if(!lockDynamicsModel()) return false;
   if(perching_locked_) resetMotion();
   measured_ = measured;
   nominal_ = destination_ = proposed_ = applied_ = locked_q_ = measured_.q;
@@ -524,7 +533,7 @@ bool GimbalrotorMultilinkPerchingNavigator::tryLockPerching(const std::string& r
                          tfVector(pivot_.translation()));
   session_ = lock_stamp_.toNSec();
   applied_stamp_ = 0; last_update_ = ros::Time::now().toSec();
-  phase_ = "CONTACT_LOCKED"; status_ = "locked; nominal hold, admittance unavailable";
+  phase_ = "CONTACT_LOCKED"; status_ = "locked; nominal hold";
   publishDiagnostics();
   return true;
 }
@@ -883,7 +892,7 @@ bool GimbalrotorMultilinkPerchingNavigator::candidateAllowed(const Vector& q, do
 bool GimbalrotorMultilinkPerchingNavigator::applyPerchingReference(double pitch_offset, double rate, double acceleration)
 {
   std::lock_guard<std::recursive_mutex> lock(perching_state_mutex_);
-  if(navi_state_ != HOVER_STATE || pitch_offset != 0 || rate != 0 || acceleration != 0) return false;
+  if(navi_state_ != HOVER_STATE || !std::isfinite(pitch_offset) || !std::isfinite(rate) || !std::isfinite(acceleration)) return false;
   if(perching_mode_ == perching_geometry::Mode::DISABLED || !perching_locked_)
   {
     sensor_msgs::JointState command;
@@ -900,9 +909,24 @@ bool GimbalrotorMultilinkPerchingNavigator::applyPerchingReference(double pitch_
   const bool fresh = motionFeedbackValid();
   // Always install the measured lock hold before advancing a requested destination.
   if(applied_stamp_ > 0 && fresh && cycle_dt_ > 0) advanceNominal(cycle_dt_);
-  const Vector& candidate = proposal_valid_ && fresh ? proposed_ : nominal_;
+  const Vector& nominal = proposal_valid_ && fresh ? proposed_ : nominal_;
+  Vector candidate = nominal;
   bool accepted = fresh && (applied_stamp_ == 0 || (proposal_valid_ && cycle_dt_ > 0)) &&
-      candidateAllowed(candidate, cycle_dt_);
+      (applied_stamp_ > 0 || (pitch_offset == 0 && rate == 0 && acceleration == 0));
+  if(accepted && (pitch_offset != 0 || rate != 0 || acceleration != 0 || applied_pitch_offset_ != 0))
+  {
+    Vector tangent;
+    accepted = pitch(nominal, pitch_offset, moving_, candidate) && pitchTangent(candidate, moving_, tangent);
+    if(accepted)
+    {
+      // Derivatives published below come from the accepted combined trajectory.
+      // Also bound the requested local-Y derivatives before accepting its pose.
+      accepted = std::abs(rate) <= rate_limit_ + 1e-6 && std::abs(acceleration) <= acceleration_limit_ + 1e-6 &&
+          (tangent.cwiseAbs().array() * std::abs(rate) <= coordinate_velocity_.array() + 1e-6).all() &&
+          (tangent.cwiseAbs().array() * std::abs(acceleration) <= coordinate_acceleration_.array() + 1e-6).all();
+    }
+  }
+  if(accepted) accepted = candidateAllowed(candidate, cycle_dt_);
   Reference state;
   if(accepted) accepted = evaluateReference(candidate, state);
   if(accepted)
@@ -945,8 +969,11 @@ bool GimbalrotorMultilinkPerchingNavigator::applyPerchingReference(double pitch_
     applied_stamp_ = now;
     if(positioning_)
     {
-      servo_.q_target = applied_[coordinate_map_.at(positioning_joint_)];
-      servo_.target = perching_geometry::toKdl(applied_state_.body);
+      // Keep servo workflow progress nominal; compliance must not accumulate.
+      Reference nominal_state = applied_state_;
+      if(pitch_offset != 0) evaluateReference(nominal_, nominal_state);
+      servo_.q_target = nominal_[coordinate_map_.at(positioning_joint_)];
+      servo_.target = perching_geometry::toKdl(nominal_state.body);
       perching_servo::Sample reference;
       reference.body = servo_.target;
       if(servo_.stage == perching_servo::Stage::PASSIVE_CUTTING || servo_.stage == perching_servo::Stage::PITCH_REZERO_ACTIVE)
@@ -1038,6 +1065,7 @@ void GimbalrotorMultilinkPerchingNavigator::publishDiagnostics()
       "baseline_ready", "tare_collecting", "tare_generation", "tare_request_sequence", "enable_request_sequence",
       "task_torque_valid", "offset_rad", "offset_rate_rad_s", "offset_acceleration_rad_s2"}) values[key] = "0";
   values["admittance_status"] = "unavailable: nominal navigation with ordinary flight controller";
+  for(const auto& item : admittance_diagnostics_) values[item.first] = item.second;
   auto value = [&](const std::string& key, auto data) { std::ostringstream s; s << std::setprecision(17) << data; values[key] = s.str(); };
   value("session_id", session_); value("motion_epoch", motion_.epoch); value("motion_source", motion_.source);
   value("motion_sequence", motion_.sequence); value("stopping", stopping_); value("feedback_valid", feedback);
