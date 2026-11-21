@@ -75,6 +75,9 @@ void GimbalrotorMultilinkPerchingNavigator::readProfile()
   pn.getParam("active_joints", active_joints_);
   perching_geometry::coordinateMap(active_joints_, coordinate_map_);
   pn.param<std::string>("joint_state_topic", joint_topic_, "joint_states");
+  std::string effort_source;
+  pn.param<std::string>("dynamics/joint_effort/source", effort_source, "");
+  if(effort_source == "servo_bridge_joint_states") effort_producer_ = nh_.resolveName("servo_bridge");
   pn.param<std::string>("manual_coordinate", manual_coordinate_, "alpha");
   pn.param<std::string>("positioning_joint", positioning_joint_, "");
   positioning_ = !positioning_joint_.empty();
@@ -375,7 +378,7 @@ void GimbalrotorMultilinkPerchingNavigator::jointCallback(const ros::MessageEven
   const int n = active_joints_.size() + 1;
   sample.q = sample.rate = Vector::Zero(n);
   sample.effort = Vector::Zero(n); // Coordinate zero is the unactuated hinge.
-  sample.effort_valid = true;
+  sample.effort_valid = effort_producer_.empty() || event.getPublisherName() == effort_producer_;
   for(int i = 1; i < n; ++i)
   {
     const auto it = std::find(msg.name.begin(), msg.name.end(), active_joints_[i - 1]);
@@ -417,8 +420,7 @@ bool GimbalrotorMultilinkPerchingNavigator::readSynchronizedSample(Sample& sampl
 {
   if(body_history_.empty() || joint_history_.empty()) return false;
   const auto& body = body_history_.back(); const auto& joint = joint_history_.back();
-  if(!fresh(body.stamp, body.receipt) || !fresh(joint.stamp, joint.receipt) ||
-      std::abs(body.stamp - joint.stamp) > sync_tolerance_) return false;
+  if(!fresh(body.stamp, body.receipt) || !fresh(joint.stamp, joint.receipt)) return false;
   const double stamp = std::min(body.stamp, joint.stamp);
   auto bracket = [stamp, this](const std::deque<Sample>& history, Sample& result, bool body)
   {
@@ -449,7 +451,7 @@ bool GimbalrotorMultilinkPerchingNavigator::readSynchronizedSample(Sample& sampl
   Sample b, j;
   if(!bracket(body_history_, b, true) || !bracket(joint_history_, j, false)) return false;
   sample = j; sample.body = b.body; sample.omega = b.omega; sample.receipt = std::min(b.receipt, j.receipt);
-  return true;
+  return fresh(sample.stamp, sample.receipt);
 }
 
 bool GimbalrotorMultilinkPerchingNavigator::observation(Sample& sample) const
@@ -904,31 +906,85 @@ bool GimbalrotorMultilinkPerchingNavigator::applyPerchingReference(double pitch_
   const double now = ros::Time::now().toSec();
   if(applied_stamp_ == now) return false;
   proposal_valid_ = false;
-  previous_servo_ = servo_;
+  const auto previous_servo = servo_;
+  const Vector previous_destination = destination_;
+  const bool previous_rezero_active = rezero_active_, previous_rezero_failed = rezero_failed_;
+  const bool previous_velocity_active = velocity_active_, previous_stopping = stopping_;
+  const double previous_offset_rate = applied_offset_rate_;
+  auto restoreNominal = [&]()
+  {
+    servo_ = previous_servo;
+    destination_ = previous_destination;
+    rezero_active_ = previous_rezero_active; rezero_failed_ = previous_rezero_failed;
+    velocity_active_ = previous_velocity_active; stopping_ = previous_stopping;
+    proposed_ = nominal_; proposed_rate_ = nominal_rate_;
+    proposed_progress_ = body_progress_; proposed_body_rate_ = body_rate_;
+    proposal_valid_ = false;
+  };
   if(observation(measured_)) estimateCoordinates(measured_.body, measured_.q, pivot_error_, hinge_error_);
   const bool fresh = motionFeedbackValid();
-  // Always install the measured lock hold before advancing a requested destination.
+  // Advance the nominal planner once; all correction previews below are read-only.
   if(applied_stamp_ > 0 && fresh && cycle_dt_ > 0) advanceNominal(cycle_dt_);
-  const Vector& nominal = proposal_valid_ && fresh ? proposed_ : nominal_;
-  Vector candidate = nominal;
-  bool accepted = fresh && (applied_stamp_ == 0 || (proposal_valid_ && cycle_dt_ > 0)) &&
-      (applied_stamp_ > 0 || (pitch_offset == 0 && rate == 0 && acceleration == 0));
-  if(accepted && (pitch_offset != 0 || rate != 0 || acceleration != 0 || applied_pitch_offset_ != 0))
+  if(applied_stamp_ > 0 && !proposal_valid_) restoreNominal();
+  const Vector planned_nominal = proposal_valid_ && fresh ? proposed_ : nominal_;
+  Vector nominal = planned_nominal;
+  Vector candidate;
+  Reference state;
+  const bool correcting = pitch_offset != 0 || rate != 0 || acceleration != 0 ||
+      applied_pitch_offset_ != 0 || applied_offset_rate_ != 0;
+  const double acceleration_limit = std::min(acceleration_limit_, pitch_offset_acceleration_limit_);
+  const double rate_limit = std::min(rate_limit_, pitch_offset_rate_limit_);
+  auto preview = [&](double offset, double offset_rate, double offset_acceleration)
   {
-    Vector tangent;
-    accepted = pitch(nominal, pitch_offset, moving_, candidate) && pitchTangent(candidate, moving_, tangent);
-    if(accepted)
+    if(!pitch(nominal, offset, moving_, candidate)) return false;
+    if(correcting)
     {
-      // Derivatives published below come from the accepted combined trajectory.
-      // Also bound the requested local-Y derivatives before accepting its pose.
-      accepted = std::abs(rate) <= rate_limit_ + 1e-6 && std::abs(acceleration) <= acceleration_limit_ + 1e-6 &&
-          (tangent.cwiseAbs().array() * std::abs(rate) <= coordinate_velocity_.array() + 1e-6).all() &&
-          (tangent.cwiseAbs().array() * std::abs(acceleration) <= coordinate_acceleration_.array() + 1e-6).all();
+      Vector tangent;
+      if(cycle_dt_ <= 0 || std::abs(offset) > pitch_offset_limit_ || std::abs(offset_rate) > rate_limit + 1e-9 ||
+          std::abs(offset_acceleration) > acceleration_limit + 1e-9 ||
+          std::abs(offset_rate - applied_offset_rate_ - offset_acceleration * cycle_dt_) > 1e-8 ||
+          std::abs(offset - applied_pitch_offset_ - .5 * (applied_offset_rate_ + offset_rate) * cycle_dt_) > 1e-8 ||
+          !pitchTangent(candidate, moving_, tangent)) return false;
+    }
+    // These checks bound the combined nominal + compliant joint/CoG motion.
+    if(!candidateAllowed(candidate, cycle_dt_) || !evaluateReference(candidate, state)) return false;
+    if(correcting && applied_stamp_ > 0)
+    {
+      const Eigen::Vector3d omega_world = perching_geometry::logSO3(state.body.linear() * applied_state_.body.linear().transpose()) / cycle_dt_;
+      const Eigen::Vector3d previous_omega_world = applied_state_.cog.linear() * reference_omega_;
+      const Eigen::Vector3d pitch_axis = state.body.linear().col(1);
+      if(std::abs(pitch_axis.dot(omega_world)) > rate_limit_ + 1e-6 ||
+          std::abs(pitch_axis.dot(omega_world - previous_omega_world)) > acceleration_limit_ * cycle_dt_ + 1e-6) return false;
+    }
+    return true;
+  };
+  const bool eligible = fresh && (applied_stamp_ == 0 || cycle_dt_ > 0) &&
+      (applied_stamp_ > 0 || (pitch_offset == 0 && rate == 0 && acceleration == 0));
+  bool accepted = eligible && preview(pitch_offset, rate, acceleration);
+  if(eligible && !accepted && correcting && applied_stamp_ > 0)
+  {
+    const double requested_acceleration = std::clamp(acceleration, -acceleration_limit, acceleration_limit);
+    for(int attempt = 0; attempt < 7; ++attempt)
+    {
+      const double next_acceleration = attempt == 6 ? std::clamp(-applied_offset_rate_ / cycle_dt_, -acceleration_limit, acceleration_limit) :
+          requested_acceleration * std::pow(.5, attempt);
+      const double next_rate = applied_offset_rate_ + next_acceleration * cycle_dt_;
+      const double next_offset = applied_pitch_offset_ + .5 * (applied_offset_rate_ + next_rate) * cycle_dt_;
+      nominal = planned_nominal;
+      bool feasible = preview(next_offset, next_rate, next_acceleration);
+      if(!feasible && (nominal - nominal_).norm() > 1e-12)
+      {
+        nominal = nominal_;
+        feasible = preview(next_offset, next_rate, next_acceleration);
+        if(feasible) restoreNominal();
+      }
+      if(!feasible) continue;
+      pitch_offset = next_offset; rate = next_rate; acceleration = next_acceleration;
+      accepted = true;
+      status_ = proposal_valid_ ? "bounded compliant step accepted" : "bounded compliant step; nominal progress held";
+      break;
     }
   }
-  if(accepted) accepted = candidateAllowed(candidate, cycle_dt_);
-  Reference state;
-  if(accepted) accepted = evaluateReference(candidate, state);
   if(accepted)
   {
     // Ordinary fully actuated flight commands zero CoG roll/pitch. The desired
@@ -998,11 +1054,8 @@ bool GimbalrotorMultilinkPerchingNavigator::applyPerchingReference(double pitch_
   else
   {
     // Reject the body/joint pair together, including servo workflow progress.
-    if(positioning_) servo_ = previous_servo_;
+    restoreNominal();
     rezero_stable_since_ = 0;
-    reference_velocity_.setZero(); reference_acceleration_.setZero(); reference_omega_.setZero(); reference_angular_acceleration_.setZero();
-    applied_rate_.setZero(); applied_acceleration_.setZero(); nominal_rate_.setZero(); body_rate_ = 0;
-    applied_offset_rate_ = 0;
     status_ = fresh ? "coordinated reference rejected; holding last feasible output" : "waiting for motion feedback";
   }
   proposal_valid_ = false;
@@ -1011,6 +1064,14 @@ bool GimbalrotorMultilinkPerchingNavigator::applyPerchingReference(double pitch_
   {
     sensor_msgs::JointState command;
     if(jointCommand(command)) joints_pub_.publish(command);
+  }
+  if(!admittance_diagnostics_.empty())
+  {
+    admittance_diagnostics_["reference_accepted"] = accepted ? "1" : "0";
+    admittance_diagnostics_["offset_rad"] = std::to_string(applied_pitch_offset_);
+    admittance_diagnostics_["offset_rate_rad_s"] = std::to_string(applied_offset_rate_);
+    if(accepted && cycle_dt_ > 0)
+      admittance_diagnostics_["offset_acceleration_rad_s2"] = std::to_string((applied_offset_rate_ - previous_offset_rate) / cycle_dt_);
   }
   publishDiagnostics();
   return accepted;

@@ -35,11 +35,15 @@ namespace aerial_robot_control
     rpy_gain_pub_ = nh_.advertise<spinal::RollPitchYawTerms>("rpy/gain", 1);
     torque_allocation_matrix_inv_pub_ = nh_.advertise<spinal::TorqueAllocationMatrixInv>("torque_allocation_matrix_inv", 1);
     gimbal_dof_pub_ = nh_.advertise<std_msgs::UInt8>("gimbal_dof", 1);
+    std::string command_wrench_topic;
+    nh_.param<std::string>("controller/command_wrench_topic", command_wrench_topic, "perching/roll_yaw/command_wrench_estimate");
+    command_wrench_pub_ = nh_.advertise<geometry_msgs::WrenchStamped>(command_wrench_topic, 1);
   }
 
   void GimbalrotorController::reset()
   {
     PoseLinearController::reset();
+    command_wrench_stamp_ = 0;
 
     setAttitudeGains();
   }
@@ -81,7 +85,7 @@ namespace aerial_robot_control
     preparePerchingReference();
     // A clock rewind must not integrate the ordinary PID backwards.
     const double now = ros::Time::now().toSec();
-    if(now < control_timestamp_) control_timestamp_ = now;
+    if(now < control_timestamp_) { control_timestamp_ = now; command_wrench_stamp_ = 0; }
     PoseLinearController::controlCore();
     tf::Matrix3x3 uav_rot = estimator_->getOrientation(Frame::COG, estimate_mode_);
     tf::Vector3 target_acc_w(pid_controllers_.at(X).result(),
@@ -124,6 +128,26 @@ namespace aerial_robot_control
     pid_msg_.pitch.target_d = target_omega_.y();
     pid_msg_.pitch.err_d = pid_controllers_.at(PITCH).getErrD();
 
+    // FC-side fully actuated command estimate, in world axes about the CoG.
+    // This is not measured/effective Spinal output; gyro is included once.
+    if(!underactuate_ && gimbal_calc_in_fc_ && command_wrench_pub_.getNumSubscribers() > 0)
+    {
+      Eigen::Matrix3d rotation;
+      tf::matrixTFToEigen(uav_rot, rotation);
+      const Eigen::Vector3d force = rotation * (robot_model_->getMass() * target_wrench_acc_cog.head<3>());
+      const Eigen::Vector3d torque = rotation * (inertia * target_wrench_acc_cog.tail<3>() + gyro);
+      const double stamp = estimator_->getImuLatestTimeStamp();
+      if(force.allFinite() && torque.allFinite() && std::isfinite(stamp) && stamp > command_wrench_stamp_)
+      {
+        geometry_msgs::WrenchStamped msg;
+        msg.header.stamp.fromSec(stamp);
+        msg.header.frame_id = "world";
+        msg.wrench.force.x = force.x(); msg.wrench.force.y = force.y(); msg.wrench.force.z = force.z();
+        msg.wrench.torque.x = torque.x(); msg.wrench.torque.y = torque.y(); msg.wrench.torque.z = torque.z();
+        command_wrench_pub_.publish(msg);
+        command_wrench_stamp_ = stamp;
+      }
+    }
     allocateWrench(target_wrench_acc_cog);
   }
 

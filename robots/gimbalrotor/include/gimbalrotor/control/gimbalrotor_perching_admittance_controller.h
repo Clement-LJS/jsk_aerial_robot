@@ -22,7 +22,6 @@ protected:
   const char* controllerName() const override { return "GimbalrotorPerchingAdmittanceController"; }
   void preparePerchingAdmittanceInput();
   void updateAdmittance();
-  bool synchronizedExternalWrench(ExternalWrenchSnapshot&, aerial_robot_navigation::GimbalrotorPerchingNavigator::Sample&);
   virtual bool externalLoad(Eigen::VectorXd&, Eigen::VectorXd&, double&);
   boost::shared_ptr<GimbalrotorPerchingModel> perching_model_;
   void updateContactGate(double residual_pitch_torque, double dt);
@@ -38,7 +37,7 @@ protected:
   perching_geometry::Session session_{perching_geometry::Mode::DISABLED, ros::Time(0)};
   bool perching_active_ = false, normal_admittance_enabled_ = false, perching_admittance_enabled_ = false;
   bool reset_requested_ = true, contact_active_ = false, recovery_active_ = false;
-  bool equilibrium_wrench_ready_ = false, input_valid_ = false, output_accepted_ = false;
+  bool equilibrium_wrench_ready_ = false, input_valid_ = false, output_accepted_ = false, raw_load_valid_ = false;
   bool pitch_i_limit_suppressed_ = false;
   double normal_pitch_i_limit_ = 0;
   int equilibrium_wrench_required_samples_ = 80, equilibrium_wrench_sample_count_ = 0;
@@ -50,7 +49,7 @@ protected:
   double contact_on_duration_ = .1, contact_off_duration_ = .2;
   double recovery_angle_epsilon_ = .00174533, recovery_rate_epsilon_ = .01;
   double residual_pitch_torque_raw_ = 0, residual_pitch_torque_filtered_ = 0, perching_pitch_torque_sign_ = 1;
-  double pitch_acceleration_limit_ = .1, synchronization_tolerance_ = .05;
+  double pitch_acceleration_limit_ = .1, observer_max_interval_ = .15, future_tolerance_ = .02;
   ros::Time previous_contact_gate_time_;
   Eigen::Matrix<double, 6, 1> prepared_perching_admittance_wrench_world_ = Eigen::Matrix<double, 6, 1>::Zero();
   tf::TransformBroadcaster pivot_tf_;

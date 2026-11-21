@@ -98,6 +98,7 @@ private:
   ros::Publisher reference_pub_, measured_pub_, cog_pub_;
   ros::Publisher session_pub_, epoch_pub_, ack_pub_, nominal_pub_, angles_pub_, lower_pub_, upper_pub_, body_pose_pub_;
   std::string body_frame_, joint_topic_, manual_coordinate_ = "alpha", positioning_joint_;
+  std::string effort_producer_;
   bool positioning_ = false, body_target_valid_ = false, stopping_ = false;
   bool rezero_active_ = false, rezero_ready_ = false, rezero_failed_ = false;
   bool proposal_valid_ = false, prepared_motion_ = false, paused_ = false;
@@ -125,7 +126,6 @@ private:
   std::uint64_t session_ = 0, body_frame_id_ = 0;
   perching_geometry::MotionIdentity motion_;
   perching_servo::Core servo_;
-  perching_servo::Core previous_servo_;
   Eigen::Vector3d reference_velocity_ = Eigen::Vector3d::Zero(), reference_omega_ = Eigen::Vector3d::Zero();
   Eigen::Vector3d reference_acceleration_ = Eigen::Vector3d::Zero(), reference_angular_acceleration_ = Eigen::Vector3d::Zero();
 };

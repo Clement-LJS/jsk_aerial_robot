@@ -8,6 +8,7 @@
 #include <aerial_robot_estimation/state_estimation.h>
 #include <std_msgs/Float32MultiArray.h>
 #include <std_msgs/UInt32.h>
+#include <geometry_msgs/WrenchStamped.h>
 #include <gimbalrotor/model/gimbalrotor_robot_model.h>
 
 namespace aerial_robot_control
@@ -30,6 +31,8 @@ namespace aerial_robot_control
     ros::Publisher gimbal_control_pub_;
     ros::Publisher gimbal_state_pub_;
     ros::Publisher target_vectoring_force_pub_;
+    ros::Publisher command_wrench_pub_;
+    double command_wrench_stamp_ = 0;
     ros::Publisher rpy_gain_pub_; //for spinal
     ros::Publisher torque_allocation_matrix_inv_pub_; //for spinal
     ros::Publisher gimbal_dof_pub_; //for spinal

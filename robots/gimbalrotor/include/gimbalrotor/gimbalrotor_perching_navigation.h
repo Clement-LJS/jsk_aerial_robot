@@ -95,6 +95,8 @@ public:
   virtual bool nominalHeld() const;
   virtual bool trackingHeld() const;
   double appliedPitchOffset() const { return applied_pitch_offset_; }
+  double appliedPitchOffsetRate() const { return applied_offset_rate_; }
+  double referenceTimeStep() const { return cycle_dt_; }
   virtual bool applyPerchingReference(double pitch_offset, double rate, double acceleration);
   virtual void publishDiagnostics();
 
@@ -141,6 +143,7 @@ protected:
   std::map<std::string, std::string> admittance_diagnostics_;
   bool model_valid_ = false, velocity_active_ = false;
   double applied_pitch_offset_ = 0, applied_offset_rate_ = 0;
+  double pitch_offset_limit_ = .15, pitch_offset_rate_limit_ = .5, pitch_offset_acceleration_limit_ = .1;
   double tracking_tolerance_ = .04, rezero_rate_tolerance_ = .05;
   double rate_limit_ = .03, velocity_command_ = 0, velocity_expires_ = 0, velocity_duration_ = 8;
   double timeout_ = .15, future_tolerance_ = .02, max_step_ = .05, max_gap_ = .15;

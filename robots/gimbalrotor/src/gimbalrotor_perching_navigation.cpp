@@ -611,6 +611,10 @@ void GimbalrotorPerchingNavigator::readProfile()
   pn.param("pitch_rate", rate_limit_, rate_limit_);
   pn.param("body_pitch_velocity_command_duration", velocity_duration_, velocity_duration_);
   pn.param("pitch_rezero_rate_tolerance", rezero_rate_tolerance_, rezero_rate_tolerance_);
+  ros::NodeHandle an(nh_, "controller/admittance");
+  an.param("angle_offset_limit_pitch", pitch_offset_limit_, pitch_offset_limit_);
+  an.param("angular_vel_offset_limit_pitch", pitch_offset_rate_limit_, pitch_offset_rate_limit_);
+  an.param("perching/pitch_acceleration_limit", pitch_offset_acceleration_limit_, pitch_offset_acceleration_limit_);
   const double positive[] = {timeout_, max_step_, max_gap_, rate_limit_, velocity_duration_, rezero_rate_tolerance_};
   for(double value : positive)
     if(!std::isfinite(value) || value <= 0) throw std::invalid_argument("invalid navigation/perching limits or timing");
@@ -926,53 +930,101 @@ bool GimbalrotorPerchingNavigator::applyPerchingReference(double pitch_offset, d
   const double now = ros::Time::now().toSec();
   if(applied_stamp_ == now) return false;
   if(velocity_active_ && now >= velocity_expires_) velocity_active_ = false;
-  const double previous_nominal = active_pitch_delta_;
-  if(applied_stamp_ > 0 && velocity_active_ && cycle_dt_ > 0 && feedback)
+  double nominal = active_pitch_delta_;
+  const bool first_reference = applied_stamp_ == 0;
+  if(!first_reference && velocity_active_ && cycle_dt_ > 0 && feedback)
   {
     perching_geometry::Pose candidate;
-    if(hinge_arc_.target(active_pitch_delta_ + velocity_command_ * cycle_dt_ / arc_pitch_sign_,
-                        max_pitch_delta_, arc_pitch_sign_, candidate))
+    if(hinge_arc_.target(nominal + velocity_command_ * cycle_dt_ / arc_pitch_sign_, max_pitch_delta_, arc_pitch_sign_, candidate))
+      nominal = candidate.delta;
+  }
+  const double requested_nominal = nominal;
+  const double previous_offset_rate = applied_offset_rate_;
+  const bool correcting = pitch_offset != 0 || rate != 0 || acceleration != 0 ||
+      applied_pitch_offset_ != 0 || applied_offset_rate_ != 0;
+  const double rate_limit = std::min(rate_limit_, pitch_offset_rate_limit_);
+  const double acceleration_limit = pitch_offset_acceleration_limit_;
+  perching_geometry::Pose pose;
+  double applied_rate = 0, applied_acceleration = 0;
+  auto preview = [&](double offset, double offset_rate, double offset_acceleration)
+  {
+    if(first_reference)
     {
-      active_pitch_delta_ = candidate.delta;
-      rigid_command_pending_ = true;
+      pose = rigid_applied_pose_;
+      return offset == 0 && offset_rate == 0 && offset_acceleration == 0;
+    }
+    const double delta = nominal + offset / arc_pitch_sign_;
+    if(cycle_dt_ <= 0 || std::abs(delta) > max_pitch_delta_ || !hinge_arc_.target(delta, max_pitch_delta_, arc_pitch_sign_, pose)) return false;
+    applied_rate = arc_pitch_sign_ * (pose.delta - rigid_applied_pose_.delta) / cycle_dt_;
+    applied_acceleration = (applied_rate - rigid_applied_rate_) / cycle_dt_;
+    return !correcting || (std::abs(offset) <= pitch_offset_limit_ && std::abs(offset_rate) <= rate_limit + 1e-9 &&
+        std::abs(offset_acceleration) <= acceleration_limit + 1e-9 &&
+        std::abs(offset_rate - applied_offset_rate_ - offset_acceleration * cycle_dt_) <= 1e-8 &&
+        std::abs(offset - applied_pitch_offset_ - .5 * (applied_offset_rate_ + offset_rate) * cycle_dt_) <= 1e-8 &&
+        std::abs(applied_rate) <= rate_limit_ + 1e-6 && std::abs(applied_acceleration) <= acceleration_limit + 1e-6);
+  };
+  bool accepted = feedback && preview(pitch_offset, rate, acceleration);
+  if(!accepted && feedback && !first_reference && cycle_dt_ > 0 && correcting)
+  {
+    const double requested_acceleration = std::clamp(acceleration, -acceleration_limit, acceleration_limit);
+    for(int attempt = 0; attempt < 7; ++attempt)
+    {
+      const double next_acceleration = attempt == 6 ? std::clamp(-applied_offset_rate_ / cycle_dt_, -acceleration_limit, acceleration_limit) :
+          requested_acceleration * std::pow(.5, attempt);
+      const double next_rate = applied_offset_rate_ + next_acceleration * cycle_dt_;
+      const double next_offset = applied_pitch_offset_ + .5 * (applied_offset_rate_ + next_rate) * cycle_dt_;
+      nominal = requested_nominal;
+      bool feasible = preview(next_offset, next_rate, next_acceleration);
+      const double held_nominal = rigid_applied_pose_.delta - applied_pitch_offset_ / arc_pitch_sign_;
+      if(!feasible && std::abs(nominal - held_nominal) > 1e-12)
+      {
+        nominal = held_nominal;
+        feasible = preview(next_offset, next_rate, next_acceleration);
+      }
+      if(!feasible) continue;
+      pitch_offset = next_offset; rate = next_rate; acceleration = next_acceleration;
+      accepted = true;
+      break;
+    }
+  }
+  if(accepted)
+  {
+    const bool correction_changed = pitch_offset != applied_pitch_offset_;
+    if(nominal == requested_nominal)
+    {
+      if(nominal != active_pitch_delta_) rigid_command_pending_ = true;
+      active_pitch_delta_ = nominal;
     }
     if(std::abs(active_pitch_delta_) >= max_pitch_delta_) velocity_active_ = false;
+    rigid_applied_rate_ = applied_rate; rigid_applied_acceleration_ = applied_acceleration;
+    applied_pitch_offset_ = pitch_offset; applied_offset_rate_ = rate;
+    rigid_applied_pose_ = pose;
+    rigid_applied_valid_ = true;
+    applied_stamp_ = now;
+    if(active_perching_hold_enable_ || first_reference || rigid_command_pending_ || correction_changed || pitch_offset != 0 || rate != 0)
+    {
+      publishApplied();
+      // The first cycle installs the lock pose; a staged command still follows it.
+      if(!first_reference && nominal == requested_nominal) rigid_command_pending_ = false;
+    }
+    status_ = nominal == requested_nominal ? "rigid reference accepted" : "bounded compliance brake; nominal intent retained";
+    publishCommandedDebugPose(pose);
   }
-  perching_geometry::Pose pose;
-  const tf::Vector3 nominal_position = getTargetPos();
-  if(cycle_dt_ <= 0 || !feedback ||
-     (applied_stamp_ == 0 && (pitch_offset != 0 || rate != 0 || acceleration != 0)) ||
-     ((pitch_offset != 0 || applied_pitch_offset_ != 0) &&
-      (std::abs(rate) > rate_limit_ + 1e-6 ||
-       std::abs(arc_pitch_sign_ * active_pitch_delta_ + pitch_offset - rigidAngle()) > rate_limit_ * cycle_dt_ + 1e-8)) ||
-     std::abs(active_pitch_delta_ + pitch_offset / arc_pitch_sign_) > max_pitch_delta_ ||
-     !perchingAdmittanceTarget(lock_stamp_, pitch_offset, nominal_position, pose))
+  else
   {
-    active_pitch_delta_ = previous_nominal;
-    rigid_applied_rate_ = rigid_applied_acceleration_ = applied_offset_rate_ = 0;
+    status_ = feedback ? "rigid arc/rate/acceleration bound; holding accepted reference" : "waiting for motion feedback";
     if(rigid_applied_valid_ && (active_perching_hold_enable_ || applied_stamp_ > 0)) publishApplied();
-    publishDiagnostics();
-    return false;
   }
-  const bool first_reference = applied_stamp_ == 0;
-  if(first_reference) pose = rigid_applied_pose_;
-  const double applied_rate = first_reference ? 0 : arc_pitch_sign_ * (pose.delta - rigid_applied_pose_.delta) / cycle_dt_;
-  rigid_applied_acceleration_ = first_reference ? 0 : (applied_rate - rigid_applied_rate_) / cycle_dt_;
-  rigid_applied_rate_ = applied_rate;
-  const bool correction_changed = pitch_offset != applied_pitch_offset_;
-  applied_pitch_offset_ = pitch_offset; applied_offset_rate_ = rate;
-  rigid_applied_pose_ = pose;
-  rigid_applied_valid_ = true;
-  applied_stamp_ = now;
-  if(active_perching_hold_enable_ || first_reference || rigid_command_pending_ || correction_changed || pitch_offset != 0 || rate != 0)
+  if(!admittance_diagnostics_.empty())
   {
-    publishApplied();
-    // The first cycle installs the lock pose; a staged command still follows it.
-    if(!first_reference) rigid_command_pending_ = false;
+    admittance_diagnostics_["reference_accepted"] = accepted ? "1" : "0";
+    admittance_diagnostics_["offset_rad"] = std::to_string(applied_pitch_offset_);
+    admittance_diagnostics_["offset_rate_rad_s"] = std::to_string(applied_offset_rate_);
+    if(accepted && cycle_dt_ > 0)
+      admittance_diagnostics_["offset_acceleration_rad_s2"] = std::to_string((applied_offset_rate_ - previous_offset_rate) / cycle_dt_);
   }
-  publishCommandedDebugPose(pose);
   publishDiagnostics();
-  return true;
+  return accepted;
 }
 
 void GimbalrotorPerchingNavigator::publishApplied()
