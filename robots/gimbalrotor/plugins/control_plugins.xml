@@ -8,9 +8,9 @@
   </class>
 
   <class name="aerial_robot_control/gimbalrotor_perching_admittance_controller" type="aerial_robot_control::GimbalrotorPerchingAdmittanceController" base_class_type="aerial_robot_control::ControlBase">
-    <description>Rigid perching admittance; activation blocked pending a constrained Spinal command interface.</description>
+    <description>Rigid reference-based perching admittance through ordinary PID and allocation.</description>
   </class>
   <class name="aerial_robot_control/gimbalrotor_multilink_perching_admittance_controller" type="aerial_robot_control::GimbalrotorMultilinkPerchingAdmittanceController" base_class_type="aerial_robot_control::ControlBase">
-    <description>Articulated perching admittance; activation blocked pending a constrained Spinal command interface.</description>
+    <description>Articulated reference-based perching; contact admittance disabled pending verified effective wrench and joint torque telemetry.</description>
   </class>
 </library>

@@ -55,6 +55,7 @@ namespace aerial_robot_control
     virtual void rosParamInit();
     void reset() override;
     void controlCore() override;
+    virtual void preparePerchingReference();
     void allocateWrench(Eigen::VectorXd target_wrench_acc_cog);
 
   private:

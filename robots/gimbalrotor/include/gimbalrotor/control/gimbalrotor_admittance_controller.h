@@ -77,6 +77,7 @@ protected:
 
     ros::Time measurement_stamp;
     ros::Time receive_stamp;
+    std::string frame_id;
 
     std::uint64_t sequence = 0;
 
@@ -97,6 +98,7 @@ protected:
   ros::Time last_external_wrench_receive_time_;
   ros::Time external_wrench_measurement_stamp_;
   ros::Time external_wrench_receive_stamp_;
+  std::string external_wrench_frame_id_;
 
   std::uint64_t external_wrench_sequence_ = 0;
   

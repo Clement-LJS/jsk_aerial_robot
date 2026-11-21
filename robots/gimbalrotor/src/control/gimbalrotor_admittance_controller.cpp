@@ -110,6 +110,7 @@ void GimbalrotorAdmittanceController::resetExternalWrench()
   last_external_wrench_receive_time_ = ros::Time(0);
   external_wrench_measurement_stamp_ = ros::Time(0);
   external_wrench_receive_stamp_ = ros::Time(0);
+  external_wrench_frame_id_.clear();
 
   external_wrench_sequence_ = 0;
   has_external_wrench_ = false;
@@ -598,8 +599,9 @@ void GimbalrotorAdmittanceController::externalWrenchCallback(const geometry_msgs
   raw_external_wrench_(4) = msg->wrench.torque.y;
   raw_external_wrench_(5) = msg->wrench.torque.z;
 
-  external_wrench_measurement_stamp_ = msg->header.stamp.isZero() ? ros::Time::now() : msg->header.stamp;
+  external_wrench_measurement_stamp_ = msg->header.stamp;
   external_wrench_receive_stamp_ = ros::Time::now();
+  external_wrench_frame_id_ = msg->header.frame_id;
   last_external_wrench_receive_time_ = external_wrench_receive_stamp_;
 
   ++external_wrench_sequence_;
@@ -661,6 +663,7 @@ GimbalrotorAdmittanceController::getExternalWrenchSnapshot() const
   snapshot.raw_wrench = raw_external_wrench_;
   snapshot.measurement_stamp = external_wrench_measurement_stamp_;
   snapshot.receive_stamp = external_wrench_receive_stamp_;
+  snapshot.frame_id = external_wrench_frame_id_;
   snapshot.sequence = external_wrench_sequence_;
   snapshot.available = has_external_wrench_;
 

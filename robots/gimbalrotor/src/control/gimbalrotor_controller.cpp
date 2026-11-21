@@ -68,12 +68,20 @@ namespace aerial_robot_control
     return PoseLinearController::update();
   }
 
-  void GimbalrotorController::controlCore()
+  void GimbalrotorController::preparePerchingReference()
   {
     // ControlBase has admitted this cycle; navigation commits one body/joint pair
     // before the ordinary PID reads its target. No perched output on skipped cycles.
     auto perching = boost::dynamic_pointer_cast<aerial_robot_navigation::GimbalrotorPerchingNavigator>(navigator_);
     if(perching) perching->applyPerchingReference(0, 0, 0);
+  }
+
+  void GimbalrotorController::controlCore()
+  {
+    preparePerchingReference();
+    // A clock rewind must not integrate the ordinary PID backwards.
+    const double now = ros::Time::now().toSec();
+    if(now < control_timestamp_) control_timestamp_ = now;
     PoseLinearController::controlCore();
     tf::Matrix3x3 uav_rot = estimator_->getOrientation(Frame::COG, estimate_mode_);
     tf::Vector3 target_acc_w(pid_controllers_.at(X).result(),

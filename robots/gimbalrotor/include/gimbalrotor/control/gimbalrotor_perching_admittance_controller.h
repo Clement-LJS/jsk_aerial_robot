@@ -19,14 +19,12 @@ public:
   void reset() override;
 protected:
   void controlCore() override;
+  void preparePerchingReference() override;
   void applyAdmittanceOutputToNavigator(const tf::Vector3&, const tf::Vector3&, const AdmittanceCoreOutput&) override;
-  Eigen::Matrix<double, 6, 1> getExternalWrenchWorld() const override;
-  Eigen::Matrix3d getComplianceToWorldRotation() const override;
   const char* controllerName() const override { return "GimbalrotorPerchingAdmittanceController"; }
   void preparePerchingAdmittanceInput();
   void updateAdmittance();
   virtual bool externalLoad(Eigen::VectorXd&, Eigen::VectorXd&, double&);
-  virtual bool feedbackWrench(Eigen::Matrix<double, 6, 1>&);
   boost::shared_ptr<GimbalrotorPerchingModel> perching_model_;
   void updateContactGate(double residual_pitch_torque, double dt);
   void perchingAdmittanceEnableCallback(const std_msgs::BoolConstPtr&);

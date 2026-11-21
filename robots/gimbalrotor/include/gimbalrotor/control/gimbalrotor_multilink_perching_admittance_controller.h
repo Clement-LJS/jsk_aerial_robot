@@ -15,14 +15,12 @@ public:
 protected:
   void controlCore() override;
   bool externalLoad(Eigen::VectorXd&, Eigen::VectorXd&, double&) override;
-  bool feedbackWrench(Eigen::Matrix<double, 6, 1>&) override;
   const char* controllerName() const override { return "GimbalrotorMultilinkPerchingAdmittanceController"; }
 private:
   void commandWrenchCallback(const geometry_msgs::WrenchStampedConstPtr&);
   boost::shared_ptr<GimbalrotorMultilinkPerchingModel> articulated_model_;
   aerial_robot_navigation::GimbalrotorMultilinkPerchingNavigator* articulated_navigator_ = nullptr;
   ros::Subscriber command_sub_;
-  std::vector<PID> joint_pids_;
   perching_dynamics::MultilinkModel dynamics_;
   perching_dynamics::MomentumObserver observer_;
   perching_dynamics::ObservationFilter observation_filter_;

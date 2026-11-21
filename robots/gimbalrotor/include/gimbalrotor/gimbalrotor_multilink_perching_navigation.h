@@ -45,6 +45,7 @@ public:
   const Vector& appliedAccelerations() const { return applied_acceleration_; }
   bool jointCommand(sensor_msgs::JointState& command) const;
   const std::vector<bool>& movingCoordinates() const { return moving_; }
+  bool pitchTangent(const Vector&, const std::vector<bool>&, Vector&) const;
   double pitchAccelerationLimit() const override { return acceleration_limit_; }
   bool nominalHeld() const override;
   bool trackingHeld() const override;
@@ -82,7 +83,6 @@ private:
   bool candidateAllowed(const Vector&, double) const;
   bool evaluateReference(const Vector& q, Reference& out) const;
   bool angularJacobian(const Vector&, Eigen::MatrixXd&) const;
-  bool pitchTangent(const Vector&, const std::vector<bool>&, Vector&) const;
   bool orient(const Vector&, const Eigen::Matrix3d&, const std::vector<bool>&, Vector&) const;
   bool pitch(const Vector&, double, const std::vector<bool>&, Vector&) const;
   bool allowed(const Vector&, double, double, double) const;

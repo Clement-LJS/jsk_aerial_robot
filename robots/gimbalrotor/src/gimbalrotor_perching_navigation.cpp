@@ -256,11 +256,16 @@ void GimbalrotorPerchingNavigator::relockCallback(const std_msgs::EmptyConstPtr&
   const bool previous_model_valid = model_valid_;
   if(!tryLockPerching("manual relock", true))
   {
-    geometry_tree_ = previous_tree;
-    held_joints_ = previous_joints;
-    cog_to_body_ = previous_cog_to_body;
-    pivot_ = previous_pivot;
-    model_valid_ = previous_model_valid;
+    // Geometry rejection preserves the old lock. A dynamics failure has already
+    // reset it; do not restore only half of that retired session.
+    if(perching_locked_)
+    {
+      geometry_tree_ = previous_tree;
+      held_joints_ = previous_joints;
+      cog_to_body_ = previous_cog_to_body;
+      pivot_ = previous_pivot;
+      model_valid_ = previous_model_valid;
+    }
     ROS_ERROR(
         "[GimbalrotorPerchingNavigator] "
         "manual perching relock failed");
@@ -276,10 +281,18 @@ void GimbalrotorPerchingNavigator::resetPerchingLock()
   if(dynamics) dynamics->unlock();
   admittance_diagnostics_.clear();
   resetMotion();
+  if(perching_locked_ && navi_state_ == HOVER_STATE)
+  {
+    setTargetVel(tf::Vector3(0, 0, 0));
+    setTargetAcc(tf::Vector3(0, 0, 0));
+    setTargetOmega(tf::Vector3(0, 0, 0));
+    setTargetAngAcc(tf::Vector3(0, 0, 0));
+  }
   perching_locked_ = false;
   locked_radius_ = 0.0;
   active_pitch_delta_ = 0.0;
   lock_stamp_ = ros::Time(0);
+  pivot_ = Pose::Identity();
   hinge_arc_ = perching_geometry::Lock();
   reference_locked_rpy_.setValue(0, 0, 0);
   locked_robot_pos_world_.setValue(0, 0, 0);
@@ -691,6 +704,8 @@ bool GimbalrotorPerchingNavigator::lockDynamicsModel()
   if(dynamics->configure(active_joints_, reason) && dynamics->lock(pivot_, held_joints_, cog_to_body_)) return true;
   ROS_ERROR_STREAM("Perching dynamics lock failed: " << reason);
   resetPerchingLock();
+  perching_mode_ = perching_geometry::Mode::DISABLED;
+  status_ = "dynamics lock failed; perching reset";
   return false;
 }
 
@@ -934,7 +949,7 @@ bool GimbalrotorPerchingNavigator::applyPerchingReference(double pitch_offset, d
   {
     active_pitch_delta_ = previous_nominal;
     rigid_applied_rate_ = rigid_applied_acceleration_ = applied_offset_rate_ = 0;
-    if(active_perching_hold_enable_ && rigid_applied_valid_) publishApplied();
+    if(rigid_applied_valid_ && (active_perching_hold_enable_ || applied_stamp_ > 0)) publishApplied();
     publishDiagnostics();
     return false;
   }
