@@ -164,8 +164,25 @@ void GimbalrotorMultilinkPerchingNavigator::initializeMechanism()
     {
       std::lock_guard<std::recursive_mutex> l(perching_state_mutex_);
       if(!perching_locked_ || !motion_.source.empty() || m->header.frame_id != "perching_lock_" + std::to_string(session_)) return;
+      if(wire_angles_.empty() || rezero_active_) return;
+
       const double values[] = {m->vector.x, m->vector.y, m->vector.z};
-      for(std::size_t i = 0; i < wire_angles_.size() && i < 3; ++i) coordinateCommand(coordinate_map_.at(wire_angles_[i]), values[i]);
+      Vector candidate = destination_;
+      for(std::size_t i = 0; i < wire_angles_.size() && i < 3; ++i)
+      {
+        const int index = coordinate_map_.at(wire_angles_[i]);
+        if(!std::isfinite(values[i]) || values[i] < coordinate_lower_[index] ||
+           values[i] > coordinate_upper_[index]) return;
+        candidate[index] = values[i];
+      }
+      if(!allowed(candidate, max_tilt_, min_body_pitch_, max_body_pitch_)) return;
+
+      destination_ = candidate;
+      body_target_valid_ = false;
+      velocity_active_ = false;
+      stopping_ = false;
+      rezero_ready_ = false;
+      phase_ = "EXECUTING";
     }));
   for(const std::string key : {"model_valid", "contact_valid", "rezero_active", "rezero_ready", "rezero_failed",
       "pitch_rezero_active", "pitch_rezero_ready", "pitch_rezero_failed", "servo_frozen", "cutting_enabled", "feedback_valid", "secondary_settled"})
@@ -631,7 +648,6 @@ void GimbalrotorMultilinkPerchingNavigator::motionCallback(const gimbalrotor::Ro
     else if(m.mode == Command::RELEASE) stopMotion();
     else
     {
-      motion_.accept(m.source, m.sequence);
       if(m.mode == Command::BODY_PITCH)
       {
         if(!bodyPitchCommand(m.value, m.rate_limit, m.frame)) why = "infeasible body pitch target";
@@ -669,6 +685,7 @@ void GimbalrotorMultilinkPerchingNavigator::motionCallback(const gimbalrotor::Ro
           }
         }
       }
+      if(why.empty() && motion_.epoch == m.epoch) motion_.accept(m.source, m.sequence);
     }
   }
   std::ostringstream out;
@@ -684,10 +701,11 @@ perching_servo::Sample GimbalrotorMultilinkPerchingNavigator::servoSample(const 
 {
   perching_servo::Sample s;
   s.now = ros::Time::now().toSec(); s.hover = navi_state_ == HOVER_STATE;
+  if(!coordinate_map_.count(positioning_joint_)) return s;
   Sample observed;
   const Sample& measured = synchronized ? *synchronized : observed;
   s.model_valid = model_valid_ && (synchronized || observation(observed));
-  if(!s.model_valid || !coordinate_map_.count(positioning_joint_)) return s;
+  if(!s.model_valid) return s;
   const int i = coordinate_map_.at(positioning_joint_);
   s.joint_stamp = measured.stamp; s.q = measured.q[i]; s.qdot = measured.rate[i];
   s.body = perching_geometry::toKdl(measured.body);

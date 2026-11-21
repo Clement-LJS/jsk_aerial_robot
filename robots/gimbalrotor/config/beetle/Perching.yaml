@@ -274,8 +274,6 @@
             body_tracking_tolerance: 0.04
             request:
               pitch_increment: 0.349065850399
-              pitch_rate: 0.03
-              pitch_acceleration: 0.02
             active_joints:
             - joint_roll
             - joint_yaw
