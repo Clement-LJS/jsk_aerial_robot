@@ -144,16 +144,10 @@ private:
   std::unique_lock<std::recursive_mutex> lockNavigationTargets() override;
   void navigationTargetConflict(const char*) override;
   void selectPerchingMode(perching_geometry::Mode mode, bool enable);
-  void resetCallback(const std_msgs::EmptyConstPtr& msg);
   void resetPerchingLock();
-  void perchingEnableCallback(const std_msgs::BoolConstPtr& msg);
-  void perchingSlantedEnableCallback(const std_msgs::BoolConstPtr& msg);
   void manualPitchDeltaCallback(const std_msgs::Float64ConstPtr& msg);
   void commitPerchingLockIdentity();
   bool applyPerchingConstraint(const aerial_robot_msgs::FlightNav& nav_msg);
-  bool hasPositionCommand(const aerial_robot_msgs::FlightNav& nav_msg) const;
-  bool hasVelocityCommand(const aerial_robot_msgs::FlightNav& nav_msg) const;
-  tf::Vector3 getCurrentRobotPos() const;
   tf::Vector3 getCurrentRobotRPY() const;
   tf::Vector3 getDesiredPosition(const aerial_robot_msgs::FlightNav& nav_msg) const;
   tf::Vector3 getDesiredVelocity(const aerial_robot_msgs::FlightNav& nav_msg) const;
@@ -165,7 +159,6 @@ private:
   bool activePose(perching_geometry::Pose& pose) const;
   void publishApplied();
   bool configureGeometry(std::string& reason);
-  bool geometryFrames(const Vector&, std::map<std::string, KDL::Frame>&) const;
 
   ros::Subscriber perching_enable_sub_;
   ros::Subscriber perching_slanted_enable_sub_;

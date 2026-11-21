@@ -76,10 +76,20 @@ void GimbalrotorPerchingNavigator::initialize(
   readProfile();
   initializeMechanism();
 
-  perching_enable_sub_ = nh_.subscribe(perching_enable_topic_, 1, &GimbalrotorPerchingNavigator::perchingEnableCallback, this);
-  perching_slanted_enable_sub_ = nh_.subscribe(perching_slanted_enable_topic_, 1, &GimbalrotorPerchingNavigator::perchingSlantedEnableCallback, this);
+  perching_enable_sub_ = nh_.subscribe<std_msgs::Bool>(perching_enable_topic_, 1,
+      [this](const std_msgs::BoolConstPtr& msg) {
+        selectPerchingMode(perching_geometry::Mode::NORMAL, msg->data);
+      });
+  perching_slanted_enable_sub_ = nh_.subscribe<std_msgs::Bool>(perching_slanted_enable_topic_, 1,
+      [this](const std_msgs::BoolConstPtr& msg) {
+        selectPerchingMode(perching_geometry::Mode::SLANTED, msg->data);
+      });
   relock_sub_ = nh_.subscribe(relock_topic_, 1, &GimbalrotorPerchingNavigator::relockCallback, this);
-  reset_sub_ = nh_.subscribe(reset_topic_, 1, &GimbalrotorPerchingNavigator::resetCallback, this);
+  reset_sub_ = nh_.subscribe<std_msgs::Empty>(reset_topic_, 1,
+      [this](const std_msgs::EmptyConstPtr&) {
+        std::lock_guard<std::recursive_mutex> lock(perching_state_mutex_);
+        resetPerchingLock();
+      });
 
   manual_pitch_delta_sub_ = nh_.subscribe(
       manual_pitch_delta_topic_,
@@ -176,16 +186,6 @@ void GimbalrotorPerchingNavigator::update()
   // lifecycle gate and before PID target capture. Callbacks cannot publish joints.
 }
 
-void GimbalrotorPerchingNavigator::perchingEnableCallback(const std_msgs::BoolConstPtr& msg)
-{
-  selectPerchingMode(perching_geometry::Mode::NORMAL, msg->data);
-}
-
-void GimbalrotorPerchingNavigator::perchingSlantedEnableCallback(const std_msgs::BoolConstPtr& msg)
-{
-  selectPerchingMode(perching_geometry::Mode::SLANTED, msg->data);
-}
-
 void GimbalrotorPerchingNavigator::selectPerchingMode(perching_geometry::Mode mode, bool enable)
 {
   std::lock_guard<std::recursive_mutex> lock(perching_state_mutex_);
@@ -263,14 +263,6 @@ void GimbalrotorPerchingNavigator::relockCallback(const std_msgs::EmptyConstPtr&
   }
 
   active_pitch_delta_ = 0.0;
-}
-
-void GimbalrotorPerchingNavigator::resetCallback(const std_msgs::EmptyConstPtr& msg)
-{
-
-  std::lock_guard<std::recursive_mutex> lock(perching_state_mutex_);
-  (void)msg;
-  resetPerchingLock();
 }
 
 void GimbalrotorPerchingNavigator::resetPerchingLock()
@@ -387,8 +379,14 @@ bool GimbalrotorPerchingNavigator::applyPerchingConstraint(const aerial_robot_ms
   if(perching_mode_ == perching_geometry::Mode::DISABLED || navi_state_ != HOVER_STATE) return false;
   if(!perching_locked_ && !tryLockPerching("first perching command")) return false;
 
-  const bool position_command = hasPositionCommand(msg);
-  const bool velocity_command = hasVelocityCommand(msg);
+  const bool position_command = msg.pos_xy_nav_mode == NAV_MODE_POS ||
+      msg.pos_xy_nav_mode == NAV_MODE_POS_VEL ||
+      msg.pos_z_nav_mode == NAV_MODE_POS ||
+      msg.pos_z_nav_mode == NAV_MODE_POS_VEL;
+  const bool velocity_command = msg.pos_xy_nav_mode == NAV_MODE_VEL ||
+      msg.pos_xy_nav_mode == NAV_MODE_POS_VEL ||
+      msg.pos_z_nav_mode == NAV_MODE_VEL ||
+      msg.pos_z_nav_mode == NAV_MODE_POS_VEL;
   const tf::Vector3 desired_velocity = getDesiredVelocity(msg);
   perching_geometry::Pose pose;
   if(use_pitch_command_for_arc_ && hasPitchCommand(msg))
@@ -451,27 +449,6 @@ bool GimbalrotorPerchingNavigator::hasPitchCommand(const aerial_robot_msgs::Flig
   return nav_msg.pitch_nav_mode == NAV_MODE_POS;
 }
 
-bool GimbalrotorPerchingNavigator::hasPositionCommand(const aerial_robot_msgs::FlightNav& nav_msg) const
-{
-  return nav_msg.pos_xy_nav_mode == NAV_MODE_POS ||
-         nav_msg.pos_xy_nav_mode == NAV_MODE_POS_VEL ||
-         nav_msg.pos_z_nav_mode == NAV_MODE_POS ||
-         nav_msg.pos_z_nav_mode == NAV_MODE_POS_VEL;
-}
-
-bool GimbalrotorPerchingNavigator::hasVelocityCommand(const aerial_robot_msgs::FlightNav& nav_msg) const
-{
-  return nav_msg.pos_xy_nav_mode == NAV_MODE_VEL ||
-         nav_msg.pos_xy_nav_mode == NAV_MODE_POS_VEL ||
-         nav_msg.pos_z_nav_mode == NAV_MODE_VEL ||
-         nav_msg.pos_z_nav_mode == NAV_MODE_POS_VEL;
-}
-
-tf::Vector3 GimbalrotorPerchingNavigator::getCurrentRobotPos() const
-{
-  return estimator_->getPos(Frame::COG, estimate_mode_);
-}
-
 tf::Vector3 GimbalrotorPerchingNavigator::getCurrentRobotRPY() const
 {
   return estimator_->getEuler(Frame::COG, estimate_mode_);
@@ -479,7 +456,7 @@ tf::Vector3 GimbalrotorPerchingNavigator::getCurrentRobotRPY() const
 
 tf::Vector3 GimbalrotorPerchingNavigator::getDesiredPosition(const aerial_robot_msgs::FlightNav& nav_msg) const
 {
-  tf::Vector3 desired_pos = getCurrentRobotPos();
+  tf::Vector3 desired_pos = estimator_->getPos(Frame::COG, estimate_mode_);
 
   if(nav_msg.pos_xy_nav_mode == NAV_MODE_POS || nav_msg.pos_xy_nav_mode == NAV_MODE_POS_VEL)
   {
@@ -655,22 +632,17 @@ bool GimbalrotorPerchingNavigator::configureGeometry(std::string& reason)
   return true;
 }
 
-bool GimbalrotorPerchingNavigator::geometryFrames(const Vector& q, std::map<std::string, KDL::Frame>& poses) const
+bool GimbalrotorPerchingNavigator::bodyContact(const Vector& q, Pose& contact, Eigen::Vector3d& cog) const
 {
   if(q.size() != static_cast<int>(active_joints_.size() + 1) || !q.allFinite()) return false;
   KDL::JntArray joints = held_joints_;
   for(int i = 1; i < q.size(); ++i) joints(model_->getJointIndexMap().at(active_joints_[i - 1])) = q[i];
   // The private URDF tree keeps candidate FK out of the live model's KDL caches.
+  std::map<std::string, KDL::Frame> poses;
   KDL::TreeFkSolverPos_recursive fk(geometry_tree_);
   for(const auto& item : geometry_tree_.getSegments())
     if(fk.JntToCart(joints, poses[item.first], item.first) < 0) return false;
-  return poses.count(model_->getBaselinkName()) && poses.count("perching_pivot");
-}
-
-bool GimbalrotorPerchingNavigator::bodyContact(const Vector& q, Pose& contact, Eigen::Vector3d& cog) const
-{
-  std::map<std::string, KDL::Frame> poses;
-  if(!geometryFrames(q, poses)) return false;
+  if(!poses.count(model_->getBaselinkName()) || !poses.count("perching_pivot")) return false;
   const auto& body = poses.at(model_->getBaselinkName());
   contact = perching_geometry::fromKdl(body.Inverse() * poses.at("perching_pivot"));
   KDL::RigidBodyInertia total = KDL::RigidBodyInertia::Zero();
