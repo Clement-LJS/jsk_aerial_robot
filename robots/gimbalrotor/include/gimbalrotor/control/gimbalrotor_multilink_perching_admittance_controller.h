@@ -1,6 +1,8 @@
 // -*- mode: c++ -*-
 #pragma once
 #include <gimbalrotor/control/gimbalrotor_perching_admittance_controller.h>
+#include <gimbalrotor/gimbalrotor_multilink_perching_navigation.h>
+#include <gimbalrotor/model/gimbalrotor_multilink_perching_model.h>
 namespace aerial_robot_control
 {
 class GimbalrotorMultilinkPerchingAdmittanceController : public GimbalrotorPerchingAdmittanceController
@@ -12,15 +14,14 @@ public:
   void reset() override;
 protected:
   void controlCore() override;
-  void sendCmd() override;
   bool externalLoad(Eigen::VectorXd&, Eigen::VectorXd&, double&) override;
   bool feedbackWrench(Eigen::Matrix<double, 6, 1>&) override;
   const char* controllerName() const override { return "GimbalrotorMultilinkPerchingAdmittanceController"; }
 private:
   void commandWrenchCallback(const geometry_msgs::WrenchStampedConstPtr&);
   boost::shared_ptr<GimbalrotorMultilinkPerchingModel> articulated_model_;
+  aerial_robot_navigation::GimbalrotorMultilinkPerchingNavigator* articulated_navigator_ = nullptr;
   ros::Subscriber command_sub_;
-  ros::Publisher joints_pub_;
   std::vector<PID> joint_pids_;
   perching_dynamics::MultilinkModel dynamics_;
   perching_dynamics::MomentumObserver observer_;

@@ -3,6 +3,7 @@
 #include <gimbalrotor/control/gimbalrotor_admittance_controller.h>
 #include <gimbalrotor/control/gimbalrotor_multilink_perching_observer.h>
 #include <gimbalrotor/gimbalrotor_perching_navigation.h>
+#include <gimbalrotor/model/gimbalrotor_perching_model.h>
 #include <std_msgs/Empty.h>
 #include <deque>
 #include <tf/transform_broadcaster.h>

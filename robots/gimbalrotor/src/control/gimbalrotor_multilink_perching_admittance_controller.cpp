@@ -1,6 +1,7 @@
 #include <gimbalrotor/control/gimbalrotor_multilink_perching_admittance_controller.h>
 #include <pluginlib/class_list_macros.h>
 #include <Eigen/SVD>
+#include <chrono>
 
 namespace aerial_robot_control
 {
@@ -10,20 +11,24 @@ void GimbalrotorMultilinkPerchingAdmittanceController::initialize(ros::NodeHandl
     boost::shared_ptr<aerial_robot_navigation::BaseNavigator> navigator, double rate)
 {
   GimbalrotorPerchingAdmittanceController::initialize(nh, nhp, model, estimator, navigator, rate);
+  articulated_navigator_ = dynamic_cast<aerial_robot_navigation::GimbalrotorMultilinkPerchingNavigator*>(navigator.get());
+  if(!articulated_navigator_) throw std::invalid_argument("articulated controller requires the multilink perching navigator");
   articulated_model_ = boost::dynamic_pointer_cast<GimbalrotorMultilinkPerchingModel>(model);
   if(!articulated_model_) throw std::invalid_argument("articulated controller requires the shared articulated model");
-  std::string command_topic, joint_topic;
+  std::string command_topic;
   nh_.param<std::string>("controller/command_wrench_topic", command_topic, "perching/command_wrench_estimate");
-  nh_.param<std::string>("navigation/perching/joint_command_topic", joint_topic, "joints_ctrl");
   command_sub_ = nh_.subscribe(command_topic, 20, &GimbalrotorMultilinkPerchingAdmittanceController::commandWrenchCallback, this);
-  joints_pub_ = nh_.advertise<sensor_msgs::JointState>(joint_topic, 1);
 }
 
 void GimbalrotorMultilinkPerchingAdmittanceController::reset()
 {
+  std::lock_guard<std::recursive_mutex> lock(perching_state_mutex_);
   GimbalrotorPerchingAdmittanceController::reset();
   observer_.reset();
   observation_filter_.reset();
+  filtered_stamp_ = observation_start_ = 0;
+  observation_tangent_.resize(0);
+  commands_.clear();
   dynamics_valid_ = false;
   joint_pids_.clear();
 }
@@ -41,7 +46,7 @@ void GimbalrotorMultilinkPerchingAdmittanceController::controlCore()
     observation_start_ = ros::Time::now().toSec();
     commands_.clear();
     dynamics_valid_ = !session.lock_stamp.isZero() && articulated_model_->dynamics(dynamics_, reason_);
-    const auto count = perching_navigator_->movingCoordinates().size();
+    const auto count = articulated_navigator_->movingCoordinates().size();
     joint_pids_.assign(count > 0 ? count - 1 : 0, pid_controllers_.at(PITCH));
     for(auto& pid : joint_pids_)
     {
@@ -54,21 +59,13 @@ void GimbalrotorMultilinkPerchingAdmittanceController::controlCore()
   GimbalrotorPerchingAdmittanceController::controlCore();
 }
 
-void GimbalrotorMultilinkPerchingAdmittanceController::sendCmd()
-{
-  std::lock_guard<std::recursive_mutex> lock(perching_navigator_->perchingStateMutex());
-  sensor_msgs::JointState command;
-  if(perching_navigator_->jointCommand(command)) joints_pub_.publish(command);
-  GimbalrotorPerchingAdmittanceController::sendCmd();
-}
-
 bool GimbalrotorMultilinkPerchingAdmittanceController::feedbackWrench(Eigen::Matrix<double, 6, 1>& wrench)
 {
   aerial_robot_navigation::GimbalrotorPerchingNavigator::Sample measured;
   if(!perching_navigator_->observation(measured) || !measured.effort_valid || !measured.rate.allFinite()) return false;
-  const auto& reference = perching_navigator_->appliedCoordinates();
-  const auto& reference_rate = perching_navigator_->appliedRates();
-  const auto& reference_acceleration = perching_navigator_->appliedAccelerations();
+  const auto& reference = articulated_navigator_->appliedCoordinates();
+  const auto& reference_rate = articulated_navigator_->appliedRates();
+  const auto& reference_acceleration = articulated_navigator_->appliedAccelerations();
   Eigen::MatrixXd angular;
   if(reference.size() != measured.q.size() || reference_rate.size() != reference.size() ||
      reference_acceleration.size() != reference.size() ||
@@ -140,16 +137,18 @@ bool GimbalrotorMultilinkPerchingAdmittanceController::externalLoad(Eigen::Vecto
       return fail(reason_);
     if(!observer_.observe(evaluation.momentum, evaluation.predicted_rate, sample.stamp, observer_gain_, observer_max_interval_)) return false;
     // Projection and momentum use the same filtered observation configuration.
-    if(!perching_navigator_->mechanism().pitchTangent(observation_filter_.q,
-        perching_navigator_->movingCoordinates(), observation_tangent_)) observation_tangent_.resize(0);
+    if(!articulated_model_->pitchTangent(observation_filter_.q,
+        articulated_navigator_->movingCoordinates(), observation_tangent_)) observation_tangent_.resize(0);
     sensor_msgs::JointState raw;
     raw.header.stamp.fromSec(observer_.stamp()); raw.header.frame_id = "perching_generalized";
-    raw.name = perching_navigator_->mechanism().coordinates();
+    raw.name = articulated_model_->coordinates();
     raw.position.assign(observation_filter_.q.data(), observation_filter_.q.data() + observation_filter_.q.size());
     raw.effort.assign(observer_.load().data(), observer_.load().data() + observer_.load().size());
     generalized_load_pub_.publish(raw);
   }
   if(!observer_.ready() || ros::Time::now().toSec() - observer_.stamp() > external_wrench_timeout_) return false;
+  if(observation_tangent_.size() != observer_.load().size() || !observation_tangent_.allFinite())
+  { reason_ = "body pitch projection unavailable"; return false; }
   load = observer_.load(); tangent = observation_tangent_; stamp = observer_.stamp();
   return true;
 }
