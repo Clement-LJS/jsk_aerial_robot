@@ -253,7 +253,7 @@ void GimbalrotorPerchingAdmittanceController::controlCore()
     pid_controllers_.at(PITCH).reset();
   }
   perching_active_ = session.mode != perching_geometry::Mode::DISABLED && !session.lock_stamp.isZero() &&
-      navigator_->getNaviState() == aerial_robot_navigation::HOVER_STATE && perching_model_->locked();
+      navigator_->getNaviState() == aerial_robot_navigation::HOVER_STATE && !navigator_->getForceLandingFlag() && perching_model_->locked();
   if(!perching_active_)
   {
     updatePitchIntegralPolicy(pid_controllers_.at(PITCH), false);

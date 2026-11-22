@@ -128,6 +128,7 @@ protected:
   bool estimateCoordinates(const Pose&, Vector&, double&, double&) const;
 
   boost::shared_ptr<GimbalrotorRobotModel> model_;
+  KDL::Tree geometry_tree_;
   Pose pivot_ = Pose::Identity();
   std::vector<std::string> active_joints_;
   // Feedback, nominal commands and controller-visible session state share this lock.
@@ -200,7 +201,6 @@ private:
   tf::Vector3 locked_pivot_world_;
   double locked_radius_;
   double rigid_applied_rate_ = 0, rigid_applied_acceleration_ = 0;
-  KDL::Tree geometry_tree_;
   KDL::JntArray held_joints_;
   Eigen::Matrix3d cog_to_body_ = Eigen::Matrix3d::Identity();
   perching_geometry::Lock hinge_arc_;

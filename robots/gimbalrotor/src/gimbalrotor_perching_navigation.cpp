@@ -168,7 +168,7 @@ void GimbalrotorPerchingNavigator::update()
 {
   std::lock_guard<std::recursive_mutex> lock(perching_state_mutex_);
   GimbalrotorNavigator::update();
-  if(navi_state_ != HOVER_STATE)
+  if(navi_state_ != HOVER_STATE || force_landing_flag_)
   {
     onNonHover();
     if(perching_mode_ != perching_geometry::Mode::DISABLED) resetPerchingLock();

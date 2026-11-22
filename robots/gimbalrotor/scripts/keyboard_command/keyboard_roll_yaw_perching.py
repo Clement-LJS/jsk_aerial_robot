@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Replaceable mechanism and body-local pitch targets; navigator owns actuators."""
+"""Measured-pose manual steps; navigator owns limits and actuators."""
 import math
 import os
 import re
@@ -13,6 +13,7 @@ import tty
 import rospy
 from geometry_msgs.msg import Vector3Stamped
 from nav_msgs.msg import Odometry
+from sensor_msgs.msg import JointState
 from std_msgs.msg import Bool, Empty, String, UInt8, UInt64, Float64
 try:
     from roll_yaw_motion import MotionClient, RollYawMotion
@@ -39,17 +40,14 @@ Roll/yaw are URDF joint coordinates: positive joints can rotate the body negativ
 The body reference/measurement is published separately; no passive actuator exists.
 Body alignment uses separate body_yaw_target/body_roll_target Float64 topics.
 Cut commands use prepare/start/stop with current session; wait for measured READY before start.
-Manual keys replace the nominal destination during motion; any needed braking is handled onboard.
-Mechanism keys update only their own accumulated nominal destination, like multilink.
-o/u update one total body +Y destination; earlier destinations are replaced.
-The body-pitch frame starts after a mode takeover brakes. Space cancels it.
+Manual keys step from the measured pose. Repeated keys while moving are discarded.
+Wait for the reference to finish and measured tracking to settle before the next step.
+o/u request a measured body-local +Y pitch jog. Space cancels it.
 Reference completion and measured endpoint error are reported separately.
 ~body_pitch_step_deg is separate from passive ~pitch_step_deg.
-~body_pitch_rate_deg_s defaults to 0.5; ~body_pitch_limit_deg defaults to 20.
+~body_pitch_rate_deg_s defaults to 0.5; navigator joint/body limits apply.
 Feedback loss holds the accepted destination and resumes when coherent feedback returns. New invalid requests are rejected.
-Body-pitch targets use enabled admittance after a quiet unloaded tare; a prepared
-cut is optional. Space cancels preparation or motion and holds.
-Other destinations survive quick axis changes. Space holds without zeroing joints.
+Manual navigation does not require admittance. Space holds without zeroing joints.
 Targets clamp to navigator effective limits; reversal at a limit takes one step.
 Quitting preserves contact hold and restores the terminal. No saw command is sent.
 """
@@ -62,10 +60,7 @@ class Keyboard:
         self.state_time = self.flight_time = self.angles_time = 0.0
         self.session = self.flight = self.angles = None
         self.angles_frame = ''
-        self.commanded = None
-        self.pending_axes = [False] * 3
-        self.nominal_after_jog = 0.
-        self.command_times = [0.] * 3
+        self.measured = {}
         self.position_limits = {'lower': None, 'upper': None}  # wire: roll, alpha, yaw
         self.limit_times = {'lower': 0., 'upper': 0.}
         self.applied = None
@@ -85,9 +80,9 @@ class Keyboard:
         debug_prefix = rospy.get_param('~debug_prefix', 'perching/roll_yaw').rstrip('/')
         self.prefix = debug_prefix if debug_prefix.startswith('/') else self.ns + '/' + debug_prefix
         self.motion = MotionClient(self.prefix)
-        self.body_pitch_target = 0.
-        self.body_pitch_mode = False
-        self.body_pitch_sequence = 0
+        self.coordinates = {int(k): v for k, v in rospy.get_param(self.ns + '/navigation/perching/wire_coordinates').items()}
+        self.feedback_timeout = rospy.get_param(self.ns + '/navigation/perching/feedback_timeout', .15)
+        self.future_tolerance = rospy.get_param(self.ns + '/navigation/perching/future_tolerance', .02)
         self.body_pitch_rate = math.radians(float(rospy.get_param('~body_pitch_rate_deg_s', .5)))
         self.body_pitch_limit = math.radians(float(rospy.get_param('~body_pitch_limit_deg', 20.)))
         if not 0 < self.body_pitch_rate < math.inf or not 0 < self.body_pitch_limit < math.pi:
@@ -106,7 +101,12 @@ class Keyboard:
         }
         for action, topic in (('arm', 'start'), ('takeoff', 'takeoff'), ('land', 'land'), ('halt', 'halt')):
             self.pubs[action] = rospy.Publisher(self.ns + '/teleop_command/' + topic, Empty, queue_size=1)
+        joint_topic = rospy.get_param(self.ns + '/navigation/perching/joint_state_topic', 'joint_states')
+        if not joint_topic.startswith('/'):
+            joint_topic = self.ns + '/' + joint_topic
         self.subs = [
+            rospy.Subscriber(joint_topic, JointState, self.joint_callback, queue_size=1),
+            rospy.Subscriber(self.prefix + '/passive_alpha_measured', Float64, self.alpha_callback, queue_size=1),
             rospy.Subscriber(self.prefix + '/command_ack', String, self.ack_callback, queue_size=10),
             rospy.Subscriber(self.prefix + '/state', String, self.state_callback, queue_size=1),
             rospy.Subscriber(self.prefix + '/session', UInt64, self.session_callback, queue_size=1),
@@ -130,59 +130,18 @@ class Keyboard:
                     return
                 if fields.get('accepted') == 'false':
                     print('\nNavigator: ' + msg.data, flush=True)
-                mode = int(fields.get('mode', '-1'))
-                if mode == RollYawMotion.BODY_PITCH and int(fields.get('sequence', '0')) == self.body_pitch_sequence:
-                    if fields.get('accepted') == 'false':
-                        if 'accepted_value' in fields:
-                            self.body_pitch_target = float(fields['accepted_value'])
-                elif mode in (RollYawMotion.ALPHA, RollYawMotion.ROLL, RollYawMotion.YAW):
-                    axis = {RollYawMotion.ALPHA: 1, RollYawMotion.ROLL: 0, RollYawMotion.YAW: 2}[mode]
-                    if ('accepted_value' in fields and self.commanded is not None
-                            and self.commanded[axis] == float(fields.get('value', 'nan'))):
-                        self.commanded[axis] = float(fields['accepted_value'])
-                        self.pending_axes[axis] = False
             return
-        session = re.search(r'\bsession=(\d+)\b', msg.data)
-        with self.lock:
-            if session and int(session[1]) == self.session and msg.data.startswith('action=body_pitch_delta '):
-                now = time.monotonic()
-                phase = re.search(r'\bphase=(\w+)\b', msg.data)
-                if phase and phase[1] in ('waiting', 'moving'):
-                    self.nominal_after_jog = now
-                    self.commanded = None
-                    self.pending_axes = [False] * 3
-                print('\nNavigator: ' + msg.data, flush=True)
 
     def state_callback(self, msg):
         stage, _, reason = msg.data.partition(': ')
         with self.lock:
-            correction = re.search(r'\[axis=(alpha|roll|yaw) lock=(\d+) requested=(\S+) accepted=(\S+)\]', reason)
-            if correction and int(correction[2]) == self.session and self.commanded is not None:
-                axis = {'roll': 0, 'alpha': 1, 'yaw': 2}[correction[1]]
-                try:
-                    requested, accepted = float(correction[3]), float(correction[4])
-                except ValueError:
-                    requested = accepted = float('nan')
-                # Ignore an older result after a newer key on this axis. Other
-                # pending coordinates must never be reset by this correction.
-                if (math.isfinite(requested) and math.isfinite(accepted) and self.limits_valid()
-                        and self.pending_axes[axis] and abs(self.commanded[axis] - requested) < 1e-9):
-                    self.commanded[axis] = self.clamp_target(axis, accepted)
-                    self.pending_axes[axis] = False
-            if stage.startswith('PITCH_REZERO_') or stage in ('FREE_FLIGHT', 'FAULT_HOLD', 'LOCK_FAILED'):
-                self.commanded = None
-                self.pending_axes = [False] * 3
-            now = time.monotonic()
-            self.state, self.state_time = (stage, reason), now
+            self.state, self.state_time = (stage, reason), time.monotonic()
 
     def session_callback(self, msg):
         with self.lock:
             if self.session != msg.data:
-                self.body_pitch_mode = False
-                self.body_pitch_target = 0.
-                self.nominal_after_jog = 0.
-                self.angles = self.commanded = self.applied = None
-                self.pending_axes = [False] * 3
+                self.measured.clear()
+                self.angles = self.applied = None
                 self.position_limits = {'lower': None, 'upper': None}
                 self.limit_times = {'lower': 0., 'upper': 0.}
                 # Remote stamp is identity only; local receipt/request clocks
@@ -201,11 +160,6 @@ class Keyboard:
                 return
             self.angles = values if all(math.isfinite(x) for x in values) else None
             self.angles_frame, self.angles_time = msg.header.frame_id, now
-            if self.angles is None:
-                self.commanded = None
-                self.pending_axes = [False] * 3
-                return
-            self.reconcile_nominal(now)
 
     def limits_callback(self, msg, bound):
         values = (msg.vector.x, msg.vector.y, msg.vector.z)  # roll, alpha, yaw
@@ -214,14 +168,6 @@ class Keyboard:
                 return
             self.position_limits[bound] = values if all(math.isfinite(v) for v in values) else None
             self.limit_times[bound] = time.monotonic()
-            if not self.limits_valid():
-                self.commanded = None
-                self.pending_axes = [False] * 3
-            elif self.commanded is None:
-                self.reconcile_nominal(time.monotonic())
-            else:
-                # Repeated bound messages are not new nominal acknowledgements.
-                self.commanded = [self.clamp_target(i, v) for i, v in enumerate(self.commanded)]
 
     def limits_valid(self):
         lower, upper = self.position_limits['lower'], self.position_limits['upper']
@@ -230,20 +176,19 @@ class Keyboard:
     def clamp_target(self, axis, value):
         return max(self.position_limits['lower'][axis], min(self.position_limits['upper'][axis], value))
 
-    def reconcile_nominal(self, now):
-        # Called under the state lock. Bounds may arrive before or after nominal
-        # feedback; neither callback publishes a movement on startup/relock.
-        if self.angles is None or not self.limits_valid():
+    def joint_callback(self, msg):
+        age = (rospy.Time.now() - msg.header.stamp).to_sec()
+        if age < -self.future_tolerance or age > self.feedback_timeout:
             return
-        if self.commanded is None:
-            self.commanded = [self.clamp_target(i, v) for i, v in enumerate(self.angles)]
-        for axis in range(3):
-            self.commanded[axis] = self.clamp_target(axis, self.commanded[axis])
-            accepted = self.clamp_target(axis, self.angles[axis])
-            acknowledged = abs(accepted - self.commanded[axis]) < 1e-9
-            if not self.pending_axes[axis] or acknowledged or now - self.command_times[axis] > .5:
-                self.commanded[axis] = accepted
-                self.pending_axes[axis] = False
+        with self.lock:
+            for name, position in zip(msg.name, msg.position):
+                if name in self.coordinates.values() and math.isfinite(position):
+                    self.measured[name] = (position, time.monotonic() - max(0., age))
+
+    def alpha_callback(self, msg):
+        if math.isfinite(msg.data):
+            with self.lock:
+                self.measured['alpha'] = (msg.data, time.monotonic())
 
     def applied_callback(self, msg):
         values = (msg.vector.x, msg.vector.y, msg.vector.z)
@@ -307,20 +252,26 @@ class Keyboard:
             return 'Need valid, fresh effective position bounds for the current lock.'
         if not self.fresh(s) or not self.has_angles(s) or s['flight'] != 5:
             return ('Need fresh local receipts of HOVER and current-session targets.')
+        with self.motion.lock:
+            status = self.motion.status
+            if not status or time.monotonic() - status[0] >= 1 or int(status[1].get('session_id', '0')) != s['session']:
+                return 'Waiting for current contact diagnostics.'
+            if status[1].get('admittance_hold_eligible') != '1':
+                return 'Motion or tracking has not settled; key discarded.'
+            if (self.motion.claimed and self.motion.epoch == self.motion.current_epoch
+                    and self.motion.session == s['session'] and self.motion.mode != RollYawMotion.CLAIM):
+                ack = self.motion.ack
+                if not ack or int(ack[1].get('sequence', '0')) != self.motion.sequence:
+                    return 'Waiting for command acknowledgement; key discarded.'
+                if ack[1].get('accepted') == 'true' and (status[0] < self.motion.last_motion_time or
+                        int(status[1].get('motion_sequence', '0')) < self.motion.sequence):
+                    return 'Waiting for motion completion; key discarded.'
         if not self.motion.publisher.get_num_connections():
             return 'No navigator connection for motion targets.'
         return ''
 
     def rearm_motion(self, session):
-        with self.lock:
-            previous = self.motion.epoch
-            if self.motion.rearm(session):
-                self.body_pitch_mode = False
-                self.body_pitch_target = 0.
-                self.commanded = ([self.clamp_target(i, v) for i, v in enumerate(self.applied)]
-                                  if previous is not None and self.applied is not None and
-                                  time.monotonic() - self.applied_time < 1 and self.limits_valid() else None)
-                self.pending_axes = [False] * 3
+        self.motion.rearm(session)
         # Do not hold the display/state mutex while waiting for ROS callbacks.
         self.motion.claim(session)
         rejection = self.movement_rejection(self.snapshot())
@@ -338,11 +289,6 @@ class Keyboard:
                 with self.motion.lock:
                     self.motion.stop_epoch = self.motion.current_epoch
                     self.publish('stop', UInt64(s['session']))
-                self.body_pitch_mode = False
-                self.body_pitch_target = 0.
-                self.commanded = ([self.clamp_target(i, v) for i, v in enumerate(s['applied'])]
-                                  if s['applied'] is not None and self.limits_valid() else None)
-                self.pending_axes = [False] * 3
             return
         rejection = self.movement_rejection(s)
         if rejection:
@@ -352,22 +298,12 @@ class Keyboard:
         with self.lock:
             if self.session != s['session']:
                 raise RuntimeError('Lock changed; waiting for its nominal baseline.')
-            if self.angles_time < self.nominal_after_jog:
-                raise RuntimeError('Waiting for fresh accepted nominal vector after coordinated jog.')
-            if not self.has_limits(self.snapshot()):
-                raise RuntimeError('Need valid, fresh effective position bounds for the current lock.')
-            if self.commanded is None:
-                self.reconcile_nominal(time.monotonic())
-            if self.commanded is None:
-                raise RuntimeError('Waiting for a valid bounded nominal baseline.')
-            value = self.clamp_target(index, self.commanded[index] + sign * self.steps[axis])
             mode = {'roll': RollYawMotion.ROLL, 'pitch': RollYawMotion.ALPHA, 'yaw': RollYawMotion.YAW}[axis]
+            measured = self.measured.get(self.coordinates[mode])
+            if measured is None or time.monotonic() - measured[1] > self.feedback_timeout:
+                raise RuntimeError('Waiting for fresh measured joint position.')
+            value = self.clamp_target(index, measured[0] + sign * self.steps[axis])
             self.motion.send(s['session'], mode, value)
-            self.body_pitch_mode = False
-            self.body_pitch_target = 0.
-            self.commanded[index] = value
-            self.pending_axes[index] = True
-            self.command_times[index] = time.monotonic()
 
     def show_status(self):
         s = self.snapshot()
@@ -446,15 +382,9 @@ class Keyboard:
             with self.lock:
                 if self.session != s['session']:
                     raise RuntimeError('Lock changed during motion handover.')
-                now = time.monotonic()
-                value = (self.body_pitch_target if self.body_pitch_mode else 0.) + self.steps['body_pitch'] * (1 if key == 'o' else -1)
-                value = max(-self.body_pitch_limit, min(self.body_pitch_limit, value))
-                self.body_pitch_sequence = self.motion.send(s['session'], RollYawMotion.BODY_PITCH, value, self.body_pitch_rate)
-                self.body_pitch_target, self.body_pitch_mode = value, True
-                self.nominal_after_jog = now
-                self.commanded = None
-                self.pending_axes = [False] * 3
-            print('\nBody-local pitch target: {:+.2f} deg (replaces previous destination).'.format(math.degrees(value)), flush=True)
+                value = min(self.steps['body_pitch'], self.body_pitch_limit) * (1 if key == 'o' else -1)
+                self.motion.send(s['session'], RollYawMotion.JOG, value, self.body_pitch_rate)
+            print('\nMeasured body-local pitch step: {:+.2f} deg.'.format(math.degrees(value)), flush=True)
         elif key in ('z', 'b'):
             s = self.snapshot()
             if not self.fresh(s) or not self.has_angles(s) or s['flight'] != 5:
