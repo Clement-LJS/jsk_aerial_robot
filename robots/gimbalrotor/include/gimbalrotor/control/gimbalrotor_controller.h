@@ -3,6 +3,7 @@
 #pragma once
 
 #include <numeric>
+#include <deque>
 #include <aerial_robot_control/control/base/pose_linear_controller.h>
 #include <aerial_robot_control/control/fully_actuated_controller.h>
 #include <aerial_robot_estimation/state_estimation.h>
@@ -55,6 +56,12 @@ namespace aerial_robot_control
     double target_roll_ = 0.0, target_pitch_ = 0.0;
 
   protected:
+    struct CommandSample
+    {
+      double stamp = 0, receipt = 0;
+      Eigen::Matrix<double, 6, 1> wrench = Eigen::Matrix<double, 6, 1>::Zero();
+    };
+    std::deque<CommandSample> command_history_;
     virtual void rosParamInit();
     void reset() override;
     void controlCore() override;

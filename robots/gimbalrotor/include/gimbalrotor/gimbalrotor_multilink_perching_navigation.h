@@ -17,18 +17,19 @@ struct MotionIdentity
 {
   std::uint64_t epoch = 1, sequence = 0;
   std::string source;
-  std::string rejection(std::uint64_t e, const std::string& s, std::uint64_t n, bool claim = false) const
+  std::map<std::string, std::uint64_t> processed;
+  std::string rejection(std::uint64_t e, const std::string& s, std::uint64_t n) const
   {
     if(e != epoch) return "cancelled motion epoch";
     if(s.empty() || s.size() > 128 || n == 0 ||
        s.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-") != std::string::npos)
       return "invalid motion identity";
-    if(!claim && !source.empty() && source != s) return "another source owns motion; claim after nominal motion finishes";
-    if(source == s && n <= sequence) return "old motion sequence";
+    const auto previous = processed.find(s);
+    if(previous != processed.end() && n <= previous->second) return "old motion sequence";
     return "";
   }
   void accept(const std::string& s, std::uint64_t n) { source = s; sequence = n; }
-  void revoke() { ++epoch; source.clear(); sequence = 0; }
+  void revoke() { ++epoch; source.clear(); sequence = 0; processed.clear(); }
 };
 }  // namespace perching_geometry
 
@@ -45,7 +46,6 @@ public:
   const Vector& appliedAccelerations() const { return applied_acceleration_; }
   bool jointCommand(sensor_msgs::JointState& command) const;
   const std::vector<bool>& movingCoordinates() const { return moving_; }
-  bool pitchTangent(const Vector&, const std::vector<bool>&, Vector&) const;
   double pitchAccelerationLimit() const override { return acceleration_limit_; }
   bool nominalHeld() const override;
   bool trackingHeld() const override;
@@ -81,13 +81,7 @@ private:
   bool servoModel(double, KDL::Frame&, KDL::Vector&) const;
   void publishApplied();
   bool candidateAllowed(const Vector&, double) const;
-  bool evaluateReference(const Vector& q, Reference& out) const;
-  bool angularJacobian(const Vector&, Eigen::MatrixXd&) const;
-  bool orient(const Vector&, const Eigen::Matrix3d&, const std::vector<bool>&, Vector&) const;
-  bool pitch(const Vector&, double, const std::vector<bool>&, Vector&) const;
-  bool allowed(const Vector&, double, double, double) const;
 
-  Vector coordinate_lower_, coordinate_upper_, coordinate_velocity_, coordinate_acceleration_;
   std::vector<bool> moving_;
   std::map<std::string, int> coordinate_map_;
   std::map<int, std::string> wire_coordinates_;
@@ -106,13 +100,13 @@ private:
   std::string paused_phase_;
   double paused_body_destination_ = 0, prepared_increment_ = 0;
   std::string phase_ = "FREE_FLIGHT";
-  Sample measured_;
+  mutable Sample measured_;
   std::deque<Sample> joint_history_, body_history_;
   Vector nominal_, destination_, proposed_, nominal_rate_, proposed_rate_, applied_, applied_rate_, applied_acceleration_;
   Vector body_start_, locked_q_;
   Reference applied_state_;
   double body_destination_ = 0, body_progress_ = 0, proposed_progress_ = 0, body_rate_ = 0, proposed_body_rate_ = 0;
-  double body_rate_limit_ = .03, body_tracking_tolerance_ = .04;
+  double body_rate_limit_ = INFINITY, body_tracking_tolerance_ = .04;
   double acceleration_limit_ = .02, sync_tolerance_ = .05;
   double max_tilt_ = .9, min_body_pitch_ = -M_PI / 2, max_body_pitch_ = M_PI / 2;
   double cog_speed_limit_ = .1, cog_acceleration_limit_ = .2;

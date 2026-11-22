@@ -294,8 +294,9 @@ bool GimbalrotorMultilinkPerchingModel::orient(const Vector& start, const Eigen:
   if(selected.empty()) return false;
   for(int iteration = 0; iteration < 40; ++iteration)
   {
-    State state; Eigen::MatrixXd angular;
-    if(!evaluate(result, state) || !jacobian(result, angular)) return false;
+    perching_dynamics::MultilinkModel::GeometryState state;
+    if(!differential(result, state)) return false;
+    const Eigen::MatrixXd angular = state.body.linear().transpose() * state.body_angular;
     const Eigen::Vector3d error = logSO3(state.body.linear().transpose() * target);
     if(error.norm() < 1e-6) return true;
     Eigen::MatrixXd task(3, selected.size());

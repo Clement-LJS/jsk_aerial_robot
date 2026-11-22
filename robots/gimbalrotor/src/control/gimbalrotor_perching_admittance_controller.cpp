@@ -259,7 +259,10 @@ void GimbalrotorPerchingAdmittanceController::controlCore()
   if(reset_requested_)
   {
     admittance_core_.reset();
-    pitch_torque_lpf_ = 0;
+    admittance_output_.angle_offset_compliance.y() = perching_navigator_->appliedPitchOffset();
+    admittance_output_.angular_vel_offset_compliance.y() = perching_navigator_->appliedPitchOffsetRate();
+    admittance_output_.angular_acc_offset_compliance.setZero();
+    admittance_core_.acceptRotationalState(admittance_output_);
     reset_requested_ = false;
   }
   preparePerchingAdmittanceInput();
@@ -301,12 +304,25 @@ void GimbalrotorPerchingAdmittanceController::preparePerchingReference()
     proposal.angular_acc_offset_compliance.y() = std::clamp(-previous_rate / dt, -limit, limit);
   }
   applyAdmittanceOutputToNavigator(navigator_->getTargetPos(), navigator_->getTargetRPY(), proposal);
+  if(!perching_navigator_->articulated())
+  {
+    // Preserve the rigid admittance feedforward without changing ordinary rigid navigation.
+    const auto& geometry = perching_navigator_->rigidLock();
+    const tf::Vector3 radial = navigator_->getTargetPos() - geometry.pivot;
+    const tf::Vector3 tangent = geometry.axis.cross(radial);
+    const double rate = perching_navigator_->rigidRate(), acceleration = perching_navigator_->rigidAcceleration();
+    navigator_->setTargetVel(tangent * rate);
+    navigator_->setTargetAcc(tangent * acceleration + geometry.axis.cross(tangent) * rate * rate);
+    const tf::Matrix3x3 rotation(tf::createQuaternionFromYaw(navigator_->getTargetRPY().z()));
+    navigator_->setTargetOmega(rotation.inverse() * geometry.axis * rate);
+    navigator_->setTargetAngAcc(estimator_->getOrientation(Frame::COG, estimate_mode_).inverse() * geometry.axis * acceleration);
+  }
   const double accepted_rate = perching_navigator_->appliedPitchOffsetRate();
   admittance_output_.angle_offset_compliance.y() = perching_navigator_->appliedPitchOffset();
   admittance_output_.angular_vel_offset_compliance.y() = accepted_rate;
-  if(output_accepted_ && dt > 0)
-    admittance_output_.angular_acc_offset_compliance.y() = (accepted_rate - previous_rate) / dt;
+  admittance_output_.angular_acc_offset_compliance.y() = dt > 0 ? (accepted_rate - previous_rate) / dt : 0;
   admittance_output_.valid = true;
+  admittance_core_.acceptRotationalState(admittance_output_);
   if(!output_accepted_) reason_ = "reference held; accepted scalar state retained";
   std_msgs::Float64 offset;
   offset.data = admittance_output_.angle_offset_compliance.y();
@@ -322,42 +338,24 @@ void GimbalrotorPerchingAdmittanceController::updateAdmittance()
   if(!std::isfinite(elapsed) || elapsed <= 0 || elapsed > observer_max_interval_ ||
       !std::isfinite(dt) || dt <= 0 || dt > observer_max_interval_)
   { admittance_output_.valid = false; return; }
-  const auto& config = admittance_config_;
-  if(!admittance_enabled_) pitch_torque_lpf_ = 0;
-  else
-    pitch_torque_lpf_ += config.torque_lpf_alpha * (prepared_perching_admittance_wrench_world_[4] - pitch_torque_lpf_);
-  const double torque = std::clamp(pitch_torque_lpf_, -config.torque_limit.y(), config.torque_limit.y());
-  const double x = perching_navigator_->appliedPitchOffset(), v = perching_navigator_->appliedPitchOffsetRate();
-  const double inertia = config.rot_virtual_inertia.y(), damping = config.rot_damping.y(), stiffness = config.rot_stiffness.y();
-  const double acceleration_limit = std::min(pitch_acceleration_limit_, perching_navigator_->pitchAccelerationLimit());
-  const double rate_limit = std::min(config.angular_vel_offset_limit.y(), perching_navigator_->pitchRateLimit());
-  const double angle_limit = config.angle_offset_limit.y();
-  // Use the AdmittanceCore spring/damper law from the reference actually applied.
-  // The navigator additionally bounds joint motion and may reject a correction.
-  const double requested = v + dt * (torque - damping * v - stiffness * x) / inertia;
-  const double accelerated = std::clamp(requested, v - acceleration_limit * dt, v + acceleration_limit * dt);
-  const double bounded = std::clamp(accelerated, -rate_limit, rate_limit);
-  const double b = acceleration_limit * (dt + observer_max_interval_);
-  auto safeRate = [acceleration_limit, dt, b](double gap, double old_rate)
+  auto config = admittance_config_;
+  config.trans_enable.setZero();
+  config.rot_enable = Eigen::Vector3d::UnitY();
+  admittance_core_.setConfig(config);
+  AdmittanceCoreInput input;
+  input.dt = dt;
+  // Disarming removes the input torque; the applied offset still recovers through the spring/damper.
+  input.enabled = true;
+  input.R_world_compliance = perching_model_->pivot().linear();
+  if(perching_navigator_->articulated())
   {
-    return std::max(0.0, .5 * (-b + std::sqrt(std::max(0.0,
-        b * b - 4 * acceleration_limit * dt * old_rate + 8 * acceleration_limit * gap))));
-  };
-  const double lower = -safeRate(angle_limit + x, -v), upper = safeRate(angle_limit - x, v);
-  if(lower > upper)
-  { admittance_output_.valid = false; reason_ = "invalid scalar braking envelope; retaining accepted state"; return; }
-  const double next_rate = std::clamp(bounded, lower, upper);
-  const double next_offset = x + .5 * (v + next_rate) * dt;
-  const double next_acceleration = (next_rate - v) / dt;
-  if(!std::isfinite(next_offset) || !std::isfinite(next_rate) || !std::isfinite(next_acceleration) ||
-      std::abs(next_offset) > angle_limit || std::abs(next_rate) > rate_limit + 1e-9 ||
-      std::abs(next_acceleration) > acceleration_limit + 1e-9)
-  { admittance_output_.valid = false; reason_ = "scalar bounds rejected proposal; retaining accepted state for braking"; return; }
-  admittance_output_.angle_offset_compliance.y() = next_offset;
-  admittance_output_.angular_vel_offset_compliance.y() = next_rate;
-  admittance_output_.angular_acc_offset_compliance.y() = next_acceleration;
-  admittance_output_.torque_compliance.y() = torque;
-  admittance_output_.valid = true;
+    aerial_robot_navigation::GimbalrotorPerchingNavigator::Sample sample;
+    if(!perching_navigator_->observation(sample)) { admittance_output_.valid = false; return; }
+    input.R_world_compliance = sample.body.linear();
+  }
+  // The generalized task torque acts along compliance +Y, not world +Y.
+  input.external_wrench_world.tail<3>() = input.R_world_compliance.col(1) * prepared_perching_admittance_wrench_world_[4];
+  admittance_output_ = admittance_core_.update(input);
 }
 
 void GimbalrotorPerchingAdmittanceController::applyAdmittanceOutputToNavigator(

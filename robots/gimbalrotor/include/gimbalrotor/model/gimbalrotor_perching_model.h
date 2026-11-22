@@ -4,11 +4,13 @@
 #include <Eigen/Core>
 #include <Eigen/Geometry>
 #include <functional>
+#include <memory>
 #include <string>
 #include <vector>
 
 namespace perching_dynamics
 {
+struct LockedGeometry;
 // Pure reduced-coordinate dynamics. Adapters define the independent coordinates
 // and which omitted dynamics are approximated versus physically constrained.
 // Rotor spin/angular momentum is omitted, as in RobotModel's inertia map.
@@ -104,6 +106,8 @@ protected:
   std::vector<Eigen::Vector3d> centers_;
   std::vector<perching_dynamics::MultilinkModel::Link> links_;
   KDL::JntArray held_joints_;
+  KDL::Tree geometry_tree_;
+  std::shared_ptr<const perching_dynamics::LockedGeometry> geometry_;
   double mass_ = 0;
   Pose pivot_ = Pose::Identity();
   Eigen::Matrix3d cog_to_body_ = Eigen::Matrix3d::Identity();

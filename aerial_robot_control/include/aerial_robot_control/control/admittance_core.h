@@ -127,6 +127,15 @@ public:
     return config_;
   }
 
+  // Constrained navigation reports the applied state without resetting input filters.
+  void acceptRotationalState(const AdmittanceCoreOutput& output)
+  {
+    angle_offset_compliance_ = output.angle_offset_compliance;
+    angular_vel_offset_compliance_ = output.angular_vel_offset_compliance;
+    angular_acc_offset_compliance_ = output.angular_acc_offset_compliance;
+    last_output_ = output;
+  }
+
   void reset()
   {
     force_world_lpf_.setZero();

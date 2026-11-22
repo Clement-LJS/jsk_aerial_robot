@@ -1,7 +1,7 @@
 // -*- mode: c++ -*-
 #pragma once
 #include <gimbalrotor/gimbalrotor_navigation.h>
-#include <gimbalrotor/model/gimbalrotor_robot_model.h>
+#include <gimbalrotor/model/gimbalrotor_perching_model.h>
 #include <gimbalrotor/utils/perching_geometry.h>
 #include <geometry_msgs/PointStamped.h>
 #include <geometry_msgs/PoseStamped.h>
@@ -117,18 +117,12 @@ protected:
                              const tf::Vector3& contact_position);
   static double steadyTime();
   bool fresh(double stamp, double receipt) const;
-  struct Reference
-  {
-    Pose body = Pose::Identity(), cog = Pose::Identity();
-  };
-  bool bodyContact(const Vector&, Pose&, Eigen::Vector3d&) const;
+  bool limitPitchOffset(double& offset, double& rate, double& acceleration) const;
+  using Reference = GimbalrotorPerchingModel::State;
   bool lockGeometry(const Pose& body, const Vector& q, Reference& initial);
-  bool lockDynamicsModel();
   Pose worldCogPose(const Pose& body, const Eigen::Vector3d& cog_body) const;
-  bool estimateCoordinates(const Pose&, Vector&, double&, double&) const;
 
-  boost::shared_ptr<GimbalrotorRobotModel> model_;
-  KDL::Tree geometry_tree_;
+  boost::shared_ptr<GimbalrotorPerchingModel> model_;
   Pose pivot_ = Pose::Identity();
   std::vector<std::string> active_joints_;
   // Feedback, nominal commands and controller-visible session state share this lock.
@@ -170,7 +164,6 @@ private:
   void publishCommandedDebugPose(const perching_geometry::Pose& pose);
   bool activePose(perching_geometry::Pose& pose) const;
   void publishApplied();
-  bool configureGeometry(std::string& reason);
 
   ros::Subscriber perching_enable_sub_;
   ros::Subscriber perching_slanted_enable_sub_;

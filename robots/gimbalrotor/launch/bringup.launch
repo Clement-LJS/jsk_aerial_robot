@@ -93,7 +93,7 @@
      <param name="aerial_robot_control_name"
             value="$(eval 'aerial_robot_control/gimbalrotor_' + ('multilink_perching_admittance_controller' if arg('articulated_perching') else 'perching_admittance_controller') if arg('perching_admittance') else 'aerial_robot_control/gimbalrotor_controller')"/>
      <param name="robot_model_plugin_name"
-            value="$(eval ('gimbalrotor_multilink_perching_model' if arg('articulated_perching') else 'gimbalrotor_perching_model') if arg('perching_admittance') else 'gimbalrotor_robot_model')"/>
+            value="$(eval 'gimbalrotor_multilink_perching_model' if arg('articulated_perching') else 'gimbalrotor_perching_model')"/>
    </group>
 
    <!-- Select the navigator after all profile overlays. -->

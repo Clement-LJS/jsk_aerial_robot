@@ -18,13 +18,11 @@ void GimbalrotorMultilinkPerchingAdmittanceController::initialize(ros::NodeHandl
   nh_.param("navigation/perching/feedback_timeout", feedback_timeout_, feedback_timeout_);
   if(!std::isfinite(observer_gain_) || observer_gain_ <= 0 || !std::isfinite(feedback_timeout_) || feedback_timeout_ <= 0)
     throw std::invalid_argument("invalid articulated observer gain/timeout");
-  std::string topic, effort_topic, joint_topic;
-  nh_.param<std::string>("controller/command_wrench_topic", topic, "perching/roll_yaw/command_wrench_estimate");
+  std::string effort_topic, joint_topic;
   nh_.param<std::string>("navigation/perching/joint_state_topic", joint_topic, "joint_states");
   nh_.param<std::string>("navigation/perching/dynamics/joint_effort/topic", effort_topic, joint_topic);
   if(nh_.resolveName(effort_topic) != nh_.resolveName(joint_topic))
     throw std::invalid_argument("observer effort topic must match synchronized joint feedback");
-  command_wrench_sub_ = nh_.subscribe(topic, 64, &GimbalrotorMultilinkPerchingAdmittanceController::commandWrenchCallback, this);
 }
 
 void GimbalrotorMultilinkPerchingAdmittanceController::reset()
@@ -39,29 +37,6 @@ void GimbalrotorMultilinkPerchingAdmittanceController::reset()
   observation_stamp_ = published_observer_stamp_ = 0;
   observation_model_.reset();
   observation_result_.reset();
-  {
-    std::lock_guard<std::mutex> command_lock(command_mutex_);
-    command_history_.clear();
-  }
-}
-
-void GimbalrotorMultilinkPerchingAdmittanceController::commandWrenchCallback(const ros::MessageEvent<geometry_msgs::WrenchStamped const>& event)
-{
-  if(event.getPublisherName() != ros::this_node::getName()) return;
-  const auto& msg = event.getMessage();
-  CommandSample sample;
-  sample.stamp = msg->header.stamp.toSec();
-  sample.receipt = ros::SteadyTime::now().toSec();
-  sample.wrench << msg->wrench.force.x, msg->wrench.force.y, msg->wrench.force.z,
-      msg->wrench.torque.x, msg->wrench.torque.y, msg->wrench.torque.z;
-  const double now = ros::Time::now().toSec();
-  if(msg->header.frame_id != world_ || !sample.wrench.allFinite() || sample.stamp <= 0 ||
-      now - sample.stamp < -future_tolerance_ || now - sample.stamp > feedback_timeout_) return;
-  std::lock_guard<std::mutex> lock(command_mutex_);
-  if(!command_history_.empty() && command_history_.back().stamp > now + future_tolerance_) command_history_.clear();
-  if(!command_history_.empty() && sample.stamp <= command_history_.back().stamp) return;
-  command_history_.push_back(sample);
-  while(command_history_.size() > 64) command_history_.pop_front();
 }
 
 bool GimbalrotorMultilinkPerchingAdmittanceController::externalLoad(Eigen::VectorXd& load, Eigen::VectorXd& tangent, double& stamp)
@@ -80,10 +55,6 @@ bool GimbalrotorMultilinkPerchingAdmittanceController::externalLoad(Eigen::Vecto
     observation_stamp_ = published_observer_stamp_ = 0;
     observation_model_.reset();
     observation_result_.reset();
-    {
-      std::lock_guard<std::mutex> lock(command_mutex_);
-      command_history_.clear();
-    }
     auto model = std::make_shared<perching_dynamics::MultilinkModel>();
     if(!articulated_model_->dynamics(*model, reason_)) return false;
     observation_model_ = std::move(model);
@@ -120,11 +91,8 @@ bool GimbalrotorMultilinkPerchingAdmittanceController::externalLoad(Eigen::Vecto
       sample.q.allFinite() && sample.omega.allFinite() && sample.effort_valid &&
       sample.effort.size() == sample.q.size() && sample.effort.allFinite();
   CommandSample command;
-  {
-    std::lock_guard<std::mutex> lock(command_mutex_);
-    for(auto it = command_history_.rbegin(); it != command_history_.rend(); ++it)
-      if(it->stamp <= sample.stamp) { command = *it; break; }
-  }
+  for(auto it = command_history_.rbegin(); it != command_history_.rend(); ++it)
+    if(it->stamp <= sample.stamp) { command = *it; break; }
   if(measured) reason_ = "missing/stale world/CoG command estimate preceding observation";
   const double receipt_age = ros::SteadyTime::now().toSec() - command.receipt;
   if(measured && command.stamp >= session.lock_stamp.toSec() && command.receipt > 0 &&
@@ -166,7 +134,7 @@ bool GimbalrotorMultilinkPerchingAdmittanceController::externalLoad(Eigen::Vecto
     reason_ = observer_.reason();
   }
   if(!observation_result_ || !observer_.ready() || observer_.stamp() != observation_result_->stamp) return false;
-  const bool tangent_valid = articulated_navigator_->pitchTangent(observation_result_->q, articulated_navigator_->movingCoordinates(), tangent) &&
+  const bool tangent_valid = articulated_model_->pitchTangent(observation_result_->q, articulated_navigator_->movingCoordinates(), tangent) &&
       tangent.size() == observer_.load().size() && tangent.allFinite();
   // Recheck after live geometry work, before publishing or using this residual.
   reason_ = "stale articulated observer result";

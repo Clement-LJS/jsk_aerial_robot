@@ -241,40 +241,20 @@ class Keyboard:
         if s['session'] is None or s['stage'] == 'FREE_FLIGHT':
             return 'No confirmed contact session.'
         if self.relock_pending:
-            return ('Waiting for relock acknowledgement and new target baseline.')
-        if s['stage'] in ('FAULT_HOLD', 'PITCH_REZERO_FAILED'):
-            return ('Contact/setup fault: ' + s['reason'])
-        if s['stage'].startswith('PITCH_REZERO_'):
-            return ('Setup owns target: wait ready-HOLD, then b to relock.')
-        if not self.has_limits(s):
-            return 'Need valid, fresh effective position bounds for the current lock.'
-        if not self.fresh(s) or not self.has_angles(s) or s['flight'] != 5:
-            return ('Need fresh local receipts of HOVER and current-session targets.')
+            return 'Waiting for relock acknowledgement.'
         with self.motion.lock:
             status = self.motion.status
-            if not status or time.monotonic() - status[0] >= 1 or int(status[1].get('session_id', '0')) != s['session']:
-                return 'Waiting for current contact diagnostics.'
+            if not status or time.monotonic() - status[0] >= 1:
+                return 'Waiting for navigator feedback.'
             if status[1].get('admittance_hold_eligible') != '1':
-                return 'Motion or tracking has not settled; key discarded.'
-            if (self.motion.claimed and self.motion.epoch == self.motion.current_epoch
-                    and self.motion.session == s['session'] and self.motion.mode != RollYawMotion.CLAIM):
-                ack = self.motion.ack
-                if not ack or int(ack[1].get('sequence', '0')) != self.motion.sequence:
+                return 'Motion has not settled; key discarded.'
+            request = self.motion.request
+            if request is not None and request.epoch == self.motion.current_epoch:
+                if not self.motion.matches_ack(self.motion.ack, request):
                     return 'Waiting for command acknowledgement; key discarded.'
-                if ack[1].get('accepted') == 'true' and (status[0] < self.motion.last_motion_time or
-                        int(status[1].get('motion_sequence', '0')) < self.motion.sequence):
-                    return 'Waiting for motion completion; key discarded.'
-        if not self.motion.publisher.get_num_connections():
-            return 'No navigator connection for motion targets.'
+                if self.motion.ack[1].get('accepted') == 'true' and status[0] < self.motion.ack[0]:
+                    return 'Waiting for motion feedback; key discarded.'
         return ''
-
-    def rearm_motion(self, session):
-        self.motion.rearm(session)
-        # Do not hold the display/state mutex while waiting for ROS callbacks.
-        self.motion.claim(session)
-        rejection = self.movement_rejection(self.snapshot())
-        if rejection:
-            raise RuntimeError(rejection)
 
     def manual(self, axis=None, sign=0):
         s = self.snapshot()
@@ -292,7 +272,7 @@ class Keyboard:
         if rejection:
             raise RuntimeError(rejection)
         index = {'roll': 0, 'pitch': 1, 'yaw': 2}[axis]
-        self.rearm_motion(s['session'])
+        self.motion.rearm(s['session'])
         with self.lock:
             if self.session != s['session']:
                 raise RuntimeError('Lock changed; waiting for its nominal baseline.')
@@ -376,10 +356,10 @@ class Keyboard:
             rejection = self.movement_rejection(s)
             if rejection:
                 raise RuntimeError(rejection)
-            self.rearm_motion(s['session'])
+            self.motion.rearm(s['session'])
             with self.lock:
                 if self.session != s['session']:
-                    raise RuntimeError('Lock changed during motion handover.')
+                    raise RuntimeError('Contact session changed.')
                 value = min(self.steps['body_pitch'], self.body_pitch_limit) * (1 if key == 'o' else -1)
                 self.motion.send(s['session'], RollYawMotion.JOG, value, self.body_pitch_rate)
             print('\nMeasured body-local pitch step: {:+.2f} deg.'.format(math.degrees(value)), flush=True)
@@ -419,7 +399,7 @@ class Keyboard:
 
     def cleanup(self):
         if not self.motion.cleanup():
-            rospy.logwarn('Keyboard ownership cleanup unconfirmed; inspect navigator hold status.')
+            rospy.logwarn('Keyboard stop unconfirmed; inspect navigator hold status.')
 
 
 def main():
@@ -451,7 +431,7 @@ def main():
         try:
             ui.cleanup()
         except (RuntimeError, rospy.ROSException) as exc:
-            rospy.logwarn('Keyboard ownership cleanup unconfirmed: %s', exc)
+            rospy.logwarn('Keyboard stop unconfirmed: %s', exc)
 
 
 if __name__ == '__main__':

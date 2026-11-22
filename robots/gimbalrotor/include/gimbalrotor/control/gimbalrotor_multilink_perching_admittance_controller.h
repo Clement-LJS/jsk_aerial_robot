@@ -18,12 +18,6 @@ protected:
   bool externalLoad(Eigen::VectorXd&, Eigen::VectorXd&, double&) override;
   const char* controllerName() const override { return "GimbalrotorMultilinkPerchingAdmittanceController"; }
 private:
-  void commandWrenchCallback(const ros::MessageEvent<geometry_msgs::WrenchStamped const>&);
-  struct CommandSample
-  {
-    double stamp = 0, receipt = 0;
-    Eigen::Matrix<double, 6, 1> wrench = Eigen::Matrix<double, 6, 1>::Zero();
-  };
   struct ObservationResult
   {
     bool ok = false;
@@ -34,9 +28,6 @@ private:
     perching_dynamics::MultilinkModel::Evaluation evaluation;
     std::string reason;
   };
-  ros::Subscriber command_wrench_sub_;
-  std::mutex command_mutex_;
-  std::deque<CommandSample> command_history_;
   perching_dynamics::Worker<ObservationResult> observation_worker_;
   std::uint64_t observation_epoch_ = 0;
   std::shared_ptr<const perching_dynamics::MultilinkModel> observation_model_;

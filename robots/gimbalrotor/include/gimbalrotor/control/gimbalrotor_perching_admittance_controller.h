@@ -42,7 +42,6 @@ protected:
   double normal_pitch_i_limit_ = 0;
   int equilibrium_wrench_required_samples_ = 80, equilibrium_wrench_sample_count_ = 0;
   Eigen::VectorXd baseline_, baseline_sum_;
-  double pitch_torque_lpf_ = 0;
   double last_load_stamp_ = 0, last_tare_stamp_ = 0;
   double contact_on_timer_ = 0, contact_off_timer_ = 0;
   double contact_torque_filter_alpha_ = .2, contact_on_threshold_ = .04, contact_off_threshold_ = .02;

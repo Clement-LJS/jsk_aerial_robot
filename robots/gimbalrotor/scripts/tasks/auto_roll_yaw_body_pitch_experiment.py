@@ -1,20 +1,24 @@
 #!/usr/bin/env python3
-"""Request cumulative absolute body-local pitch targets, then wait interval_sec.
+"""Measured body-local pitch jogs, each followed by completion and a dwell.
 
-body_pitch_delta is an absolute target within a persistent command frame.
-Requests do not wait for completion; motion uses navigation/perching/pitch_rate.
-Normal completion leaves the final destination held; interruption requests braking.
-Optional use_admittance performs unloaded tare/enable once before the first step.
+Optional use_admittance performs unloaded tare/enable before the first jog.
+Interruption cancels this task's motion; completed steps remain held.
 """
 
 import math
+import os
+import sys
 import signal
 import threading
 import time
 
 import rospy
-from diagnostic_msgs.msg import DiagnosticArray
-from std_msgs.msg import Bool, Empty, Float64
+from std_msgs.msg import Bool, Empty
+try:
+    from roll_yaw_motion import MotionClient, RollYawMotion
+except ModuleNotFoundError:
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from roll_yaw_motion import MotionClient, RollYawMotion
 
 
 def finite_number(value, name):
@@ -29,24 +33,6 @@ def finite_number(value, name):
     return number
 
 
-class Feedback:
-    def __init__(self, prefix):
-        self.lock = threading.Lock()
-        self.status = None
-        self.subscriber = rospy.Subscriber(prefix + '/diagnostics_status', DiagnosticArray, self.diagnostic, queue_size=1)
-
-    def diagnostic(self, message):
-        for status in message.status:
-            if status.name.endswith('/roll_yaw_perching'):
-                values = {v.key: v.value for v in status.values}
-                with self.lock:
-                    self.status = (time.monotonic(), status.message, values)
-
-    def snapshot(self):
-        with self.lock:
-            return self.status
-
-
 class AdmittanceStartup:
     """Collect while disarmed, then verify arming, as in no-joint perching.
 
@@ -54,24 +40,20 @@ class AdmittanceStartup:
     duplicate tare requests that could later erase an accepted calibration.
     """
     def __init__(self):
-        self.started = self.generation = None
+        self.generation = None
         self.pending = None
         self.retry_at = 0.
         self.baseline_seen = False
 
     def ready(self, now, values, tare, enable):
         generation = int(values['tare_generation'])
-        if self.started is None:
-            self.started = now
         # The controller validates contact/model identity; startup pins the tare.
         if values.get('admittance_configured') != '1':
             raise ValueError('Admittance configuration unavailable: ' + values.get('admittance_status', ''))
         if self.pending:
-            action, sequence, requested, previous_generation = self.pending
+            action, sequence, previous_generation = self.pending
             processed = int(values[action + '_request_sequence'])
             if processed == sequence:
-                if now - requested > 2.:
-                    raise ValueError(action + ' acknowledgement missing; request is not repeated')
                 return False
             if processed != sequence + 1:
                 raise ValueError('Admittance startup interrupted by another request')
@@ -92,8 +74,6 @@ class AdmittanceStartup:
                 raise ValueError('Armed admittance has no baseline; disarm and tare unloaded')
             self.generation = generation
             return values.get('admittance_hold_eligible') == '1'
-        if now - self.started > 30.:
-            raise ValueError('No verified admittance baseline/enable within 30 seconds: ' + values.get('admittance_status', ''))
         collecting = values.get('tare_collecting') == '1'
         if baseline or collecting:
             self.generation = generation
@@ -111,7 +91,7 @@ class AdmittanceStartup:
             if not tare.get_num_connections():
                 return False
             action, publisher, message = 'tare', tare, Empty()
-        self.pending = (action, int(values[action + '_request_sequence']), now, generation)
+        self.pending = (action, int(values[action + '_request_sequence']), generation)
         publisher.publish(message)
         return False
 
@@ -119,7 +99,7 @@ class AdmittanceStartup:
 def main():
     rospy.init_node('auto_roll_yaw_body_pitch_experiment', disable_signals=True)
     if rospy.has_param('~body_pitch_rate_deg_s'):
-        raise ValueError('~body_pitch_rate_deg_s is unsupported by direct body_pitch_delta commands; '
+        raise ValueError('~body_pitch_rate_deg_s is unsupported by this task; '
                          'the rate is set by navigation/perching/pitch_rate')
     if any(rospy.has_param(key) for key in ('~angular_velocity_deg_s', '~feed_duration_sec')):
         raise ValueError('Pulse parameters removed: use ~step_deg and ~interval_sec for step and hold')
@@ -153,9 +133,7 @@ def main():
     use_admittance = rospy.get_param('~use_admittance', False)
     if not isinstance(use_admittance, bool):
         raise ValueError('~use_admittance must be a boolean')
-    motion = rospy.Publisher(prefix + '/body_pitch_delta', Float64, queue_size=1)
-    stop = rospy.Publisher(prefix + '/body_pitch_velocity', Float64, queue_size=1)
-    feedback = Feedback(prefix)
+    motion = MotionClient(prefix)
     tare = rospy.Publisher(prefix + '/admittance_tare', Empty, queue_size=1)
     enable = rospy.Publisher(ns + '/perching/admittance_enable', Bool, queue_size=1)
     interrupted = threading.Event()
@@ -165,55 +143,64 @@ def main():
     normal_exit = False
     startup = AdmittanceStartup()
     startup_complete = not use_admittance
-    rospy.loginfo('Requesting %d cumulative absolute body-local pitch targets in %+.6g deg steps, with %.3g s holds; '
-                  'navigator pitch_rate applies within a persistent command frame; no completion wait.',
+    rospy.loginfo('Requesting %d measured body-local pitch jogs of %+.6g deg, with %.3g s dwell after completion.',
                   count, math.degrees(step), hold)
     try:
-        initial_target = None
+        session = None
         while not rospy.is_shutdown() and not interrupted.is_set():
             now = time.monotonic()
             if now - started > timeout:
-                raise ValueError('Timed out waiting for perched feedback, command subscribers or unloaded admittance startup')
-            status = feedback.snapshot()
+                raise ValueError('Timed out waiting for contact or unloaded admittance startup')
+            with motion.lock:
+                status = motion.status
             if status:
-                received, state, values = status
-                if 0 <= now - received <= feedback_timeout and state.startswith('CONTACT_LOCKED') and int(values.get('session_id', '0')) > 0:
+                received, values = status
+                if now - received <= feedback_timeout and int(values.get('session_id', '0')) > 0:
+                    current_session = int(values['session_id'])
+                    if session is not None and session != current_session:
+                        raise RuntimeError('Contact changed during startup')
+                    session = current_session
                     if not startup_complete:
                         startup_complete = startup.ready(now, values, tare, enable)
-                    if startup_complete and motion.get_num_connections() and stop.get_num_connections():
-                        initial_target = float(values.get('body_pitch_target_rad', '0')) if values.get('body_pitch_target_valid') == '1' else 0.0
-                        if not math.isfinite(initial_target) or abs(initial_target + total) > limit:
-                            raise ValueError('Requested cumulative body pitch exceeds the configured script limit')
+                    if startup_complete and values.get('jog_ready') == '1' and motion.publisher.get_num_connections():
+                        motion.rearm(session)
                         break
             interrupted.wait(.02)
 
         for number in range(1, count + 1):
             if rospy.is_shutdown() or interrupted.is_set():
                 return
-            target = initial_target + step * number
-            for repeat in range(5):
+            deadline = time.monotonic() + timeout
+            while motion.request is not None and not motion.completed(feedback_timeout):
                 if rospy.is_shutdown() or interrupted.is_set():
                     return
-                motion.publish(Float64(data=target))
-                if repeat < 4:
-                    interrupted.wait(.02)
-            rospy.loginfo('Step %d/%d: requested absolute body-local pitch target %+.6g deg; hold %.3g s.',
-                          number, count, math.degrees(target), hold)
-            deadline = time.monotonic() + hold
+                if time.monotonic() >= deadline:
+                    raise RuntimeError('Timed out waiting for measured motion to settle')
+                interrupted.wait(.02)
+            motion.send(session, RollYawMotion.JOG, step)
+            deadline = time.monotonic() + timeout
             while not rospy.is_shutdown() and not interrupted.is_set():
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
+                if motion.completed(feedback_timeout):
                     break
-                interrupted.wait(min(.1, remaining))
+                if time.monotonic() >= deadline:
+                    raise RuntimeError('Timed out waiting for jog acceptance/completion')
+                interrupted.wait(.02)
+            if rospy.is_shutdown() or interrupted.is_set():
+                return
+            rospy.loginfo('Step %d/%d completed; dwell %.3g s.', number, count, hold)
+            deadline = time.monotonic() + hold
+            while not rospy.is_shutdown() and not interrupted.is_set() and time.monotonic() < deadline:
+                motion.completed(feedback_timeout)  # Detect cancellation/replacement during the dwell too.
+                interrupted.wait(min(.1, max(0., deadline - time.monotonic())))
         if rospy.is_shutdown() or interrupted.is_set():
             return
         normal_exit = True
-        rospy.loginfo('Finished %d step requests and holds; leaving the nominal destination with the navigator.', count)
+        rospy.loginfo('Finished %d measured jogs; holding the last reference.', count)
     finally:
         try:
             if not normal_exit and not rospy.is_shutdown():
-                stop.publish(Float64(data=0.))
-                rospy.loginfo('Requested brake/hold with one zero body_pitch_velocity message.')
+                motion.stop(wait=True)
+                rospy.loginfo('Requested brake/hold for this task.')
         finally:
             for number, handler in handlers.items():
                 signal.signal(number, handler)

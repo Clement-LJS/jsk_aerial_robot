@@ -44,6 +44,7 @@ namespace aerial_robot_control
   {
     PoseLinearController::reset();
     command_wrench_stamp_ = 0;
+    command_history_.clear();
 
     setAttitudeGains();
   }
@@ -85,7 +86,7 @@ namespace aerial_robot_control
     preparePerchingReference();
     // A clock rewind must not integrate the ordinary PID backwards.
     const double now = ros::Time::now().toSec();
-    if(now < control_timestamp_) { control_timestamp_ = now; command_wrench_stamp_ = 0; }
+    if(now < control_timestamp_) { control_timestamp_ = now; command_wrench_stamp_ = 0; command_history_.clear(); }
     PoseLinearController::controlCore();
     tf::Matrix3x3 uav_rot = estimator_->getOrientation(Frame::COG, estimate_mode_);
     tf::Vector3 target_acc_w(pid_controllers_.at(X).result(),
@@ -130,7 +131,7 @@ namespace aerial_robot_control
 
     // FC-side fully actuated command estimate, in world axes about the CoG.
     // This is not measured/effective Spinal output; gyro is included once.
-    if(!underactuate_ && gimbal_calc_in_fc_ && command_wrench_pub_.getNumSubscribers() > 0)
+    if(!underactuate_ && gimbal_calc_in_fc_)
     {
       Eigen::Matrix3d rotation;
       tf::matrixTFToEigen(uav_rot, rotation);
@@ -139,6 +140,12 @@ namespace aerial_robot_control
       const double stamp = estimator_->getImuLatestTimeStamp();
       if(force.allFinite() && torque.allFinite() && std::isfinite(stamp) && stamp > command_wrench_stamp_)
       {
+        CommandSample command;
+        command.stamp = stamp;
+        command.receipt = ros::SteadyTime::now().toSec();
+        command.wrench << force, torque;
+        command_history_.push_back(command);
+        while(command_history_.size() > 64) command_history_.pop_front();
         geometry_msgs::WrenchStamped msg;
         msg.header.stamp.fromSec(stamp);
         msg.header.frame_id = "world";
