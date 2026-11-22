@@ -72,7 +72,11 @@ void GimbalrotorMultilinkPerchingNavigator::readProfile()
 {
   GimbalrotorPerchingNavigator::readProfile();
   ros::NodeHandle pn(nh_, "navigation/perching");
-  pn.getParam("active_joints", active_joints_);
+  if(!pn.getParam("active_joints", active_joints_) || active_joints_.empty())
+    throw std::invalid_argument(pn.resolveName("active_joints") + " must be a nonempty string list");
+  for(auto it = active_joints_.begin(); it != active_joints_.end(); ++it)
+    if(it->empty() || *it == "alpha" || std::find(active_joints_.begin(), it, *it) != it)
+      throw std::invalid_argument(pn.resolveName("active_joints") + ": empty, reserved or duplicate joint name '" + *it + "'");
   perching_geometry::coordinateMap(active_joints_, coordinate_map_);
   pn.param<std::string>("joint_state_topic", joint_topic_, "joint_states");
   std::string effort_source;
@@ -98,11 +102,49 @@ void GimbalrotorMultilinkPerchingNavigator::readProfile()
   pn.param("pitch_rezero_timeout", rezero_timeout_, rezero_timeout_);
   pn.param("pitch_rezero_kp", rezero_kp_, rezero_kp_);
   pn.param("pitch_rezero_stable_duration", rezero_stable_duration_, rezero_stable_duration_);
-  pn.getParam("wire_angles", wire_angles_);
+  if(pn.hasParam("wire_angles"))
+  {
+    const std::string parameter = pn.resolveName("wire_angles");
+    if(!pn.getParam("wire_angles", wire_angles_) || (!wire_angles_.empty() && wire_angles_.size() != 3))
+      throw std::invalid_argument(parameter + " must be an empty string list or exactly three coordinate names");
+    for(auto it = wire_angles_.begin(); it != wire_angles_.end(); ++it)
+      if(!coordinate_map_.count(*it) || std::find(wire_angles_.begin(), it, *it) != it)
+        throw std::invalid_argument(parameter + ": unknown or duplicate coordinate '" + *it + "'");
+  }
   XmlRpc::XmlRpcValue mapping;
-  if(pn.getParam("wire_coordinates", mapping) && mapping.getType() == XmlRpc::XmlRpcValue::TypeStruct)
+  if(pn.hasParam("wire_coordinates"))
+  {
+    const std::string parameter = pn.resolveName("wire_coordinates");
+    if(!pn.getParam("wire_coordinates", mapping) || mapping.getType() != XmlRpc::XmlRpcValue::TypeStruct)
+      throw std::invalid_argument(parameter + " must be a dictionary");
     for(auto it = mapping.begin(); it != mapping.end(); ++it)
-      wire_coordinates_[std::stoi(it->first)] = static_cast<std::string>(it->second);
+    {
+      const std::string key = parameter + "/" + it->first;
+      if(it->second.getType() != XmlRpc::XmlRpcValue::TypeString)
+        throw std::invalid_argument(key + " must name a coordinate as a string");
+      std::size_t parsed = 0;
+      int mode;
+      try
+      {
+        mode = std::stoi(it->first, &parsed);
+      }
+      catch(const std::invalid_argument&)
+      {
+        throw std::invalid_argument(key + ": mode must be an integer");
+      }
+      catch(const std::out_of_range&)
+      {
+        throw std::invalid_argument(key + ": mode is out of integer range");
+      }
+      using Command = gimbalrotor::RollYawMotion;
+      if(parsed != it->first.size() || (mode != Command::ALPHA && mode != Command::ROLL && mode != Command::YAW))
+        throw std::invalid_argument(key + ": mode must be ALPHA, ROLL or YAW");
+      const std::string name = static_cast<std::string>(it->second);
+      if(!coordinate_map_.count(name)) throw std::invalid_argument(key + ": unknown coordinate " + name);
+      if(!wire_coordinates_.emplace(mode, name).second)
+        throw std::invalid_argument(key + ": duplicate numeric mode");
+    }
+  }
   const double positive[] = {sync_tolerance_, max_tilt_, cog_speed_limit_, cog_acceleration_limit_,
       acceleration_limit_, rezero_rate_, rezero_timeout_, rezero_kp_, rezero_stable_duration_};
   for(double value : positive)
@@ -133,15 +175,31 @@ void GimbalrotorMultilinkPerchingNavigator::initializeMechanism()
   subscriptions_.push_back(nh_.subscribe(prefix_ + "/motion", 10, &GimbalrotorMultilinkPerchingNavigator::motionCallback, this));
   // Legacy names are data at the ROS boundary; algorithms only see coordinates.
   XmlRpc::XmlRpcValue topics;
-  if(pn.getParam("coordinate_topics", topics) && topics.getType() == XmlRpc::XmlRpcValue::TypeStruct)
-    for(auto it = topics.begin(); it != topics.end(); ++it)
+  if(pn.hasParam("coordinate_topics"))
+  {
+    const std::string parameter = pn.resolveName("coordinate_topics");
+    if(!pn.getParam("coordinate_topics", topics) || topics.getType() != XmlRpc::XmlRpcValue::TypeStruct)
+      throw std::invalid_argument(parameter + " must be a dictionary");
+    auto subscribe_coordinate = [&](auto&& self, const XmlRpc::XmlRpcValue& value, const std::string& topic) -> void
     {
-      const auto coordinate = coordinate_map_.find(static_cast<std::string>(it->second));
-      if(coordinate == coordinate_map_.end()) throw std::invalid_argument("unknown coordinate in coordinate_topics");
+      if(value.getType() == XmlRpc::XmlRpcValue::TypeStruct)
+      {
+        for(auto it = value.begin(); it != value.end(); ++it)
+          self(self, it->second, topic.empty() ? it->first : topic + "/" + it->first);
+        return;
+      }
+      if(topic.empty() || value.getType() != XmlRpc::XmlRpcValue::TypeString)
+        throw std::invalid_argument(parameter + "/" + topic + " must name a coordinate as a string");
+      const std::string name = static_cast<std::string>(value);
+      const auto coordinate = coordinate_map_.find(name);
+      if(coordinate == coordinate_map_.end())
+        throw std::invalid_argument(parameter + "/" + topic + ": unknown coordinate " + name);
       const int index = coordinate->second;
-      subscriptions_.push_back(nh_.subscribe<std_msgs::Float64>(it->first, 1, [this, index](const std_msgs::Float64ConstPtr& m)
+      subscriptions_.push_back(nh_.subscribe<std_msgs::Float64>(topic, 1, [this, index](const std_msgs::Float64ConstPtr& m)
       { std::lock_guard<std::recursive_mutex> l(perching_state_mutex_); if(motion_.source.empty()) coordinateCommand(index, m->data); }));
-    }
+    };
+    subscribe_coordinate(subscribe_coordinate, topics, std::string());
+  }
   for(const std::string action : {"confirm_detached_zero", "pitch_rezero", "freeze", "unfreeze", "prepare_unperch", "confirm_released", "recover"})
     subscriptions_.push_back(nh_.subscribe<std_msgs::Empty>(prefix_ + "/" + action, 1,
       [this, action](const std_msgs::EmptyConstPtr&) { std::lock_guard<std::recursive_mutex> l(perching_state_mutex_); workflowCommand(action); }));
