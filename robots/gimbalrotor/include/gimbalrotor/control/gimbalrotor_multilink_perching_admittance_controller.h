@@ -16,7 +16,6 @@ public:
   void reset() override;
 protected:
   bool externalLoad(Eigen::VectorXd&, Eigen::VectorXd&, double&) override;
-  bool holdContactLoadOnGap() const override { return true; }
   const char* controllerName() const override { return "GimbalrotorMultilinkPerchingAdmittanceController"; }
 private:
   void commandWrenchCallback(const ros::MessageEvent<geometry_msgs::WrenchStamped const>&);

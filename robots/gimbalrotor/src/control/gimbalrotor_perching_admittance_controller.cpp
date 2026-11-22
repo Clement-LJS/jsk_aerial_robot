@@ -112,10 +112,9 @@ void GimbalrotorPerchingAdmittanceController::perchingAdmittanceEnableCallback(c
   ++enable_request_sequence_;
   if(!msg->data) { resetCalibration(); return; }
   const auto session = perching_navigator_->perchingSession();
-  const double age = ros::Time::now().toSec() - last_load_stamp_;
-  if(!perching_active_ || !equilibrium_wrench_ready_ || !input_valid_ || reset_requested_ ||
+  if(!perching_active_ || !equilibrium_wrench_ready_ || reset_requested_ ||
      session.mode != session_.mode || session.lock_stamp != session_.lock_stamp || !perching_model_->locked() ||
-     !perching_navigator_->motionFeedbackValid() || age < -future_tolerance_ || age > external_wrench_timeout_ ||
+     !perching_navigator_->motionFeedbackValid() ||
      !admittance_config_.use_admittance || admittance_config_.rot_enable.y() < .5)
   { reason_ = "enable refused: valid lock and completed unloaded tare required; enable explicitly later"; ROS_WARN_STREAM(reason_); return; }
   perching_admittance_enabled_ = true;
@@ -207,13 +206,6 @@ void GimbalrotorPerchingAdmittanceController::preparePerchingAdmittanceInput()
   }
   if(!input_valid_)
   {
-    if(holdContactLoadOnGap() && perching_admittance_enabled_ && equilibrium_wrench_ready_)
-    {
-      // Hold the last finite, tared and filtered torque; this is not a new observer sample.
-      if(contact_active_) prepared_perching_admittance_wrench_world_[4] = residual_pitch_torque_filtered_;
-      reason_ += "; holding last tared contact torque until the observer advances";
-      return;
-    }
     contact_active_ = false; contact_on_timer_ = contact_off_timer_ = 0; residual_pitch_torque_filtered_ = 0;
     recovery_active_ = true; reason_ += "; zero-input recovery, tare and arming retained";
     return;
@@ -227,11 +219,8 @@ void GimbalrotorPerchingAdmittanceController::preparePerchingAdmittanceInput()
   else if(fresh_load)
   {
     contact_on_timer_ = contact_off_timer_ = 0;
-    if(!holdContactLoadOnGap())
-    {
-      contact_active_ = false;
-      residual_pitch_torque_filtered_ = 0;
-    }
+    contact_active_ = false;
+    residual_pitch_torque_filtered_ = 0;
   }
   if(contact_active_) prepared_perching_admittance_wrench_world_[4] = residual_pitch_torque_filtered_;
   reason_ += contact_active_ ? "; contact" : "; armed; zero-input recovery/hold";
@@ -334,18 +323,18 @@ void GimbalrotorPerchingAdmittanceController::updateAdmittance()
       !std::isfinite(dt) || dt <= 0 || dt > observer_max_interval_)
   { admittance_output_.valid = false; return; }
   const auto& config = admittance_config_;
-  if(!admittance_enabled_ || !contact_active_) pitch_torque_lpf_ = 0;
-  else if(input_valid_ || !holdContactLoadOnGap())
+  if(!admittance_enabled_) pitch_torque_lpf_ = 0;
+  else
     pitch_torque_lpf_ += config.torque_lpf_alpha * (prepared_perching_admittance_wrench_world_[4] - pitch_torque_lpf_);
-  // Multilink without a new load holds the previous filtered forcing state.
   const double torque = std::clamp(pitch_torque_lpf_, -config.torque_limit.y(), config.torque_limit.y());
   const double x = perching_navigator_->appliedPitchOffset(), v = perching_navigator_->appliedPitchOffsetRate();
   const double inertia = config.rot_virtual_inertia.y(), damping = config.rot_damping.y(), stiffness = config.rot_stiffness.y();
   const double acceleration_limit = std::min(pitch_acceleration_limit_, perching_navigator_->pitchAccelerationLimit());
   const double rate_limit = std::min(config.angular_vel_offset_limit.y(), perching_navigator_->pitchRateLimit());
   const double angle_limit = config.angle_offset_limit.y();
-  const double requested = (inertia * v + dt * (torque - stiffness * x) - .5 * dt * dt * stiffness * v) /
-      (inertia + dt * damping + .5 * dt * dt * stiffness);
+  // Use the AdmittanceCore spring/damper law from the reference actually applied.
+  // The navigator additionally bounds joint motion and may reject a correction.
+  const double requested = v + dt * (torque - damping * v - stiffness * x) / inertia;
   const double accelerated = std::clamp(requested, v - acceleration_limit * dt, v + acceleration_limit * dt);
   const double bounded = std::clamp(accelerated, -rate_limit, rate_limit);
   const double b = acceleration_limit * (dt + observer_max_interval_);

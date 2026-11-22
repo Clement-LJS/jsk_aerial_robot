@@ -73,7 +73,7 @@ class AdmittanceStartup:
                 if now - requested > 2.:
                     raise ValueError(action + ' acknowledgement missing; request is not repeated')
                 return False
-            if processed != sequence + 1 or (action == 'enable' and values.get('admittance_enable_requested') != '1'):
+            if processed != sequence + 1:
                 raise ValueError('Admittance startup interrupted by another request')
             self.pending = None
             self.retry_at = now + .5
@@ -91,7 +91,7 @@ class AdmittanceStartup:
             if not baseline:
                 raise ValueError('Armed admittance has no baseline; disarm and tare unloaded')
             self.generation = generation
-            return values.get('admittance_hold_eligible') == '1' and values.get('task_torque_valid') == '1'
+            return values.get('admittance_hold_eligible') == '1'
         if now - self.started > 30.:
             raise ValueError('No verified admittance baseline/enable within 30 seconds: ' + values.get('admittance_status', ''))
         collecting = values.get('tare_collecting') == '1'
@@ -101,11 +101,8 @@ class AdmittanceStartup:
         # preparation quietness. Fresh diagnostics are required by the caller.
         if values.get('admittance_hold_eligible') != '1' or now < self.retry_at:
             return False
-        if not all(abs(float(values.get(field, 'inf'))) <= 1e-8
-                   for field in ('offset_rad', 'offset_rate_rad_s', 'offset_acceleration_rad_s2')):
-            return False
         if baseline:
-            if values.get('task_torque_valid') != '1' or not enable.get_num_connections():
+            if not enable.get_num_connections():
                 return False
             action, publisher, message = 'enable', enable, Bool(data=True)
         else:

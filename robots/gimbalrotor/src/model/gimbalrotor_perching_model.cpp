@@ -1,5 +1,6 @@
 #include <gimbalrotor/model/gimbalrotor_perching_model.h>
 #include <Eigen/SVD>
+#include <algorithm>
 #include <memory>
 #include <set>
 #include <pluginlib/class_list_macros.h>
@@ -19,11 +20,9 @@ struct LockedGeometry
   std::vector<Eigen::Vector3d> centers;
   std::vector<MultilinkModel::Link> links;
   GimbalrotorPerchingModel::Pose pivot;
-  Eigen::Matrix3d cog_to_body;
-  double mass = 0;
   std::string body_name, marker_name;
 
-  bool evaluate(const Eigen::VectorXd& q, GimbalrotorPerchingModel::State& out) const
+  bool differential(const Eigen::VectorXd& q, MultilinkModel::GeometryState& out) const
   {
     if(q.size() != static_cast<int>(coordinates.size()) || !q.allFinite()) return false;
     KDL::JntArray joints = held_joints;
@@ -35,43 +34,51 @@ struct LockedGeometry
     const Eigen::Isometry3d world_root = pivot * rotation * fromKdl(poses.at(marker_name)).inverse();
     out.body = world_root * fromKdl(poses.at(body_name));
     out.centers.resize(links.size());
-    Eigen::Vector3d center = Eigen::Vector3d::Zero();
     for(std::size_t i = 0; i < links.size(); ++i)
     {
       out.centers[i] = world_root * fromKdl(poses.at(inertia_links[i]));
       out.centers[i].translation() = out.centers[i] * centers[i];
-      center += links[i].mass * out.centers[i].translation();
     }
-    out.cog = Eigen::Isometry3d::Identity();
-    out.cog.translation() = center / mass;
-    out.cog.linear() = out.body.linear() * cog_to_body;
-    return poseValid(out.body) && poseValid(out.cog);
-  }
-
-  bool differential(const Eigen::VectorXd& q, MultilinkModel::GeometryState& out) const
-  {
-    GimbalrotorPerchingModel::State state;
-    if(!evaluate(q, state)) return false;
-    out.body = state.body;
-    out.centers = state.centers;
     out.body_linear.resize(3, q.size());
     out.body_angular.resize(3, q.size());
     out.linear.assign(links.size(), Eigen::MatrixXd(3, q.size()));
     out.angular = out.linear;
-    const double h = 1e-5;
+    auto downstream = [&](const std::string& link, const std::string& joint)
+    {
+      auto segment = tree.getSegment(link);
+      while(segment != tree.getRootSegment())
+      {
+        if(GetTreeElementSegment(segment->second).getJoint().getName() == joint) return true;
+        segment = GetTreeElementParent(segment->second);
+      }
+      return false;
+    };
     for(int j = 0; j < q.size(); ++j)
     {
-      Eigen::VectorXd plus = q, minus = q;
-      plus[j] += h;
-      minus[j] -= h;
-      GimbalrotorPerchingModel::State p, m;
-      if(!evaluate(plus, p) || !evaluate(minus, m)) return false;
-      out.body_linear.col(j) = (p.body.translation() - m.body.translation()) / (2 * h);
-      out.body_angular.col(j) = logSO3(p.body.linear() * m.body.linear().transpose()) / (2 * h);
+      Eigen::Vector3d axis = pivot.linear().col(1), origin = pivot.translation();
+      bool marker_moves = false;
+      if(j > 0)
+      {
+        const auto segment = std::find_if(tree.getSegments().begin(), tree.getSegments().end(), [&](const auto& item)
+        { return GetTreeElementSegment(item.second).getJoint().getName() == coordinates[j]; });
+        if(segment == tree.getSegments().end()) return false;
+        const auto& joint = GetTreeElementSegment(segment->second).getJoint();
+        const auto parent = GetTreeElementParent(segment->second);
+        const auto frame = world_root * fromKdl(poses.at(parent->first));
+        const auto a = joint.twist(1).rot, p = joint.JointOrigin();
+        axis = frame.linear() * Eigen::Vector3d(a.x(), a.y(), a.z());
+        origin = frame * Eigen::Vector3d(p.x(), p.y(), p.z());
+        marker_moves = downstream(marker_name, coordinates[j]);
+      }
+      // Fixing the marker subtracts its joint twist from every link's twist.
+      const int body_sign = j == 0 ? 1 : int(downstream(body_name, coordinates[j])) - int(marker_moves);
+      out.body_angular.col(j) = body_sign * axis;
+      out.body_linear.col(j) = body_sign * axis.cross(out.body.translation() - origin);
       for(std::size_t i = 0; i < links.size(); ++i)
       {
-        out.linear[i].col(j) = (p.centers[i].translation() - m.centers[i].translation()) / (2 * h);
-        out.angular[i].col(j) = logSO3(p.centers[i].linear() * m.centers[i].linear().transpose()) / (2 * h);
+        const int sign = j == 0 ? 1 : int(downstream(inertia_links[i], coordinates[j])) - int(marker_moves);
+        out.angular[i].col(j) = sign * axis;
+        out.linear[i].col(j) = sign * axis.cross(out.centers[i].translation() - origin);
       }
     }
     return true;
@@ -313,8 +320,6 @@ bool GimbalrotorPerchingModel::dynamics(MultilinkModel& result, std::string& rea
   snapshot->centers = centers_;
   snapshot->links = links_;
   snapshot->pivot = pivot_;
-  snapshot->cog_to_body = cog_to_body_;
-  snapshot->mass = mass_;
   snapshot->body_name = getBaselinkName();
   snapshot->marker_name = "perching_pivot";
   const std::shared_ptr<const LockedGeometry> geometry = std::move(snapshot);

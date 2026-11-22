@@ -212,17 +212,23 @@ void GimbalrotorMultilinkPerchingNavigator::initializeMechanism()
     [this](const std_msgs::Float64ConstPtr& m)
     {
       std::lock_guard<std::recursive_mutex> l(perching_state_mutex_);
-      if(navi_state_ != HOVER_STATE || !motion_.source.empty() || !std::isfinite(m->data)) return;
+      if(navi_state_ != HOVER_STATE || !std::isfinite(m->data) || (!motion_.source.empty() && !nominalHeld())) return;
       const std::uint64_t frame = body_target_valid_ ? body_frame_id_ : body_frame_id_ + 1;
-      bodyPitchCommand(m->data, rate_limit_, frame);
+      if(bodyPitchCommand(m->data, rate_limit_, frame) && !motion_.source.empty()) motion_.revoke();
     }));
   subscriptions_.push_back(nh_.subscribe<std_msgs::Float64>(prefix_ + "/body_pitch_velocity", 1,
     [this](const std_msgs::Float64ConstPtr& m)
     { std::lock_guard<std::recursive_mutex> l(perching_state_mutex_);
-      if(!motion_.source.empty() || !std::isfinite(m->data)) return;
+      if(!std::isfinite(m->data)) return;
       if(m->data == 0) stopMotion();
-      else if(perching_locked_ && !rezero_active_ && !positioning_) { velocity_active_ = true; body_target_valid_ = false;
-        velocity_command_ = std::clamp(m->data, -rate_limit_, rate_limit_); velocity_expires_ = ros::Time::now().toSec() + velocity_duration_; } }));
+      else if(perching_locked_ && !rezero_active_ && !positioning_ && (motion_.source.empty() || nominalHeld()))
+      {
+        if(!motion_.source.empty()) motion_.revoke();
+        velocity_active_ = true; body_target_valid_ = false;
+        velocity_command_ = std::clamp(m->data, -rate_limit_, rate_limit_);
+        velocity_expires_ = ros::Time::now().toSec() + velocity_duration_;
+      }
+    }));
   for(const std::string action : {"cancel", "stop", "pause", "resume", "prepare", "start"})
     subscriptions_.push_back(nh_.subscribe<std_msgs::UInt64>(prefix_ + "/" + action, 1,
       [this, action](const std_msgs::UInt64ConstPtr& m)
@@ -640,10 +646,9 @@ bool GimbalrotorMultilinkPerchingNavigator::nominalHeld() const
 bool GimbalrotorMultilinkPerchingNavigator::trackingHeld() const
 {
   Sample sample;
-  Reference measured;
-  return observation(sample) && applied_.size() == sample.q.size() && evaluateReference(sample.q, measured) &&
+  return observation(sample) && applied_.size() == sample.q.size() &&
       (sample.q - applied_).cwiseAbs().maxCoeff() <= tracking_tolerance_ &&
-      perching_geometry::logSO3(measured.body.linear().transpose() * applied_state_.body.linear()).norm() <= body_tracking_tolerance_;
+      perching_geometry::logSO3(sample.body.linear().transpose() * applied_state_.body.linear()).norm() <= body_tracking_tolerance_;
 }
 
 void GimbalrotorMultilinkPerchingNavigator::stopMotion()
@@ -754,14 +759,14 @@ void GimbalrotorMultilinkPerchingNavigator::motionCallback(const gimbalrotor::Ro
       else if(m.mode == Command::JOG)
       {
         Sample measured;
-        Reference nominal;
         if(!nominalHeld() || !trackingHeld() || std::abs(m.value) > jog_limit_)
           why = "jog requires a settled reference within configured bound";
-        else if(!observation(measured) || !evaluateReference(nominal_, nominal)) why = "jog requires fresh measured pose";
+        else if(!observation(measured)) why = "jog requires fresh measured pose";
+        else if(measured.omega.norm() > rezero_rate_tolerance_) why = "body is still moving; jog discarded";
         else
         {
-          // Project measured local-Y motion onto the pitch arc, retaining the other attitude targets.
-          const Eigen::Quaterniond relative(nominal.body.linear().transpose() * measured.body.linear() *
+          // Measure the jog from the applied pose, so existing compliance is not added twice.
+          const Eigen::Quaterniond relative(applied_state_.body.linear().transpose() * measured.body.linear() *
               perching_geometry::expSO3(Eigen::Vector3d::UnitY() * m.value));
           const double angle = std::remainder(2 * std::atan2(relative.y(), relative.w()), 2 * M_PI);
           const double rate = m.rate_limit == 0 ? rate_limit_ : m.rate_limit;
@@ -936,13 +941,19 @@ void GimbalrotorMultilinkPerchingNavigator::advanceNominal(double dt)
   {
     if(velocity_active_ && now >= velocity_expires_) { velocity_active_ = false; stopping_ = true; }
     const double error = body_destination_ - body_progress_;
+    const double acceleration = .5 * acceleration_limit_, change = acceleration * dt;
+    const bool tracking = trackingHeld();
+    // Reserve stopping distance and finish the last sub-step instead of approaching forever.
+    const double stopping_rate = std::sqrt(change * change + 2 * acceleration * std::abs(error)) - change;
     double goal_rate = velocity_active_ ? velocity_command_ :
-        (body_target_valid_ && !stopping_ ? std::clamp(error / .5, -body_rate_limit_, body_rate_limit_) : 0);
-    if(!trackingHeld()) { goal_rate = 0; status_ = "braking for tracking"; }
-    const double change = acceleration_limit_ * dt;
+        (body_target_valid_ && !stopping_ ? std::copysign(std::min(body_rate_limit_, stopping_rate), error) : 0);
+    if(!tracking) { goal_rate = 0; status_ = "braking for tracking"; }
     proposed_body_rate_ = std::clamp(goal_rate, body_rate_ - change, body_rate_ + change);
     if(std::abs(proposed_body_rate_) < 1e-8) proposed_body_rate_ = 0;
-    const double step = .5 * (body_rate_ + proposed_body_rate_) * dt;
+    double step = .5 * (body_rate_ + proposed_body_rate_) * dt;
+    if(body_target_valid_ && !stopping_ && !velocity_active_ && tracking &&
+        std::abs(error) <= .5 * change * dt && std::abs(body_rate_) <= change)
+    { step = error; proposed_body_rate_ = 0; }
     if(!pitch(nominal_, step, moving_, proposed_)) { status_ = "body pitch direction unavailable"; return; }
     proposed_progress_ = body_progress_ + step;
     proposed_rate_ = (proposed_ - nominal_) / dt;
@@ -959,11 +970,14 @@ void GimbalrotorMultilinkPerchingNavigator::followCoordinates(const Vector& goal
   for(int i = 0; i < nominal_.size(); ++i)
   {
     const double error = goal[i] - nominal_[i];
-    const double desired = stopping_ || !tracking ? 0 : std::clamp(error / .5, -coordinate_velocity_[i], coordinate_velocity_[i]);
-    proposed_rate_[i] = std::clamp(desired, nominal_rate_[i] - .5 * coordinate_acceleration_[i] * dt,
-                                 nominal_rate_[i] + .5 * coordinate_acceleration_[i] * dt);
+    const double acceleration = .5 * coordinate_acceleration_[i], change = acceleration * dt;
+    const double stopping_rate = std::sqrt(change * change + 2 * acceleration * std::abs(error)) - change;
+    const double desired = stopping_ || !tracking ? 0 : std::copysign(std::min(coordinate_velocity_[i], stopping_rate), error);
+    proposed_rate_[i] = std::clamp(desired, nominal_rate_[i] - change, nominal_rate_[i] + change);
     if(std::abs(proposed_rate_[i]) < 1e-8) proposed_rate_[i] = 0;
     proposed_[i] = nominal_[i] + .5 * (nominal_rate_[i] + proposed_rate_[i]) * dt;
+    if(!stopping_ && tracking && std::abs(error) <= .5 * change * dt && std::abs(nominal_rate_[i]) <= change)
+    { proposed_[i] = goal[i]; proposed_rate_[i] = 0; }
   }
 }
 
@@ -1028,7 +1042,13 @@ bool GimbalrotorMultilinkPerchingNavigator::applyPerchingReference(double pitch_
   const double rate_limit = std::min(rate_limit_, pitch_offset_rate_limit_);
   auto preview = [&](double offset, double offset_rate, double offset_acceleration)
   {
-    if(!pitch(nominal, offset, moving_, candidate)) return false;
+    candidate = nominal;
+    if(offset != 0)
+    {
+      Reference origin;
+      if(!evaluateReference(nominal, origin) ||
+          !orient(nominal, origin.body.linear() * perching_geometry::expSO3(Eigen::Vector3d::UnitY() * offset), moving_, candidate)) return false;
+    }
     if(correcting)
     {
       Vector tangent;

@@ -95,42 +95,41 @@ bool GimbalrotorMultilinkPerchingAdmittanceController::externalLoad(Eigen::Vecto
     const double receipt_age = ros::SteadyTime::now().toSec() - result.receipt;
     return std::isfinite(result.stamp) && result.stamp > 0 && result.command_stamp > 0 &&
         result.command_stamp <= result.stamp && now - result.stamp >= -future_tolerance_ &&
-        now - result.stamp <= feedback_timeout_ && now - result.command_stamp <= feedback_timeout_ &&
+        now - result.stamp <= feedback_timeout_ && result.stamp - result.command_stamp <= observer_max_interval_ &&
         result.receipt > 0 && receipt_age >= 0 && (ros::Time::isSimTime() || receipt_age <= feedback_timeout_);
   };
   // Consume before submitting, so continuous input cannot starve completed work.
   if(auto result = observation_worker_.take())
   {
-    observation_result_.reset();
     reason_ = result->ok ? "stale/obsolete articulated observer result" : result->reason;
-    if(!result->ok || result->lock_stamp != session.lock_stamp || result->epoch != observation_epoch_ ||
-        result->stamp < session.lock_stamp.toSec() || result->stamp <= observer_.stamp() || !fresh(*result)) return false;
-    reason_ = "invalid articulated momentum result";
-    if(result->q.size() != static_cast<int>(observation_model_->coordinates().size()) || !result->q.allFinite() ||
-        result->evaluation.momentum.size() != result->q.size() || result->evaluation.predicted_rate.size() != result->q.size() ||
-        !result->evaluation.momentum.allFinite() || !result->evaluation.predicted_rate.allFinite()) return false;
-    if(observer_.observe(result->evaluation.momentum, result->evaluation.predicted_rate, result->stamp,
-                         observer_gain_, observer_max_interval_)) observation_result_ = std::move(result);
+    if(result->ok && result->lock_stamp == session.lock_stamp && result->epoch == observation_epoch_ &&
+        result->stamp >= session.lock_stamp.toSec() && result->stamp > observer_.stamp() && fresh(*result) &&
+        result->q.size() == static_cast<int>(observation_model_->coordinates().size()) && result->q.allFinite() &&
+        result->evaluation.momentum.size() == result->q.size() && result->evaluation.predicted_rate.size() == result->q.size() &&
+        result->evaluation.momentum.allFinite() && result->evaluation.predicted_rate.allFinite())
+    {
+      if(observer_.observe(result->evaluation.momentum, result->evaluation.predicted_rate, result->stamp,
+                           observer_gain_, observer_max_interval_)) observation_result_ = std::move(result);
+      else observation_result_.reset();
+    }
   }
   aerial_robot_navigation::GimbalrotorPerchingNavigator::Sample sample;
-  reason_ = "awaiting fresh synchronized measured body/joints";
-  if(!articulated_navigator_->observation(sample) || sample.stamp < session.lock_stamp.toSec() ||
-      sample.stamp < observation_stamp_ || sample.q.size() != static_cast<int>(observation_model_->coordinates().size()) ||
-      !sample.q.allFinite() || !sample.rate.allFinite() || !sample.omega.allFinite()) return false;
-  reason_ = "missing/nonfinite synchronized nominal joint effort";
-  if(!sample.effort_valid || sample.effort.size() != sample.q.size() || !sample.effort.allFinite()) return false;
+  reason_ = "awaiting fresh synchronized measured body/joints and joint effort";
+  const bool measured = articulated_navigator_->observation(sample) && sample.stamp >= session.lock_stamp.toSec() &&
+      sample.stamp > observation_stamp_ && sample.q.size() == static_cast<int>(observation_model_->coordinates().size()) &&
+      sample.q.allFinite() && sample.omega.allFinite() && sample.effort_valid &&
+      sample.effort.size() == sample.q.size() && sample.effort.allFinite();
   CommandSample command;
   {
     std::lock_guard<std::mutex> lock(command_mutex_);
     for(auto it = command_history_.rbegin(); it != command_history_.rend(); ++it)
       if(it->stamp <= sample.stamp) { command = *it; break; }
   }
-  reason_ = "missing/stale world/CoG command estimate preceding observation";
+  if(measured) reason_ = "missing/stale world/CoG command estimate preceding observation";
   const double receipt_age = ros::SteadyTime::now().toSec() - command.receipt;
-  if(command.stamp < session.lock_stamp.toSec() || command.receipt <= 0 ||
-      sample.stamp - command.stamp > observer_max_interval_ || now - command.stamp > feedback_timeout_ ||
-      receipt_age < 0 || (!ros::Time::isSimTime() && receipt_age > feedback_timeout_)) return false;
-  if(sample.stamp > observation_stamp_)
+  if(measured && command.stamp >= session.lock_stamp.toSec() && command.receipt > 0 &&
+      sample.stamp - command.stamp <= observer_max_interval_ && now - command.stamp <= feedback_timeout_ &&
+      receipt_age >= 0 && (ros::Time::isSimTime() || receipt_age <= feedback_timeout_))
   {
     observation_stamp_ = sample.stamp;
     if(!observation_filter_.observe(sample.q, sample.body.linear(), sample.omega, sample.effort,
@@ -154,7 +153,7 @@ bool GimbalrotorMultilinkPerchingAdmittanceController::externalLoad(Eigen::Vecto
     input.epoch = observation_epoch_;
     input.stamp = sample.stamp;
     input.command_stamp = command.stamp;
-    input.receipt = std::min(sample.receipt, command.receipt);
+    input.receipt = sample.receipt;
     input.q = observation_filter_.q;
     observation_worker_.submit([input = std::move(input), model = observation_model_, rate = observation_filter_.rate,
                                 effort = observation_filter_.effort, wrench = observation_filter_.wrench, cog_offset_body]() mutable
@@ -164,8 +163,8 @@ bool GimbalrotorMultilinkPerchingAdmittanceController::externalLoad(Eigen::Vecto
                                  input.evaluation, input.reason);
       return std::move(input);
     });
+    reason_ = observer_.reason();
   }
-  reason_ = observer_.reason();
   if(!observation_result_ || !observer_.ready() || observer_.stamp() != observation_result_->stamp) return false;
   const bool tangent_valid = articulated_navigator_->pitchTangent(observation_result_->q, articulated_navigator_->movingCoordinates(), tangent) &&
       tangent.size() == observer_.load().size() && tangent.allFinite();
