@@ -82,7 +82,6 @@ class Keyboard:
         self.motion = MotionClient(self.prefix)
         self.coordinates = {int(k): v for k, v in rospy.get_param(self.ns + '/navigation/perching/wire_coordinates').items()}
         self.feedback_timeout = rospy.get_param(self.ns + '/navigation/perching/feedback_timeout', .15)
-        self.future_tolerance = rospy.get_param(self.ns + '/navigation/perching/future_tolerance', .02)
         self.body_pitch_rate = math.radians(float(rospy.get_param('~body_pitch_rate_deg_s', .5)))
         self.body_pitch_limit = math.radians(float(rospy.get_param('~body_pitch_limit_deg', 20.)))
         if not 0 < self.body_pitch_rate < math.inf or not 0 < self.body_pitch_limit < math.pi:
@@ -177,13 +176,12 @@ class Keyboard:
         return max(self.position_limits['lower'][axis], min(self.position_limits['upper'][axis], value))
 
     def joint_callback(self, msg):
-        age = (rospy.Time.now() - msg.header.stamp).to_sec()
-        if age < -self.future_tolerance or age > self.feedback_timeout:
-            return
+        # The navigator validates robot timestamps; keyboard and robot clocks can differ.
+        received = time.monotonic()
         with self.lock:
             for name, position in zip(msg.name, msg.position):
                 if name in self.coordinates.values() and math.isfinite(position):
-                    self.measured[name] = (position, time.monotonic() - max(0., age))
+                    self.measured[name] = (position, received)
 
     def alpha_callback(self, msg):
         if math.isfinite(msg.data):

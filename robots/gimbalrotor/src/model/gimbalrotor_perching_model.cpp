@@ -1,6 +1,5 @@
 #include <gimbalrotor/model/gimbalrotor_perching_model.h>
 #include <Eigen/SVD>
-#include <kdl/treefksolverpos_recursive.hpp>
 #include <memory>
 #include <set>
 #include <pluginlib/class_list_macros.h>
@@ -29,21 +28,17 @@ struct LockedGeometry
     if(q.size() != static_cast<int>(coordinates.size()) || !q.allFinite()) return false;
     KDL::JntArray joints = held_joints;
     for(int i = 1; i < q.size(); ++i) joints(joint_indices.at(coordinates[i])) = q[i];
-    // KDL's solver owns a tree copy, isolating even Joint::pose's mutable cache.
-    KDL::TreeFkSolverPos_recursive fk(tree);
-    KDL::Frame root_marker, root_body;
-    if(fk.JntToCart(joints, root_marker, marker_name) < 0 || fk.JntToCart(joints, root_body, body_name) < 0) return false;
+    std::map<std::string, KDL::Frame> poses;
+    if(!forwardKinematics(tree, joints, poses)) return false;
     Eigen::Isometry3d rotation = Eigen::Isometry3d::Identity();
     rotation.linear() = expSO3(Eigen::Vector3d::UnitY() * q[0]);
-    const Eigen::Isometry3d world_root = pivot * rotation * fromKdl(root_marker).inverse();
-    out.body = world_root * fromKdl(root_body);
+    const Eigen::Isometry3d world_root = pivot * rotation * fromKdl(poses.at(marker_name)).inverse();
+    out.body = world_root * fromKdl(poses.at(body_name));
     out.centers.resize(links.size());
     Eigen::Vector3d center = Eigen::Vector3d::Zero();
     for(std::size_t i = 0; i < links.size(); ++i)
     {
-      KDL::Frame root_link;
-      if(fk.JntToCart(joints, root_link, inertia_links[i]) < 0) return false;
-      out.centers[i] = world_root * fromKdl(root_link);
+      out.centers[i] = world_root * fromKdl(poses.at(inertia_links[i]));
       out.centers[i].translation() = out.centers[i] * centers[i];
       center += links[i].mass * out.centers[i].translation();
     }

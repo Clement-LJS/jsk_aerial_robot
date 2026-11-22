@@ -8,7 +8,6 @@
 #include <cmath>
 #include <chrono>
 #include <set>
-#include <kdl/treefksolverpos_recursive.hpp>
 #include <tf_conversions/tf_eigen.h>
 #include <stdexcept>
 
@@ -665,9 +664,7 @@ bool GimbalrotorPerchingNavigator::bodyContact(const Vector& q, Pose& contact, E
   for(int i = 1; i < q.size(); ++i) joints(model_->getJointIndexMap().at(active_joints_[i - 1])) = q[i];
   // The private URDF tree keeps candidate FK out of the live model's KDL caches.
   std::map<std::string, KDL::Frame> poses;
-  KDL::TreeFkSolverPos_recursive fk(geometry_tree_);
-  for(const auto& item : geometry_tree_.getSegments())
-    if(fk.JntToCart(joints, poses[item.first], item.first) < 0) return false;
+  if(!perching_geometry::forwardKinematics(geometry_tree_, joints, poses)) return false;
   if(!poses.count(model_->getBaselinkName()) || !poses.count("perching_pivot")) return false;
   const auto& body = poses.at(model_->getBaselinkName());
   contact = perching_geometry::fromKdl(body.Inverse() * poses.at("perching_pivot"));

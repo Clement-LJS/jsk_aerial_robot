@@ -13,11 +13,34 @@
 #include <kdl/frames.hpp>
 #include <kdl/rigidbodyinertia.hpp>
 #include <kdl/segment.hpp>
+#include <kdl/jntarray.hpp>
+#include <kdl/tree.hpp>
 #include <tf/transform_datatypes.h>
 #include <tf_conversions/tf_eigen.h>
 
 namespace perching_geometry
 {
+inline bool forwardKinematics(const KDL::Tree& tree, const KDL::JntArray& joints, std::map<std::string, KDL::Frame>& poses)
+{
+  if(joints.rows() != tree.getNrOfJoints() || !joints.data.allFinite()) return false;
+  poses.clear();
+  poses.emplace(tree.getRootSegment()->first, KDL::Frame::Identity());
+  auto visit = [&](auto&& self, const auto& element, const KDL::Frame& parent) -> void
+  {
+    for(const auto& child : GetTreeElementChildren(element))
+    {
+      // Copy only this segment: Joint::pose has a mutable cache, even on a const tree.
+      const KDL::Segment segment = GetTreeElementSegment(child->second);
+      const double position = segment.getJoint().getType() == KDL::Joint::None ? 0 : joints(GetTreeElementQNr(child->second));
+      const KDL::Frame frame = parent * segment.pose(position);
+      poses.emplace(child->first, frame);
+      self(self, child->second, frame);
+    }
+  };
+  visit(visit, tree.getRootSegment()->second, KDL::Frame::Identity());
+  return true;
+}
+
 inline bool finite(const tf::Vector3& v)
 {
   return std::isfinite(v.x()) && std::isfinite(v.y()) && std::isfinite(v.z());
