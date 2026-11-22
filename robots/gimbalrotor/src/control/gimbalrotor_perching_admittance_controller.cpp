@@ -295,12 +295,21 @@ void GimbalrotorPerchingAdmittanceController::preparePerchingReference()
   { GimbalrotorController::preparePerchingReference(); return; }
   const double previous_rate = perching_navigator_->appliedPitchOffsetRate();
   const double dt = perching_navigator_->referenceTimeStep();
+  const double limit = std::min(pitch_acceleration_limit_, perching_navigator_->pitchAccelerationLimit());
   // Even a rejected scalar proposal enters navigation once, allowing a bounded
   // brake preview and nominal progress without committing an invalid scalar.
   auto proposal = admittance_output_;
+  if(perching_navigator_->articulated() && proposal.valid && !contact_active_ && dt > 0 &&
+      std::abs(perching_navigator_->appliedPitchOffset()) <= std::min(recovery_angle_epsilon_, .5 * limit * dt * dt) &&
+      std::abs(previous_rate) <= std::min(recovery_rate_epsilon_, .5 * limit * dt))
+  {
+    // Finish only when the last displacement and its subsequent stop fit the acceleration bound.
+    proposal.angle_offset_compliance.y() = 0;
+    proposal.angular_vel_offset_compliance.y() = 0;
+    proposal.angular_acc_offset_compliance.y() = 0;
+  }
   if(!proposal.valid && dt > 0)
   {
-    const double limit = std::min(pitch_acceleration_limit_, perching_navigator_->pitchAccelerationLimit());
     proposal.angular_acc_offset_compliance.y() = std::clamp(-previous_rate / dt, -limit, limit);
   }
   applyAdmittanceOutputToNavigator(navigator_->getTargetPos(), navigator_->getTargetRPY(), proposal);

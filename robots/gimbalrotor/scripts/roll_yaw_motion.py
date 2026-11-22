@@ -23,6 +23,7 @@ class MotionClient:
         self.stop_epoch = None
         self.ack = self.status = self.request = None
         self.request_seen = False
+        self.request_sent = self.request_published = 0.
         self.publisher = rospy.Publisher(prefix + '/motion', RollYawMotion, queue_size=1)
         self.subscribers = [
             rospy.Subscriber(prefix + '/command_ack', String, self.ack_callback, queue_size=10),
@@ -45,6 +46,15 @@ class MotionClient:
                     self.status = (time.monotonic(), values)
                     self.current_epoch = int(values.get('motion_epoch', '0'))
                     self.current_session = int(values.get('session_id', '0'))
+                    now = time.monotonic()
+                    request = self.request
+                    # Retry delivery, never create another movement or revive a cancelled request.
+                    if (request is not None and not self.matches_ack(self.ack, request)
+                            and request.session == self.current_session and request.epoch == self.current_epoch
+                            and (self.stop_epoch != request.epoch or request.mode == RollYawMotion.STOP)
+                            and now - self.request_sent < 2. and now - self.request_published >= .2):
+                        self.publisher.publish(request)
+                        self.request_published = now
 
     def rearm(self, session):
         """Only a new operator action starts again after cancellation."""
@@ -75,6 +85,7 @@ class MotionClient:
                                          rate_limit=rate_limit, duration=duration)
             self.mode = mode
             self.request_seen = False
+            self.request_sent = self.request_published = time.monotonic()
             self.publisher.publish(self.request)
             return self.sequence
 
@@ -86,6 +97,8 @@ class MotionClient:
             if int(values['session_id']) != self.session or int(values['motion_epoch']) != self.epoch:
                 raise RuntimeError('Motion cancelled or contact changed.')
             if self.request is None or not self.matches_ack(self.ack, self.request):
+                if self.request is not None and time.monotonic() - self.request_sent >= 2.:
+                    raise RuntimeError('No command acknowledgement after delivery retries; stop before retrying.')
                 return False
             if self.ack[1].get('accepted') != 'true':
                 raise RuntimeError(self.ack[2])

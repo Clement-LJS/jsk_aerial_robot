@@ -251,6 +251,8 @@ class Keyboard:
             request = self.motion.request
             if request is not None and request.epoch == self.motion.current_epoch:
                 if not self.motion.matches_ack(self.motion.ack, request):
+                    if time.monotonic() - self.motion.request_sent >= 2.:
+                        return 'Command acknowledgement missing; press Space to stop before retrying.'
                     return 'Waiting for command acknowledgement; key discarded.'
                 if self.motion.ack[1].get('accepted') == 'true' and status[0] < self.motion.ack[0]:
                     return 'Waiting for motion feedback; key discarded.'

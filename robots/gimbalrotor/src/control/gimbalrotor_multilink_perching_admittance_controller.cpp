@@ -74,11 +74,14 @@ bool GimbalrotorMultilinkPerchingAdmittanceController::externalLoad(Eigen::Vecto
   {
     reason_ = result->ok ? "stale/obsolete articulated observer result" : result->reason;
     if(result->ok && result->lock_stamp == session.lock_stamp && result->epoch == observation_epoch_ &&
-        result->stamp >= session.lock_stamp.toSec() && result->stamp > observer_.stamp() && fresh(*result) &&
+        std::isfinite(result->stamp) && result->stamp >= session.lock_stamp.toSec() && result->stamp > observer_.stamp() &&
+        result->stamp <= now + future_tolerance_ && result->command_stamp > 0 && result->command_stamp <= result->stamp &&
+        result->stamp - result->command_stamp <= observer_max_interval_ &&
         result->q.size() == static_cast<int>(observation_model_->coordinates().size()) && result->q.allFinite() &&
         result->evaluation.momentum.size() == result->q.size() && result->evaluation.predicted_rate.size() == result->q.size() &&
         result->evaluation.momentum.allFinite() && result->evaluation.predicted_rate.allFinite())
     {
+      // Preserve chronological observer history; freshness still gates use of the resulting load below.
       if(observer_.observe(result->evaluation.momentum, result->evaluation.predicted_rate, result->stamp,
                            observer_gain_, observer_max_interval_)) observation_result_ = std::move(result);
       else observation_result_.reset();

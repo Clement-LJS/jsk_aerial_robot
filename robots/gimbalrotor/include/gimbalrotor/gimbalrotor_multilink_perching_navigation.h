@@ -10,6 +10,7 @@
 
 #include <cstdint>
 #include <deque>
+#include <mutex>
 
 namespace perching_geometry
 {
@@ -101,6 +102,8 @@ private:
   double paused_body_destination_ = 0, prepared_increment_ = 0;
   std::string phase_ = "FREE_FLIGHT";
   mutable Sample measured_;
+  mutable double measurement_cycle_ = -1;
+  mutable std::mutex feedback_mutex_;
   std::deque<Sample> joint_history_, body_history_;
   Vector nominal_, destination_, proposed_, nominal_rate_, proposed_rate_, applied_, applied_rate_, applied_acceleration_;
   Vector body_start_, locked_q_;
