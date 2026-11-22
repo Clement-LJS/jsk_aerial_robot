@@ -15,6 +15,7 @@ public:
                   boost::shared_ptr<aerial_robot_navigation::BaseNavigator>, double) override;
   void reset() override;
 protected:
+  void perchingAdmittanceEnableCallback(const std_msgs::BoolConstPtr&) override;
   bool externalLoad(Eigen::VectorXd&, Eigen::VectorXd&, double&) override;
   const char* controllerName() const override { return "GimbalrotorMultilinkPerchingAdmittanceController"; }
 private:

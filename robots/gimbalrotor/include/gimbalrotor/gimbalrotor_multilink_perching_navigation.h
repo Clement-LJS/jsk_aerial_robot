@@ -51,6 +51,7 @@ public:
   bool nominalHeld() const override;
   bool trackingHeld() const override;
   bool applyPerchingReference(double pitch_offset, double rate, double acceleration) override;
+  void holdAppliedReference();
   void publishDiagnostics() override;
 
 protected:

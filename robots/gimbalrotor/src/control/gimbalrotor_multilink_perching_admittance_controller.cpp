@@ -39,6 +39,21 @@ void GimbalrotorMultilinkPerchingAdmittanceController::reset()
   observation_result_.reset();
 }
 
+void GimbalrotorMultilinkPerchingAdmittanceController::perchingAdmittanceEnableCallback(const std_msgs::BoolConstPtr& msg)
+{
+  if(msg->data) { GimbalrotorPerchingAdmittanceController::perchingAdmittanceEnableCallback(msg); return; }
+  std::lock_guard<std::recursive_mutex> navigation_lock(articulated_navigator_->perchingStateMutex());
+  std::lock_guard<std::recursive_mutex> lock(perching_state_mutex_);
+  ++enable_request_sequence_;
+  articulated_navigator_->holdAppliedReference();
+  perching_admittance_enabled_ = contact_active_ = recovery_active_ = input_valid_ = false;
+  contact_on_timer_ = contact_off_timer_ = residual_pitch_torque_filtered_ = 0;
+  prepared_perching_admittance_wrench_world_.setZero();
+  previous_contact_gate_time_ = ros::Time();
+  reset_requested_ = true;
+  reason_ = "disarmed; holding applied reference, unloaded baseline retained";
+}
+
 bool GimbalrotorMultilinkPerchingAdmittanceController::externalLoad(Eigen::VectorXd& load, Eigen::VectorXd& tangent, double& stamp)
 {
   const auto session = articulated_navigator_->perchingSession();

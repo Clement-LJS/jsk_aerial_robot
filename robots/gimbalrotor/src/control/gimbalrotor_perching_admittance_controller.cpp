@@ -275,8 +275,9 @@ void GimbalrotorPerchingAdmittanceController::controlCore()
   if(std::isfinite(dt) && dt > 0 && dt <= observer_max_interval_ && perching_navigator_->motionFeedbackValid())
     updateAdmittance(); // Exactly one scalar integration per eligible control tick.
   else { prev_admittance_time_ = ros::Time::now(); admittance_output_.valid = false; }
-  const bool suppress = contact_active_ || recovery_active_ ||
-      std::abs(admittance_output_.angle_offset_compliance.y()) > recovery_angle_epsilon_;
+  // Articulated PID tracks the accepted compliant attitude; retain its normal holding integral.
+  const bool suppress = !perching_navigator_->articulated() && (contact_active_ || recovery_active_ ||
+      std::abs(admittance_output_.angle_offset_compliance.y()) > recovery_angle_epsilon_);
   auto& pitch_pid = pid_controllers_.at(PITCH);
   updatePitchIntegralPolicy(pitch_pid, suppress);
   // Bypass the free-flight admittance integration; the pre-PID hook accepts

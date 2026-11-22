@@ -555,6 +555,29 @@ void GimbalrotorMultilinkPerchingNavigator::stopMotion()
   status_ = "braking nominal motion";
 }
 
+void GimbalrotorMultilinkPerchingNavigator::holdAppliedReference()
+{
+  std::lock_guard<std::recursive_mutex> lock(perching_state_mutex_);
+  if(!perching_locked_ || applied_stamp_ == 0) return;
+  // Change the nominal/compliance split without moving the accepted body or joint reference.
+  nominal_ = applied_;
+  nominal_rate_ = applied_rate_;
+  applied_pitch_offset_ = applied_offset_rate_ = 0;
+  body_target_valid_ = prepared_motion_ = paused_ = rezero_ready_ = false;
+  body_rate_ = 0;
+  body_rate_limit_ = rate_limit_;
+  if(positioning_)
+  {
+    servo_.q_target = nominal_[coordinate_map_.at(positioning_joint_)];
+    servo_.target = perching_geometry::toKdl(applied_state_.body);
+    perching_servo::Sample reference;
+    reference.body = servo_.target;
+    servo_.alpha = servo_.measuredAlpha(reference);
+  }
+  stopMotion();
+  phase_ = "CONTACT_LOCKED";
+}
+
 bool GimbalrotorMultilinkPerchingNavigator::coordinateCommand(int index, double value)
 {
   if(!perching_locked_ || !std::isfinite(value) || index < 0 || index >= nominal_.size() ||
@@ -662,12 +685,17 @@ void GimbalrotorMultilinkPerchingNavigator::motionCallback(const gimbalrotor::Ro
           const double rate = m.rate_limit == 0 ? rate_limit_ : m.rate_limit;
           Reference origin;
           Vector goal;
-          // Project the measured configuration onto the locked mechanism before adding the jog.
-          if(!std::isfinite(rate) || rate <= 0 || !model_->evaluate(measured.q, origin) ||
-              !model_->orient(measured.q, origin.body.linear() *
-                  perching_geometry::expSO3(Eigen::Vector3d::UnitY() * (m.value - applied_pitch_offset_)), moving_, goal) ||
-              !model_->allowed(goal, max_tilt_, min_body_pitch_, max_body_pitch_)) why = "infeasible jog target";
+          if(!std::isfinite(rate) || rate <= 0 || !model_->evaluate(measured.q, origin)) why = "infeasible jog target";
           else
+          {
+            // Use measured pitch progress without adopting tracking errors on the other axes.
+            const double measured_pitch = perching_geometry::logSO3(applied_state_.body.linear().transpose() * origin.body.linear()).y();
+            const Eigen::Matrix3d target = applied_state_.body.linear() *
+                perching_geometry::expSO3(Eigen::Vector3d::UnitY() * (measured_pitch + m.value - applied_pitch_offset_));
+            if(!model_->orient(nominal_, target, moving_, goal) ||
+                !model_->allowed(goal, max_tilt_, min_body_pitch_, max_body_pitch_)) why = "infeasible jog target";
+          }
+          if(why.empty())
           {
             // Remove existing compliance once; navigation reapplies the current correction.
             destination_ = goal;
@@ -841,13 +869,15 @@ void GimbalrotorMultilinkPerchingNavigator::advanceNominal(double dt)
 {
   proposed_ = nominal_; proposed_rate_ = nominal_rate_; proposed_progress_ = body_progress_; proposed_body_rate_ = body_rate_;
   const double now = ros::Time::now().toSec();
-  if((positioning_ || rezero_active_) && !trackingHeld())
+  if((positioning_ || rezero_active_) && !stopping_ && !trackingHeld())
   {
     proposed_rate_.setZero(); proposed_body_rate_ = 0;
     proposal_valid_ = true; status_ = "nominal held for tracking";
     return;
   }
-  if(positioning_)
+  if(stopping_ && !body_target_valid_ && !velocity_active_ && std::abs(body_rate_) <= 1e-9)
+    followCoordinates(destination_, dt);
+  else if(positioning_)
   {
     servo_.tick(servoSample(), dt);
     proposed_[coordinate_map_.at(positioning_joint_)] = servo_.q_target;
@@ -1115,6 +1145,8 @@ bool GimbalrotorMultilinkPerchingNavigator::applyPerchingReference(double pitch_
       {
         servo_.q_goal = servo_.q_target;
         servo_.alpha_goal = servo_.alpha;
+        // Servo FK must retain the adopted hinge angle after braking.
+        servo_.contact = perching_geometry::toKdl(model_->pivot()) * KDL::Frame(KDL::Rotation::RotY(nominal_[0]));
       }
     }
     if(rezero_active_)
