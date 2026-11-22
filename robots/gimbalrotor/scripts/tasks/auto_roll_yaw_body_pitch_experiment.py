@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Request one relative body-local pitch step, then wait interval_sec.
+"""Request cumulative absolute body-local pitch targets, then wait interval_sec.
 
-The navigator accepts steps only without a motion owner and while nominally held.
-Requests have no acknowledgement; motion uses navigation/perching/pitch_rate.
+body_pitch_delta is an absolute target within a persistent command frame.
+Requests do not wait for completion; motion uses navigation/perching/pitch_rate.
 Normal completion leaves the final destination held; interruption requests braking.
 Optional use_admittance performs unloaded tare/enable once before the first step.
 """
@@ -149,11 +149,6 @@ def main():
     ns = rospy.get_param('~robot_namespace', '/gimbalrotor').rstrip('/')
     prefix = rospy.get_param('~debug_prefix', 'perching/roll_yaw').rstrip('/')
     prefix = prefix if prefix.startswith('/') else ns + '/' + prefix
-    jog_limit = finite_number(rospy.get_param(ns + '/navigation/perching/body_pitch_jog_max_delta', .01745329252),
-                              'navigation/perching/body_pitch_jog_max_delta')
-    if jog_limit <= 0 or step > jog_limit:
-        raise ValueError('~step_deg must be within navigation/perching/body_pitch_jog_max_delta (%.6g deg)' %
-                         math.degrees(jog_limit))
     feedback_timeout = finite_number(rospy.get_param('~feedback_timeout_sec', 1.), '~feedback_timeout_sec')
     timeout = finite_number(rospy.get_param('~timeout_sec', 30.), '~timeout_sec')
     if min(feedback_timeout, timeout) <= 0:
@@ -163,7 +158,7 @@ def main():
         raise ValueError('~use_admittance must be a boolean')
     motion = rospy.Publisher(prefix + '/body_pitch_delta', Float64, queue_size=1)
     stop = rospy.Publisher(prefix + '/body_pitch_velocity', Float64, queue_size=1)
-    feedback = Feedback(prefix) if use_admittance else None
+    feedback = Feedback(prefix)
     tare = rospy.Publisher(prefix + '/admittance_tare', Empty, queue_size=1)
     enable = rospy.Publisher(ns + '/perching/admittance_enable', Bool, queue_size=1)
     interrupted = threading.Event()
@@ -173,30 +168,40 @@ def main():
     normal_exit = False
     startup = AdmittanceStartup()
     startup_complete = not use_admittance
-    rospy.loginfo('Requesting %d relative steps of %+.6g deg, with %.3g s between requests; '
-                  'navigator pitch_rate applies. Steps require no motion owner and nominal hold; no acknowledgement.',
+    rospy.loginfo('Requesting %d cumulative absolute body-local pitch targets in %+.6g deg steps, with %.3g s holds; '
+                  'navigator pitch_rate applies within a persistent command frame; no completion wait.',
                   count, math.degrees(step), hold)
     try:
+        initial_target = None
         while not rospy.is_shutdown() and not interrupted.is_set():
             now = time.monotonic()
             if now - started > timeout:
-                raise ValueError('Timed out waiting for command subscribers or unloaded admittance startup')
-            if not startup_complete:
-                status = feedback.snapshot()
-                if status:
-                    received, state, values = status
-                    if 0 <= now - received <= feedback_timeout and state.startswith('CONTACT_LOCKED'):
+                raise ValueError('Timed out waiting for perched feedback, command subscribers or unloaded admittance startup')
+            status = feedback.snapshot()
+            if status:
+                received, state, values = status
+                if 0 <= now - received <= feedback_timeout and state.startswith('CONTACT_LOCKED') and int(values.get('session_id', '0')) > 0:
+                    if not startup_complete:
                         startup_complete = startup.ready(now, values, tare, enable)
-            if startup_complete and motion.get_num_connections() and stop.get_num_connections():
-                break
+                    if startup_complete and motion.get_num_connections() and stop.get_num_connections():
+                        initial_target = float(values.get('body_pitch_target_rad', '0')) if values.get('body_pitch_target_valid') == '1' else 0.0
+                        if not math.isfinite(initial_target) or abs(initial_target + total) > limit:
+                            raise ValueError('Requested cumulative body pitch exceeds the configured script limit')
+                        break
             interrupted.wait(.02)
 
         for number in range(1, count + 1):
             if rospy.is_shutdown() or interrupted.is_set():
                 return
-            motion.publish(Float64(data=step))
-            rospy.loginfo('Step %d/%d requested: relative %+.6g deg, requested total %+.6g deg; hold %.3g s.',
-                          number, count, math.degrees(step), math.degrees(step * number), hold)
+            target = initial_target + step * number
+            for repeat in range(5):
+                if rospy.is_shutdown() or interrupted.is_set():
+                    return
+                motion.publish(Float64(data=target))
+                if repeat < 4:
+                    interrupted.wait(.02)
+            rospy.loginfo('Step %d/%d: requested absolute body-local pitch target %+.6g deg; hold %.3g s.',
+                          number, count, math.degrees(target), hold)
             deadline = time.monotonic() + hold
             while not rospy.is_shutdown() and not interrupted.is_set():
                 remaining = deadline - time.monotonic()

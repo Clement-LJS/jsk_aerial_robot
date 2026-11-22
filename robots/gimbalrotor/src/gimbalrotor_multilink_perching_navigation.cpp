@@ -150,9 +150,12 @@ void GimbalrotorMultilinkPerchingNavigator::initializeMechanism()
     { std::lock_guard<std::recursive_mutex> l(perching_state_mutex_); if(positioning_) servo_.servo(m->data, servoSample()); }));
   subscriptions_.push_back(nh_.subscribe<std_msgs::Float64>(prefix_ + "/body_pitch_delta", 1,
     [this](const std_msgs::Float64ConstPtr& m)
-    { std::lock_guard<std::recursive_mutex> l(perching_state_mutex_);
-      if(motion_.source.empty() && nominalHeld() && std::abs(m->data) <= jog_limit_)
-        bodyPitchCommand(m->data, rate_limit_, body_frame_id_ + 1); }));
+    {
+      std::lock_guard<std::recursive_mutex> l(perching_state_mutex_);
+      if(navi_state_ != HOVER_STATE || !motion_.source.empty() || !std::isfinite(m->data)) return;
+      const std::uint64_t frame = body_target_valid_ ? body_frame_id_ : body_frame_id_ + 1;
+      bodyPitchCommand(m->data, rate_limit_, frame);
+    }));
   subscriptions_.push_back(nh_.subscribe<std_msgs::Float64>(prefix_ + "/body_pitch_velocity", 1,
     [this](const std_msgs::Float64ConstPtr& m)
     { std::lock_guard<std::recursive_mutex> l(perching_state_mutex_);
