@@ -295,7 +295,7 @@
               perching/roll_yaw/alpha_target: alpha
               perching/roll_yaw/roll_target: joint_roll
               perching/roll_yaw/yaw_target: joint_yaw
-            pitch_rate: 0.03
+            pitch_rate: 0.00174532925 # Trial 0.1 deg/s for full nominal feed steps in both modes.
             pitch_acceleration: 0.02
           roll_yaw_perching: {}
         servo_controller:

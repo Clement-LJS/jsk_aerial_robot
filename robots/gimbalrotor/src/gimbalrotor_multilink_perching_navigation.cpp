@@ -93,6 +93,7 @@ void GimbalrotorMultilinkPerchingNavigator::readProfile()
   pn.param("cog_acceleration_limit", cog_acceleration_limit_, cog_acceleration_limit_);
   pn.param("pitch_acceleration", acceleration_limit_, acceleration_limit_);
   pn.param("body_pitch_jog_max_delta", jog_limit_, jog_limit_);
+  nh_.param("controller/admittance/perching/recovery_angle_epsilon", jog_tolerance_, jog_tolerance_);
   pn.param("pitch_rezero_target_pitch", rezero_target_, rezero_target_);
   pn.param("pitch_rezero_command_sign", rezero_sign_, rezero_sign_);
   pn.param("pitch_rezero_rate_limit", rezero_rate_, rezero_rate_);
@@ -145,7 +146,7 @@ void GimbalrotorMultilinkPerchingNavigator::readProfile()
     }
   }
   const double positive[] = {sync_tolerance_, max_tilt_, cog_speed_limit_, cog_acceleration_limit_,
-      acceleration_limit_, rezero_rate_, rezero_timeout_, rezero_kp_, rezero_stable_duration_};
+      acceleration_limit_, jog_tolerance_, rezero_rate_, rezero_timeout_, rezero_kp_, rezero_stable_duration_};
   for(double value : positive)
     if(!std::isfinite(value) || value <= 0) throw std::invalid_argument("invalid navigation/perching limits or timing");
 }
@@ -221,6 +222,7 @@ void GimbalrotorMultilinkPerchingNavigator::initializeMechanism()
       else if(perching_locked_ && !rezero_active_ && !positioning_)
       {
         motion_.revoke();
+        feed_request_.reset();
         velocity_active_ = true; body_target_valid_ = false;
         velocity_command_ = std::clamp(m->data, -rate_limit_, rate_limit_);
         velocity_expires_ = ros::Time::now().toSec() + velocity_duration_;
@@ -250,6 +252,7 @@ void GimbalrotorMultilinkPerchingNavigator::initializeMechanism()
 
       motion_.revoke();
       destination_ = candidate;
+      feed_request_.reset();
       body_rate_limit_ = INFINITY;
       body_target_valid_ = false;
       velocity_active_ = false;
@@ -513,6 +516,8 @@ void GimbalrotorMultilinkPerchingNavigator::resetMotion()
   rezero_active_ = rezero_ready_ = rezero_failed_ = false;
   body_destination_ = body_progress_ = body_rate_ = 0;
   body_rate_limit_ = INFINITY;
+  forward_rate_limit_ = recovery_rate_limit_ = INFINITY;
+  feed_request_.reset();
   reference_velocity_.setZero(); reference_acceleration_.setZero();
   reference_omega_.setZero(); reference_angular_acceleration_.setZero();
   servo_.reset(); phase_ = "FREE_FLIGHT"; prepared_motion_ = paused_ = false;
@@ -536,6 +541,22 @@ bool GimbalrotorMultilinkPerchingNavigator::trackingHeld() const
   return observation(sample) && applied_.size() == sample.q.size() &&
       (sample.q - applied_).cwiseAbs().maxCoeff() <= tracking_tolerance_ &&
       perching_geometry::logSO3(sample.body.linear().transpose() * applied_state_.body.linear()).norm() <= body_tracking_tolerance_;
+}
+
+std::optional<double> GimbalrotorMultilinkPerchingNavigator::pitchFeedStep() const
+{
+  if(!feed_request_) return std::nullopt;
+  // A cancelled feed retains zero forward permission; unrelated navigation has no feed.
+  if(feed_request_->session != session_ || feed_request_->epoch != motion_.epoch ||
+      feed_request_->source != motion_.source || feed_request_->sequence != motion_.sequence) return 0;
+  return feed_request_->value;
+}
+
+bool GimbalrotorMultilinkPerchingNavigator::jogReady() const
+{
+  const double step = pitchFeedStep().value_or(0);
+  return nominalHeld() && trackingHeld() && (step <= 0 || !std::isfinite(recovery_rate_limit_) ||
+      std::abs(applied_pitch_offset_) <= std::min(jog_tolerance_, .2 * step));
 }
 
 void GimbalrotorMultilinkPerchingNavigator::stopMotion()
@@ -588,6 +609,7 @@ bool GimbalrotorMultilinkPerchingNavigator::coordinateCommand(int index, double 
   body_target_valid_ = velocity_active_ = false;
   body_rate_limit_ = INFINITY;
   destination_[index] = value;
+  feed_request_.reset();
   stopping_ = false;
   rezero_ready_ = false;
   phase_ = "EXECUTING";
@@ -623,6 +645,7 @@ bool GimbalrotorMultilinkPerchingNavigator::bodyPitchCommand(double angle, doubl
   stopping_ = false;
   destination_ = nominal_;
   body_rate_limit_ = std::min(rate, rate_limit_);
+  feed_request_.reset();
   phase_ = "EXECUTING";
   return true;
 }
@@ -675,11 +698,8 @@ void GimbalrotorMultilinkPerchingNavigator::motionCallback(const gimbalrotor::Ro
       }
       else if(m.mode == Command::JOG)
       {
-        Sample measured;
-        if(!nominalHeld() || !trackingHeld() || std::abs(m.value) > jog_limit_)
+        if(!(m.value < 0 ? nominalHeld() && trackingHeld() : jogReady()) || std::abs(m.value) > jog_limit_)
           why = "jog requires a settled reference within configured bound";
-        else if(!observation(measured)) why = "jog requires fresh measured pose";
-        else if(measured.omega.norm() > rezero_rate_tolerance_) why = "body is still moving; jog discarded";
         else
         {
           const double rate = m.rate_limit == 0 ? rate_limit_ : m.rate_limit;
@@ -687,16 +707,15 @@ void GimbalrotorMultilinkPerchingNavigator::motionCallback(const gimbalrotor::Ro
           if(!std::isfinite(rate) || rate <= 0) why = "infeasible jog target";
           else
           {
-            // Use measured pitch progress without adopting tracking errors on the other axes.
-            const double measured_pitch = perching_geometry::logSO3(applied_state_.body.linear().transpose() * measured.body.linear()).y();
+            // Recover the nominal orientation from the accepted reference, then extend it once.
             const Eigen::Matrix3d target = applied_state_.body.linear() *
-                perching_geometry::expSO3(Eigen::Vector3d::UnitY() * (measured_pitch + m.value - applied_pitch_offset_));
+                perching_geometry::expSO3(Eigen::Vector3d::UnitY() * (m.value - applied_pitch_offset_));
             if(!model_->orient(nominal_, target, moving_, goal) ||
                 !model_->allowed(goal, max_tilt_, min_body_pitch_, max_body_pitch_)) why = "infeasible jog target";
           }
           if(why.empty())
           {
-            // Remove existing compliance once; navigation reapplies the current correction.
+            feed_request_ = msg;
             destination_ = goal;
             body_rate_limit_ = std::min(rate, rate_limit_);
             body_target_valid_ = velocity_active_ = stopping_ = rezero_ready_ = false;
@@ -746,7 +765,11 @@ void GimbalrotorMultilinkPerchingNavigator::motionCallback(const gimbalrotor::Ro
           }
         }
       }
-      if(why.empty() && motion_.epoch == m.epoch) motion_.accept(m.source, m.sequence);
+      if(why.empty() && motion_.epoch == m.epoch)
+      {
+        motion_.accept(m.source, m.sequence);
+        if(m.mode != Command::JOG) feed_request_.reset();
+      }
     }
   }
   std::ostringstream out;
@@ -835,7 +858,8 @@ void GimbalrotorMultilinkPerchingNavigator::planCommand(const std::string& actio
     if(!prepared_motion_ || phase_ != "READY" || !nominalHeld() || !trackingHeld() || !motionFeedbackValid()) error = "start requires measured READY";
     else if(!bodyPitchCommand(prepared_increment_, rate_limit_, body_frame_id_ + 1)) error = "infeasible body pitch target";
   }
-  if(error.empty() && (action == "prepare" || action == "start" || action == "resume")) motion_.revoke();
+  if(error.empty() && (action == "prepare" || action == "start" || action == "resume"))
+  { motion_.revoke(); feed_request_.reset(); }
   std_msgs::String ack;
   ack.data = "action=" + action + " session=" + std::to_string(session) + " accepted=" + (error.empty() ? "true" : "false") + " reason=" + error;
   ack_pub_.publish(ack); publishDiagnostics();
@@ -858,6 +882,7 @@ void GimbalrotorMultilinkPerchingNavigator::workflowCommand(const std::string& a
     return;
   }
   if(action != "pitch_rezero" || !motionFeedbackValid() || !nominalHeld()) return;
+  feed_request_.reset();
   rezero_active_ = true; rezero_ready_ = rezero_failed_ = false;
   rezero_started_ = ros::Time::now().toSec(); rezero_stable_since_ = 0; rezero_origin_ = nominal_[0];
   destination_ = nominal_; body_target_valid_ = velocity_active_ = false;
@@ -947,6 +972,7 @@ void GimbalrotorMultilinkPerchingNavigator::followCoordinates(const Vector& goal
     if(angular_scale > 1e-12)
     {
       speed = std::min(speed, body_rate_limit_ / angular_scale);
+      if(pitchFeedStep().value_or(0) > 0) speed = std::min(speed, forward_rate_limit_ / angular_scale);
       acceleration = std::min(acceleration, acceleration_limit_ / angular_scale);
     }
     // A single path speed keeps the joint contributions coordinated; retain braking margin.
@@ -996,7 +1022,8 @@ bool GimbalrotorMultilinkPerchingNavigator::candidateAllowed(const Vector& q, do
       (velocity - reference_velocity_).norm() <= cog_acceleration_limit_ * dt + 1e-5;
 }
 
-bool GimbalrotorMultilinkPerchingNavigator::applyPerchingReference(double pitch_offset, double rate, double acceleration)
+bool GimbalrotorMultilinkPerchingNavigator::applyPerchingReference(double pitch_offset, double rate, double acceleration,
+    double forward_rate_limit, double recovery_rate_limit)
 {
   std::lock_guard<std::recursive_mutex> lock(perching_state_mutex_);
   if(navi_state_ != HOVER_STATE || force_landing_flag_ || !std::isfinite(pitch_offset) || !std::isfinite(rate) || !std::isfinite(acceleration)) return false;
@@ -1010,6 +1037,8 @@ bool GimbalrotorMultilinkPerchingNavigator::applyPerchingReference(double pitch_
 
   const double now = ros::Time::now().toSec();
   if(applied_stamp_ == now) return false;
+  forward_rate_limit_ = forward_rate_limit;
+  recovery_rate_limit_ = recovery_rate_limit;
   proposal_valid_ = false;
   const auto previous_servo = servo_;
   const Vector previous_destination = destination_;
@@ -1037,19 +1066,36 @@ bool GimbalrotorMultilinkPerchingNavigator::applyPerchingReference(double pitch_
   Vector candidate;
   Reference state;
   const bool correcting = pitch_offset != 0 || rate != 0 || acceleration != 0 ||
-      applied_pitch_offset_ != 0 || applied_offset_rate_ != 0;
+      applied_pitch_offset_ != 0 || applied_offset_rate_ != 0 || std::isfinite(forward_rate_limit_);
   const double acceleration_limit = std::min(acceleration_limit_, pitch_offset_acceleration_limit_);
-  auto preview = [&](double offset)
+  auto preview = [&](double& offset, double& offset_rate, double& offset_acceleration)
   {
     candidate = nominal;
-    if(offset != 0)
+    Reference origin;
+    double positive_rate = recovery_rate_limit_, forward_rate = INFINITY;
+    if(correcting)
     {
-      Reference origin;
-      if(!model_->evaluate(nominal, origin) ||
-          !model_->orient(nominal, origin.body.linear() * perching_geometry::expSO3(Eigen::Vector3d::UnitY() * offset), moving_, candidate)) return false;
+      if(!model_->evaluate(nominal, origin)) return false;
+      if(std::isfinite(forward_rate_limit_) && applied_stamp_ > 0)
+      {
+        const Eigen::Vector3d axis = origin.body.linear().col(1);
+        const Eigen::Vector3d previous_omega = applied_state_.cog.linear() * reference_omega_;
+        const Eigen::Matrix3d previous_nominal = applied_state_.body.linear() *
+            perching_geometry::expSO3(-Eigen::Vector3d::UnitY() * applied_pitch_offset_);
+        const double nominal_rate = axis.dot(perching_geometry::logSO3(origin.body.linear() * previous_nominal.transpose())) / cycle_dt_;
+        // Share the forward budget between nominal travel and recovery, with bounded braking.
+        forward_rate = std::max(forward_rate_limit_, axis.dot(previous_omega) - acceleration_limit_ * cycle_dt_);
+        positive_rate = std::min(positive_rate, forward_rate - nominal_rate);
+      }
+      if(applied_stamp_ > 0 && !limitPitchOffset(offset, offset_rate, offset_acceleration,
+          positive_rate, std::isfinite(recovery_rate_limit_) ? 0 : INFINITY)) return false;
+      if(offset != 0 && !model_->orient(nominal,
+          origin.body.linear() * perching_geometry::expSO3(Eigen::Vector3d::UnitY() * offset), moving_, candidate)) return false;
     }
     // These checks bound the combined nominal + compliant joint/CoG motion.
-    if(!candidateAllowed(candidate, cycle_dt_) || !model_->evaluate(candidate, state)) return false;
+    if(!candidateAllowed(candidate, cycle_dt_)) return false;
+    if(correcting && offset == 0) state = origin;
+    else if(!model_->evaluate(candidate, state)) return false;
     if((correcting || std::isfinite(body_rate_limit_)) && applied_stamp_ > 0)
     {
       const Eigen::Vector3d omega_world = perching_geometry::logSO3(state.body.linear() * applied_state_.body.linear().transpose()) / cycle_dt_;
@@ -1059,13 +1105,13 @@ bool GimbalrotorMultilinkPerchingNavigator::applyPerchingReference(double pitch_
       const double speed = body_jog ? omega_world.norm() : std::abs(pitch_axis.dot(omega_world));
       const double change = body_jog ? (omega_world - previous_omega_world).norm() : std::abs(pitch_axis.dot(omega_world - previous_omega_world));
       if(speed > rate_limit_ + 1e-6 || change > acceleration_limit_ * cycle_dt_ + 1e-6) return false;
+      if(pitch_axis.dot(omega_world) > forward_rate + 1e-6) return false;
     }
     return true;
   };
   const bool eligible = fresh && (applied_stamp_ == 0 || cycle_dt_ > 0) &&
       (applied_stamp_ > 0 || (pitch_offset == 0 && rate == 0 && acceleration == 0));
-  bool accepted = eligible && (!correcting || applied_stamp_ == 0 || limitPitchOffset(pitch_offset, rate, acceleration)) &&
-      preview(pitch_offset);
+  bool accepted = eligible && preview(pitch_offset, rate, acceleration);
   if(eligible && !accepted && correcting && applied_stamp_ > 0)
   {
     const double requested_acceleration = std::clamp(acceleration, -acceleration_limit, acceleration_limit);
@@ -1075,13 +1121,12 @@ bool GimbalrotorMultilinkPerchingNavigator::applyPerchingReference(double pitch_
           requested_acceleration * std::pow(.5, attempt);
       double next_rate = applied_offset_rate_ + next_acceleration * cycle_dt_;
       double next_offset = applied_pitch_offset_ + next_rate * cycle_dt_;
-      if(!limitPitchOffset(next_offset, next_rate, next_acceleration)) continue;
       nominal = planned_nominal;
-      bool feasible = preview(next_offset);
+      bool feasible = preview(next_offset, next_rate, next_acceleration);
       if(!feasible && (nominal - nominal_).norm() > 1e-12)
       {
         nominal = nominal_;
-        feasible = preview(next_offset);
+        feasible = preview(next_offset, next_rate, next_acceleration);
         if(feasible) restoreNominal();
       }
       if(!feasible) continue;
@@ -1179,7 +1224,7 @@ bool GimbalrotorMultilinkPerchingNavigator::applyPerchingReference(double pitch_
   }
   if(fresh && nominalHeld() && trackingHeld())
   {
-    if(phase_ == "EXECUTING") phase_ = "COMPLETED_HOLD";
+    if(phase_ == "EXECUTING" && jogReady()) phase_ = "COMPLETED_HOLD";
     if(phase_ == "PRE_ALIGN") phase_ = "READY";
   }
   if(!admittance_diagnostics_.empty())
@@ -1251,7 +1296,7 @@ void GimbalrotorMultilinkPerchingNavigator::publishDiagnostics()
   value("body_pitch_target_reference_complete", body_target_valid_ && held);
   value("body_pitch_velocity_active", velocity_active_); value("body_pitch_velocity_limit", rate_limit_);
   value("admittance_hold_eligible", held);
-  value("jog_ready", held && measured_.omega.norm() <= rezero_rate_tolerance_); value("effective_offset_rad", applied_pitch_offset_);
+  value("jog_ready", held && jogReady()); value("effective_offset_rad", applied_pitch_offset_);
   value("hold_reason", status_); value("pivot_error", pivot_error_); value("hinge_residual", hinge_error_);
   for(const auto& item : values) { diagnostic_msgs::KeyValue v; v.key = item.first; v.value = item.second; diagnostic.values.push_back(v); }
   array.status.push_back(diagnostic); status_pub_.publish(array);

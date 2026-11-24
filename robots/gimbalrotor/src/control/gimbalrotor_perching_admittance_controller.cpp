@@ -27,6 +27,12 @@ void GimbalrotorPerchingAdmittanceController::initialize(ros::NodeHandle nh, ros
   pn.param("equilibrium_wrench_required_samples", equilibrium_wrench_required_samples_, equilibrium_wrench_required_samples_);
   pn.param("perching_pitch_torque_sign", perching_pitch_torque_sign_, perching_pitch_torque_sign_);
   pn.param("pitch_acceleration_limit", pitch_acceleration_limit_, pitch_acceleration_limit_);
+  if(perching_navigator_->articulated())
+  {
+    pn.param("cutting_working_torque", cutting_working_torque_, cutting_working_torque_);
+    pn.param("cutting_max_torque", cutting_max_torque_, cutting_max_torque_);
+    pn.param("cutting_recovery_rate", cutting_recovery_rate_, cutting_recovery_rate_);
+  }
   nh_.param("navigation/perching/observer_max_interval", observer_max_interval_, observer_max_interval_);
   nh_.param("navigation/perching/future_tolerance", future_tolerance_, future_tolerance_);
   world_ = perching_navigator_->worldFrame();
@@ -82,6 +88,13 @@ void GimbalrotorPerchingAdmittanceController::initialize(ros::NodeHandle nh, ros
       std::abs(perching_pitch_torque_sign_) != 1 || !std::isfinite(admittance_config_.torque_ref.y()) ||
       std::abs(admittance_config_.torque_ref.y()) > 1e-9)
     throw std::invalid_argument("invalid perching contact/tare parameters");
+  if(cutting_working_torque_ != 0 || cutting_max_torque_ != 0 || cutting_recovery_rate_ != 0)
+  {
+    if(!std::isfinite(cutting_working_torque_) || cutting_working_torque_ < contact_on_threshold_ ||
+        !std::isfinite(cutting_max_torque_) || cutting_max_torque_ <= cutting_working_torque_ ||
+        !std::isfinite(cutting_recovery_rate_) || cutting_recovery_rate_ <= 0)
+      throw std::invalid_argument("invalid articulated cutting load/rate parameters");
+  }
 }
 
 void GimbalrotorPerchingAdmittanceController::resetCalibration()
@@ -207,7 +220,9 @@ void GimbalrotorPerchingAdmittanceController::preparePerchingAdmittanceInput()
   if(!input_valid_)
   {
     contact_active_ = false; contact_on_timer_ = contact_off_timer_ = 0; residual_pitch_torque_filtered_ = 0;
-    recovery_active_ = true; reason_ += "; zero-input recovery, tare and arming retained";
+    recovery_active_ = true;
+    reason_ += cutting_max_torque_ > 0 && perching_navigator_->pitchFeedStep() ?
+        "; forward recovery held, tare and arming retained" : "; zero-input recovery, tare and arming retained";
     return;
   }
   if(fresh_load && dt > 0 && dt <= observer_max_interval_)
@@ -220,10 +235,13 @@ void GimbalrotorPerchingAdmittanceController::preparePerchingAdmittanceInput()
   {
     contact_on_timer_ = contact_off_timer_ = 0;
     contact_active_ = false;
-    residual_pitch_torque_filtered_ = 0;
+    // Reacquired valid load must not look unloaded to the cutting speed limit.
+    residual_pitch_torque_filtered_ = cutting_max_torque_ > 0 ? residual_pitch_torque_raw_ : 0;
   }
   if(contact_active_) prepared_perching_admittance_wrench_world_[4] = residual_pitch_torque_filtered_;
-  reason_ += contact_active_ ? "; contact" : "; armed; zero-input recovery/hold";
+  if(cutting_max_torque_ > 0 && perching_navigator_->pitchFeedStep())
+    reason_ += contact_active_ ? "; cutting load control; contact" : "; cutting load control; below contact gate";
+  else reason_ += contact_active_ ? "; contact" : "; armed; zero-input recovery/hold";
 }
 
 void GimbalrotorPerchingAdmittanceController::controlCore()
@@ -351,6 +369,10 @@ void GimbalrotorPerchingAdmittanceController::updateAdmittance()
   auto config = admittance_config_;
   config.trans_enable.setZero();
   config.rot_enable = Eigen::Vector3d::UnitY();
+  // Positive feed encounters negative body-local pitch torque; free flight keeps its own reference.
+  // Cancellation/withdrawal remove forward permission below, without stepping this load reference.
+  if(cutting_max_torque_ > 0 && perching_admittance_enabled_ && input_valid_ && perching_navigator_->pitchFeedStep())
+    config.torque_ref.y() = -cutting_working_torque_;
   admittance_core_.setConfig(config);
   AdmittanceCoreInput input;
   input.dt = dt;
@@ -373,8 +395,25 @@ void GimbalrotorPerchingAdmittanceController::applyAdmittanceOutputToNavigator(
 {
   if(!perching_active_)
   { GimbalrotorAdmittanceController::applyAdmittanceOutputToNavigator(position, rpy, output); return; }
+  double forward_rate = INFINITY, recovery_rate = INFINITY;
+  const auto feed = perching_navigator_->pitchFeedStep();
+  if(perching_admittance_enabled_ && cutting_max_torque_ > 0 && feed)
+  {
+    // Cancellation or withdrawal retires forward recovery, without disarming load relief.
+    recovery_rate = 0;
+    const double step = *feed;
+    if(step > 0)
+    {
+      // Use fresh filtered load before contact gating and the core's torque-error clip.
+      const double scale = input_valid_ && output.valid ? std::clamp((cutting_max_torque_ + residual_pitch_torque_filtered_) /
+          (cutting_max_torque_ - cutting_working_torque_), 0.0, 1.0) : 0;
+      forward_rate = perching_navigator_->pitchRateLimit() * scale;
+      recovery_rate = cutting_recovery_rate_ * scale;
+    }
+    else if(step < 0) forward_rate = 0;
+  }
   output_accepted_ = perching_navigator_->applyPerchingReference(output.angle_offset_compliance.y(),
-      output.angular_vel_offset_compliance.y(), output.angular_acc_offset_compliance.y());
+      output.angular_vel_offset_compliance.y(), output.angular_acc_offset_compliance.y(), forward_rate, recovery_rate);
 }
 void GimbalrotorPerchingAdmittanceController::publishContactAdmittanceDiagnostics()
 {
