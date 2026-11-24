@@ -683,13 +683,12 @@ void GimbalrotorMultilinkPerchingNavigator::motionCallback(const gimbalrotor::Ro
         else
         {
           const double rate = m.rate_limit == 0 ? rate_limit_ : m.rate_limit;
-          Reference origin;
           Vector goal;
-          if(!std::isfinite(rate) || rate <= 0 || !model_->evaluate(measured.q, origin)) why = "infeasible jog target";
+          if(!std::isfinite(rate) || rate <= 0) why = "infeasible jog target";
           else
           {
             // Use measured pitch progress without adopting tracking errors on the other axes.
-            const double measured_pitch = perching_geometry::logSO3(applied_state_.body.linear().transpose() * origin.body.linear()).y();
+            const double measured_pitch = perching_geometry::logSO3(applied_state_.body.linear().transpose() * measured.body.linear()).y();
             const Eigen::Matrix3d target = applied_state_.body.linear() *
                 perching_geometry::expSO3(Eigen::Vector3d::UnitY() * (measured_pitch + m.value - applied_pitch_offset_));
             if(!model_->orient(nominal_, target, moving_, goal) ||

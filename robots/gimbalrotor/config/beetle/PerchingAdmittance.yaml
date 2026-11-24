@@ -135,10 +135,11 @@
 
     roll_yaw: &roll_yaw
       <<: *common
-      inertia_pitch: 0.4
-      rot_damping_pitch: 5.0
-      rot_stiffness_pitch: 10.5
-      torque_limit_pitch: 0.18
+      inertia_pitch: 6.4
+      rot_damping_pitch: 80.0
+      rot_stiffness_pitch: 168.0
+      torque_limit_pitch: 5.0
+      torque_lpf_alpha: 1.0 # Task torque is already filtered by the perching contact filter.
       angle_offset_limit_pitch: 0.0383972
       angular_vel_offset_limit_pitch: 0.15
       enable_pitch: 1.0
