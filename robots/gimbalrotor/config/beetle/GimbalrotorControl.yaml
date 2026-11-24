@@ -36,11 +36,11 @@ controller:
     force_landing_descending_rate: -0.5
 
   roll:
-    p_gain: 25.0
+    p_gain: 27.5
     i_gain: 0.4 #2.0 # or 0.3
-    d_gain: 18.0
-    limit_sum: 20.0
-    limit_p: 22.0
+    d_gain: 19.0
+    limit_sum: 30.0
+    limit_p: 30.0
     limit_i: 5.0 # 0.6
     limit_d: 20.0
 
