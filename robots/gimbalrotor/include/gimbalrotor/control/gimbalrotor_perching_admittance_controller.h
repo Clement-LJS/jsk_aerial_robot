@@ -51,6 +51,7 @@ protected:
   double pitch_acceleration_limit_ = .1, observer_max_interval_ = .15, future_tolerance_ = .02;
   double cutting_working_torque_ = 0, cutting_max_torque_ = 0, cutting_recovery_rate_ = 0;
   double cutting_force_integral_time_ = 0, cutting_force_bias_ = 0;
+  double cutting_min_retreat_ = 0;
   std::optional<aerial_robot_navigation::GimbalrotorPerchingNavigator::CuttingMotion> cutting_motion_;
   ros::Time previous_contact_gate_time_;
   Eigen::Matrix<double, 6, 1> prepared_perching_admittance_wrench_world_ = Eigen::Matrix<double, 6, 1>::Zero();

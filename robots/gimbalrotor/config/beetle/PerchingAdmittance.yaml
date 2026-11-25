@@ -155,6 +155,9 @@
         cutting_max_torque: 3.0
         cutting_recovery_rate: 0.00174532925 # 0.1 deg/s, shared with nominal forward travel.
         cutting_force_integral_time: 5.0 # Trial load-error integral time [s]; zero disables the integral.
+        cutting_min_retreat: 0.00610865238 # Trial 0.35 deg; Nov 24 pitch variation p99 reached 0.30 deg.
+        cutting_measurement_time: 0.5 # Average task progress across the recorded approximately 2.15 Hz motion.
+        cutting_hold_duration: 0.5 # Brief hold after measured withdrawal, not an autoscript dwell.
         contact_on_duration: 0.1
         contact_off_duration: 0.2
         pitch_acceleration_limit: 0.1

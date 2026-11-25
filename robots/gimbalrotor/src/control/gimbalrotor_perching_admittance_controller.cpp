@@ -33,6 +33,7 @@ void GimbalrotorPerchingAdmittanceController::initialize(ros::NodeHandle nh, ros
     pn.param("cutting_max_torque", cutting_max_torque_, cutting_max_torque_);
     pn.param("cutting_recovery_rate", cutting_recovery_rate_, cutting_recovery_rate_);
     pn.param("cutting_force_integral_time", cutting_force_integral_time_, cutting_force_integral_time_);
+    pn.param("cutting_min_retreat", cutting_min_retreat_, cutting_min_retreat_);
   }
   nh_.param("navigation/perching/observer_max_interval", observer_max_interval_, observer_max_interval_);
   nh_.param("navigation/perching/future_tolerance", future_tolerance_, future_tolerance_);
@@ -96,6 +97,8 @@ void GimbalrotorPerchingAdmittanceController::initialize(ros::NodeHandle nh, ros
         !std::isfinite(cutting_recovery_rate_) || cutting_recovery_rate_ <= 0)
       throw std::invalid_argument("invalid articulated cutting load/rate parameters");
   }
+  if(!std::isfinite(cutting_min_retreat_) || cutting_min_retreat_ < 0)
+    throw std::invalid_argument("invalid minimum cutting retreat");
   if(!std::isfinite(cutting_force_integral_time_) || cutting_force_integral_time_ < 0)
     throw std::invalid_argument("invalid cutting force integral time");
 }
@@ -368,7 +371,7 @@ void GimbalrotorPerchingAdmittanceController::preparePerchingReference()
     accepted.angular_vel_offset_compliance.y() = perching_navigator_->appliedPitchRate();
     accepted.angular_acc_offset_compliance.y() = 0;
     const double step = perching_navigator_->pitchFeedStep().value_or(0);
-    if(step <= 0 || perching_navigator_->jogReady() ||
+    if(step <= 0 || accepted.angular_vel_offset_compliance.y() < 0 || perching_navigator_->jogReady() ||
         (perching_navigator_->nominalHeld() && perching_navigator_->appliedPitchOffset() == 0)) cutting_force_bias_ = 0;
     else if(proposal.valid && input_valid_ && output_accepted_ && contact_active_ &&
         residual_pitch_torque_filtered_ < 0 && cutting_force_integral_time_ > 0 && dt > 0)
@@ -407,7 +410,7 @@ void GimbalrotorPerchingAdmittanceController::updateAdmittance()
     if(!input_valid_) { admittance_output_.valid = false; return; }
     const double bound = config.rot_damping.y() * std::min(perching_navigator_->pitchRateLimit(), cutting_recovery_rate_);
     cutting_force_bias_ = std::clamp(cutting_force_bias_, 0.0, bound);
-    if(-residual_pitch_torque_filtered_ >= cutting_max_torque_) cutting_force_bias_ = 0;
+    if(-residual_pitch_torque_filtered_ >= cutting_working_torque_) cutting_force_bias_ = 0;
     // J*v_dot + D*v = T_work - load + bias; v is total applied body-local pitch rate.
     config.rot_stiffness.y() = 0;
     config.torque_ref.y() = -(cutting_working_torque_ + cutting_force_bias_);
@@ -438,6 +441,11 @@ void GimbalrotorPerchingAdmittanceController::updateAdmittance()
   admittance_output_ = admittance_core_.update(input);
   if(cutting_motion_ && admittance_output_.valid)
   {
+    cutting_motion_->valid = true;
+    cutting_motion_->contact = contact_active_ && residual_pitch_torque_filtered_ < 0;
+    cutting_motion_->released = !contact_active_ && -residual_pitch_torque_filtered_ <= contact_off_threshold_;
+    cutting_motion_->retreat = std::max(cutting_min_retreat_,
+        std::max(0.0, -residual_pitch_torque_filtered_) / admittance_config_.rot_stiffness.y());
     cutting_motion_->rate = admittance_output_.angular_vel_offset_compliance.y();
     // Velocity can remain negative while a nonnegative force drive brakes the retreat.
     const double drive = torque - config.torque_ref.y();
@@ -464,6 +472,8 @@ void GimbalrotorPerchingAdmittanceController::applyAdmittanceOutputToNavigator(
     if(step > 0 && input_valid_ && output.valid)
     {
       forward_rate = std::min(perching_navigator_->pitchRateLimit(), cutting_recovery_rate_);
+      // A saturated PI proposal must still slow as resisting cutting load increases.
+      forward_rate *= std::clamp(1 + residual_pitch_torque_filtered_ / cutting_working_torque_, 0.0, 1.0);
       // Do not acknowledge a recovered step while relief is still requested.
       recovery_rate = cutting_motion_ && cutting_motion_->relief ? 0 : forward_rate;
     }

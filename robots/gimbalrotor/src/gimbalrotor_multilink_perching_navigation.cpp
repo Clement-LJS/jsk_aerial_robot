@@ -94,6 +94,8 @@ void GimbalrotorMultilinkPerchingNavigator::readProfile()
   pn.param("pitch_acceleration", acceleration_limit_, acceleration_limit_);
   pn.param("body_pitch_jog_max_delta", jog_limit_, jog_limit_);
   nh_.param("controller/admittance/perching/recovery_angle_epsilon", jog_tolerance_, jog_tolerance_);
+  nh_.param("controller/admittance/perching/cutting_measurement_time", cutting_measurement_time_, cutting_measurement_time_);
+  nh_.param("controller/admittance/perching/cutting_hold_duration", cutting_hold_duration_, cutting_hold_duration_);
   pn.param("pitch_rezero_target_pitch", rezero_target_, rezero_target_);
   pn.param("pitch_rezero_command_sign", rezero_sign_, rezero_sign_);
   pn.param("pitch_rezero_rate_limit", rezero_rate_, rezero_rate_);
@@ -146,7 +148,8 @@ void GimbalrotorMultilinkPerchingNavigator::readProfile()
     }
   }
   const double positive[] = {sync_tolerance_, max_tilt_, cog_speed_limit_, cog_acceleration_limit_,
-      acceleration_limit_, jog_tolerance_, rezero_rate_, rezero_timeout_, rezero_kp_, rezero_stable_duration_};
+      acceleration_limit_, jog_tolerance_, rezero_rate_, rezero_timeout_, rezero_kp_, rezero_stable_duration_,
+      cutting_measurement_time_, cutting_hold_duration_};
   for(double value : positive)
     if(!std::isfinite(value) || value <= 0) throw std::invalid_argument("invalid navigation/perching limits or timing");
 }
@@ -518,6 +521,7 @@ void GimbalrotorMultilinkPerchingNavigator::resetMotion()
   body_rate_limit_ = INFINITY;
   forward_rate_limit_ = recovery_rate_limit_ = INFINITY;
   feed_request_.reset();
+  cutting_state_.reset();
   reference_velocity_.setZero(); reference_acceleration_.setZero();
   reference_omega_.setZero(); reference_angular_acceleration_.setZero();
   servo_.reset(); phase_ = "FREE_FLIGHT"; prepared_motion_ = paused_ = false;
@@ -555,6 +559,7 @@ std::optional<double> GimbalrotorMultilinkPerchingNavigator::pitchFeedStep() con
 bool GimbalrotorMultilinkPerchingNavigator::jogReady() const
 {
   const double step = pitchFeedStep().value_or(0);
+  if(cutting_state_ && step > 0 && (cutting_state_->phase != CuttingState::FEED || cutting_state_->lead > .5 * step)) return false;
   return nominalHeld() && trackingHeld() && (step <= 0 || !std::isfinite(recovery_rate_limit_) ||
       (recovery_rate_limit_ > 0 && std::abs(applied_pitch_offset_) <= std::min(jog_tolerance_, .2 * step)));
 }
@@ -562,6 +567,7 @@ bool GimbalrotorMultilinkPerchingNavigator::jogReady() const
 void GimbalrotorMultilinkPerchingNavigator::stopMotion()
 {
   motion_.revoke();
+  cutting_state_.reset();
   // Brake from the accepted reference and retire pending servo destinations.
   destination_ = nominal_; body_destination_ = body_progress_;
   rezero_active_ = false;
@@ -1079,6 +1085,7 @@ bool GimbalrotorMultilinkPerchingNavigator::applyPerchingReference(double pitch_
   bool relief_constrained = false;
   const double previous_pitch_rate = appliedPitchRate();
   const bool feeding = cutting && pitchFeedStep().value_or(0) > 0;
+  if(!feeding) cutting_state_.reset();
   const bool tracking = !cutting || trackingHeld();
   const bool cutting_geometry = !cutting || (model_->evaluate(nominal_, cutting_origin) &&
       model_->evaluate(destination_, cutting_endpoint) && model_->pitchTangent(applied_, moving_, cutting_tangent));
@@ -1086,17 +1093,93 @@ bool GimbalrotorMultilinkPerchingNavigator::applyPerchingReference(double pitch_
   {
     remaining = perching_geometry::logSO3(cutting_origin.body.linear().transpose() * cutting_endpoint.body.linear()).y() - applied_pitch_offset_;
     double requested_rate = cutting->rate;
-    if(cutting->relief)
+    double retreat_remaining = INFINITY, feed_remaining = INFINITY;
+    if(feeding && fresh && cutting->valid)
     {
-      // Aim behind measured progress, preserving nominal roll/yaw; slew from the accepted reference.
+      if(!cutting_state_)
+      {
+        cutting_state_.emplace(CuttingState{});
+        cutting_state_->frame = applied_state_.body.linear();
+        cutting_state_->measured = perching_geometry::logSO3(cutting_state_->frame.transpose() * measured_.body.linear()).y();
+        // Preserve the initial holding error, but never absorb subsequent feed lag into it.
+        cutting_state_->initial_lead = -cutting_state_->measured;
+      }
+      auto& motion = *cutting_state_;
+      const double measured_pitch = perching_geometry::logSO3(motion.frame.transpose() * measured_.body.linear()).y();
+      motion.measured += cycle_dt_ / (cutting_measurement_time_ + cycle_dt_) * (measured_pitch - motion.measured);
+      const double applied_pitch = perching_geometry::logSO3(motion.frame.transpose() * applied_state_.body.linear()).y();
+      motion.lead = applied_pitch - motion.measured - motion.initial_lead;
+      feed_remaining = std::max(0.0, *pitchFeedStep() - motion.lead);
+      const bool contact_onset = cutting->contact && !motion.contact;
+      if(cutting->contact) motion.contact = true;
+      // Unloading during our own retreat/recovery must not trigger another first-contact backoff.
+      else if(cutting->released && motion.phase == CuttingState::FEED && nominalHeld() &&
+          std::abs(applied_pitch_offset_) <= jog_tolerance_) motion.contact = false;
+      if((contact_onset || cutting->relief) && motion.phase == CuttingState::FEED)
+      {
+        motion.phase = CuttingState::RETREAT;
+        motion.measured_anchor = motion.measured;
+        // Both raw and averaged measured pitch bound the anchor; no roll/yaw error is imported.
+        motion.anchor = std::min(applied_pitch, std::min(measured_pitch, motion.measured));
+        motion.goal = motion.anchor - cutting->retreat;
+        motion.withdrawal = cutting->retreat;
+        motion.hold_elapsed = 0;
+      }
+      if(motion.phase != CuttingState::FEED)
+      {
+        if(motion.anchor - cutting->retreat < motion.goal - 1e-9 && (cutting->contact || cutting->relief))
+        {
+          motion.goal = motion.anchor - cutting->retreat;
+          motion.withdrawal = cutting->retreat;
+          motion.phase = CuttingState::RETREAT;
+          motion.hold_elapsed = 0;
+        }
+        retreat_remaining = std::max(0.0, applied_pitch - motion.goal);
+        relief_constrained = applied_pitch_offset_ - retreat_remaining < -pitch_offset_limit_;
+        if(motion.phase == CuttingState::HOLD && cutting->relief)
+        { motion.phase = CuttingState::RETREAT; motion.hold_elapsed = 0; }
+        if(motion.phase == CuttingState::RETREAT)
+        {
+          if(retreat_remaining > 1e-6) requested_rate = -pitch_offset_rate_limit_;
+          else if(cutting->relief)
+          {
+            // The initial displacement is not a spring equilibrium under persistent overload.
+            requested_rate = std::min(cutting->rate, 0.0);
+            retreat_remaining = INFINITY;
+          }
+          else
+          {
+            requested_rate = 0;
+            if(std::abs(previous_pitch_rate) < 1e-6 && motion.measured <= motion.measured_anchor - .5 * motion.withdrawal)
+            { motion.phase = CuttingState::HOLD; motion.hold_elapsed = 0; }
+          }
+        }
+        if(motion.phase == CuttingState::HOLD)
+        {
+          requested_rate = 0;
+          if(motion.measured <= motion.measured_anchor - .5 * motion.withdrawal) motion.hold_elapsed += cycle_dt_;
+          else motion.hold_elapsed = 0;
+          if(motion.hold_elapsed >= cutting_hold_duration_) motion.phase = CuttingState::FEED;
+        }
+      }
+    }
+    else if(cutting->relief && fresh)
+    {
+      // Cancellation retains bounded load relief, without retaining a recovery destination.
       const double measured_progress = perching_geometry::logSO3(applied_state_.body.linear().transpose() * measured_.body.linear()).y();
       requested_rate = std::min(0.0, measured_progress) / cycle_dt_ + std::min(requested_rate, -acceleration_limit * cycle_dt_);
-      relief_constrained = applied_pitch_offset_ + requested_rate * cycle_dt_ < -pitch_offset_limit_;
+    }
+    if(!cutting->valid || !fresh)
+    {
+      requested_rate = 0;
+      if(cutting_state_) cutting_state_->hold_elapsed = 0;
     }
     if(!tracking || !feeding) requested_rate = std::min(requested_rate, 0.0);
     const double change = acceleration_limit * cycle_dt_;
     double positive_limit = forward_rate_limit_, negative_limit = pitch_offset_rate_limit_;
     if(feeding) positive_limit = std::min(positive_limit, std::sqrt(change * change + 2 * acceleration_limit * std::max(0.0, remaining)) - change);
+    positive_limit = std::min(positive_limit, std::sqrt(change * change + 2 * acceleration_limit * feed_remaining) - change);
+    negative_limit = std::min(negative_limit, std::sqrt(change * change + 2 * acceleration_limit * retreat_remaining) - change);
     negative_limit = std::min(negative_limit, std::sqrt(change * change +
         2 * acceleration_limit * std::max(0.0, pitch_offset_limit_ + applied_pitch_offset_)) - change);
     cutting_rate = std::clamp(std::clamp(requested_rate, -negative_limit, positive_limit), previous_pitch_rate - change, previous_pitch_rate + change);
@@ -1111,7 +1194,8 @@ bool GimbalrotorMultilinkPerchingNavigator::applyPerchingReference(double pitch_
       if(!cutting_geometry) return false;
       double increment = cutting_rate * cycle_dt_;
       const double change = acceleration_limit * cycle_dt_;
-      const bool finish = feeding && tracking && !cutting->relief && cutting->rate > 0 && forward_rate_limit_ > 0 &&
+      const bool finish = feeding && tracking && cutting->valid && cutting_state_ && cutting_state_->phase == CuttingState::FEED &&
+          !cutting->relief && cutting->rate > 0 && forward_rate_limit_ > 0 &&
           remaining >= 0 && remaining <= std::min(.5 * change, forward_rate_limit_) * cycle_dt_ && std::abs(previous_pitch_rate) <= change;
       if(finish) increment = remaining;
       if((feeding && increment > std::max(0.0, remaining) + 1e-9) || applied_pitch_offset_ + increment < -pitch_offset_limit_ - 1e-9) return false;
@@ -1136,8 +1220,12 @@ bool GimbalrotorMultilinkPerchingNavigator::applyPerchingReference(double pitch_
       status_ = cutting->relief ? "measured-pitch relief" :
           (offset < 0 ? "recovering compliant reference" : "feeding retained endpoint");
       if(relief_constrained) status_ = "relief constrained by offset limit";
+      else if(cutting_state_ && cutting_state_->phase == CuttingState::RETREAT) status_ = "executing measured-pitch retreat";
+      else if(cutting_state_ && cutting_state_->phase == CuttingState::HOLD) status_ = "holding after measured withdrawal";
       else if(!tracking && !cutting->relief) status_ = "cutting feed held for tracking";
       else if(forward_rate_limit_ == 0 && !cutting->relief) status_ = "cutting forward motion held";
+      else if(cutting_state_ && cutting_state_->lead > .5 * pitchFeedStep().value_or(0) && remaining <= jog_tolerance_)
+        status_ = "reference reached; awaiting measured cutting progress";
     }
     else if(correcting)
     {
@@ -1373,6 +1461,15 @@ void GimbalrotorMultilinkPerchingNavigator::publishDiagnostics()
   value("admittance_hold_eligible", held);
   value("jog_ready", held && jogReady()); value("effective_offset_rad", applied_pitch_offset_);
   value("hold_reason", status_); value("pivot_error", pivot_error_); value("hinge_residual", hinge_error_);
+  if(cutting_state_)
+  {
+    value("cutting_phase", static_cast<int>(cutting_state_->phase));
+    value("cutting_measured_progress_rad", cutting_state_->measured);
+    value("cutting_forward_lead_rad", cutting_state_->lead);
+    value("cutting_initial_lead_rad", cutting_state_->initial_lead);
+    value("cutting_retreat_goal_rad", cutting_state_->goal);
+    value("cutting_measured_withdrawal_rad", cutting_state_->measured_anchor - cutting_state_->measured);
+  }
   for(const auto& item : values) { diagnostic_msgs::KeyValue v; v.key = item.first; v.value = item.second; diagnostic.values.push_back(v); }
   array.status.push_back(diagnostic); status_pub_.publish(array);
   auto boolean = [&](const std::string& key, bool data) { std_msgs::Bool m; m.data = data; bool_pubs_.at(key).publish(m); };

@@ -101,6 +101,8 @@ public:
   struct CuttingMotion
   {
     double rate = 0;
+    double retreat = 0;
+    bool valid = false, contact = false, released = false;
     bool relief = false;
   };
   double appliedPitchOffset() const { return applied_pitch_offset_; }

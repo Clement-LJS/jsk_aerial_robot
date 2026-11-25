@@ -127,6 +127,16 @@ private:
   double jog_limit_ = .01745329252;
   double jog_tolerance_ = .00174533;
   double forward_rate_limit_ = INFINITY, recovery_rate_limit_ = INFINITY;
+  struct CuttingState
+  {
+    enum Phase { FEED, RETREAT, HOLD } phase = FEED;
+    Eigen::Matrix3d frame = Eigen::Matrix3d::Identity();
+    double measured = 0, initial_lead = 0, lead = 0;
+    double anchor = 0, measured_anchor = 0, goal = 0, withdrawal = 0, hold_elapsed = 0;
+    bool contact = false;
+  };
+  std::optional<CuttingState> cutting_state_;
+  double cutting_measurement_time_ = .5, cutting_hold_duration_ = .5;
   gimbalrotor::RollYawMotionConstPtr feed_request_;
   gimbalrotor::RollYawMotionConstPtr last_motion_request_;
   std_msgs::String last_motion_ack_;
