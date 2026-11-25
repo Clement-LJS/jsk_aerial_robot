@@ -135,8 +135,8 @@
 
     roll_yaw: &roll_yaw
       <<: *common
-      inertia_pitch: 6.4
-      rot_damping_pitch: 80.0
+      inertia_pitch: 15.36 # Preserve J/D = 0.08 s while reducing load-to-velocity gain.
+      rot_damping_pitch: 192.0 # Trial: 1 N m excess gives about 0.3 deg/s before navigation limits.
       rot_stiffness_pitch: 168.0
       torque_limit_pitch: 5.0
       torque_lpf_alpha: 1.0 # Task torque is already filtered by the perching contact filter.
@@ -147,6 +147,7 @@
       perching:
         <<: *common_perching
         equilibrium_wrench_required_samples: 80
+        contact_torque_filter_alpha: 0.15 # Reduce load-filter lag; retain filtering at recorded 25-55 ms update intervals.
         contact_on_threshold: 0.45
         contact_off_threshold: 0.25
         # Trial load band: Nov 24 unloaded residual about 0.5 N m, loaded torque up to 3.3 N m.
