@@ -2,6 +2,7 @@
 """Nominal body-local pitch jogs, with reference completion and optional dwell.
 
 Optional use_admittance performs unloaded tare/enable before the first jog.
+timeout_sec bounds startup only; accepted jogs have no elapsed-time deadline.
 Interruption cancels this task's motion; completed steps remain held.
 """
 
@@ -143,7 +144,7 @@ def main():
     normal_exit = False
     startup = AdmittanceStartup()
     startup_complete = not use_admittance
-    rospy.loginfo('Requesting %d nominal body-local pitch jogs of %+.6g deg, with %.3g s dwell after reference completion.',
+    rospy.loginfo('Requesting %d nominal body-local pitch jogs of %+.6g deg, with %.3g s dwell after reference completion; no per-step time limit.',
                   count, math.degrees(step), hold)
     try:
         session = None
@@ -170,25 +171,14 @@ def main():
         for number in range(1, count + 1):
             if rospy.is_shutdown() or interrupted.is_set():
                 return
-            deadline = time.monotonic() + timeout
             while motion.request is not None and not motion.completed(feedback_timeout):
                 if rospy.is_shutdown() or interrupted.is_set():
                     return
-                if time.monotonic() >= deadline:
-                    raise RuntimeError('Timed out waiting for reference completion')
                 interrupted.wait(.02)
             motion.send(session, RollYawMotion.JOG, step)
-            deadline = time.monotonic() + timeout
             while not rospy.is_shutdown() and not interrupted.is_set():
                 if motion.completed(feedback_timeout):
                     break
-                if time.monotonic() >= deadline:
-                    with motion.lock:
-                        status = motion.status
-                    detail = '' if status is None else '; ' + '; '.join(
-                        key + '=' + status[1].get(key, 'unavailable') for key in
-                        ('hold_reason', 'admittance_status', 'task_torque_valid', 'effective_offset_rad'))
-                    raise RuntimeError('Timed out waiting for jog acceptance/completion' + detail)
                 interrupted.wait(.02)
             if rospy.is_shutdown() or interrupted.is_set():
                 return
