@@ -269,7 +269,7 @@ void GimbalrotorPerchingAdmittanceController::controlCore()
   const auto feed = perching_navigator_->pitchFeedStep();
   cutting_motion_.reset();
   if(perching_active_ && perching_admittance_enabled_ && cutting_max_torque_ > 0 && feed && *feed >= 0)
-    cutting_motion_.emplace();
+    cutting_motion_.emplace(aerial_robot_navigation::GimbalrotorPerchingNavigator::CuttingMotion{});
   if(!cutting_motion_ || *feed <= 0 || cutting_force_integral_time_ == 0 || perching_navigator_->jogReady() ||
       (perching_navigator_->nominalHeld() && perching_navigator_->appliedPitchOffset() == 0)) cutting_force_bias_ = 0;
   if(!perching_active_)
