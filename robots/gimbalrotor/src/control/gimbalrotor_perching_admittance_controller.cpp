@@ -32,6 +32,7 @@ void GimbalrotorPerchingAdmittanceController::initialize(ros::NodeHandle nh, ros
     pn.param("cutting_working_torque", cutting_working_torque_, cutting_working_torque_);
     pn.param("cutting_max_torque", cutting_max_torque_, cutting_max_torque_);
     pn.param("cutting_recovery_rate", cutting_recovery_rate_, cutting_recovery_rate_);
+    pn.param("cutting_force_integral_time", cutting_force_integral_time_, cutting_force_integral_time_);
   }
   nh_.param("navigation/perching/observer_max_interval", observer_max_interval_, observer_max_interval_);
   nh_.param("navigation/perching/future_tolerance", future_tolerance_, future_tolerance_);
@@ -95,12 +96,16 @@ void GimbalrotorPerchingAdmittanceController::initialize(ros::NodeHandle nh, ros
         !std::isfinite(cutting_recovery_rate_) || cutting_recovery_rate_ <= 0)
       throw std::invalid_argument("invalid articulated cutting load/rate parameters");
   }
+  if(!std::isfinite(cutting_force_integral_time_) || cutting_force_integral_time_ < 0)
+    throw std::invalid_argument("invalid cutting force integral time");
 }
 
 void GimbalrotorPerchingAdmittanceController::resetCalibration()
 {
   perching_admittance_enabled_ = equilibrium_wrench_ready_ = contact_active_ = recovery_active_ = false;
   input_valid_ = output_accepted_ = raw_load_valid_ = false;
+  cutting_force_bias_ = 0;
+  cutting_motion_.reset();
   equilibrium_wrench_sample_count_ = 0; baseline_.resize(0); baseline_sum_.resize(0);
   contact_on_timer_ = contact_off_timer_ = residual_pitch_torque_raw_ = residual_pitch_torque_filtered_ = 0;
   prepared_perching_admittance_wrench_world_.setZero();
@@ -261,6 +266,12 @@ void GimbalrotorPerchingAdmittanceController::controlCore()
   }
   perching_active_ = session.mode != perching_geometry::Mode::DISABLED && !session.lock_stamp.isZero() &&
       navigator_->getNaviState() == aerial_robot_navigation::HOVER_STATE && !navigator_->getForceLandingFlag() && perching_model_->locked();
+  const auto feed = perching_navigator_->pitchFeedStep();
+  cutting_motion_.reset();
+  if(perching_active_ && perching_admittance_enabled_ && cutting_max_torque_ > 0 && feed && *feed >= 0)
+    cutting_motion_.emplace();
+  if(!cutting_motion_ || *feed <= 0 || cutting_force_integral_time_ == 0 || perching_navigator_->jogReady() ||
+      (perching_navigator_->nominalHeld() && perching_navigator_->appliedPitchOffset() == 0)) cutting_force_bias_ = 0;
   if(!perching_active_)
   {
     updatePitchIntegralPolicy(pid_controllers_.at(PITCH), false);
@@ -318,7 +329,7 @@ void GimbalrotorPerchingAdmittanceController::preparePerchingReference()
   // Even a rejected scalar proposal enters navigation once, allowing a bounded
   // brake preview and nominal progress without committing an invalid scalar.
   auto proposal = admittance_output_;
-  if(perching_navigator_->articulated() && proposal.valid && !contact_active_ && dt > 0 &&
+  if(!cutting_motion_ && perching_navigator_->articulated() && proposal.valid && !contact_active_ && dt > 0 &&
       std::abs(perching_navigator_->appliedPitchOffset()) <= std::min(recovery_angle_epsilon_, .5 * limit * dt * dt) &&
       std::abs(previous_rate) <= std::min(recovery_rate_epsilon_, .5 * limit * dt))
   {
@@ -350,7 +361,29 @@ void GimbalrotorPerchingAdmittanceController::preparePerchingReference()
   admittance_output_.angular_vel_offset_compliance.y() = accepted_rate;
   admittance_output_.angular_acc_offset_compliance.y() = dt > 0 ? (accepted_rate - previous_rate) / dt : 0;
   admittance_output_.valid = true;
-  admittance_core_.acceptRotationalState(admittance_output_);
+  auto accepted = admittance_output_;
+  if(cutting_motion_)
+  {
+    // The cutting core filters total motion; public diagnostics still describe the offset.
+    accepted.angular_vel_offset_compliance.y() = perching_navigator_->appliedPitchRate();
+    accepted.angular_acc_offset_compliance.y() = 0;
+    const double step = perching_navigator_->pitchFeedStep().value_or(0);
+    if(step <= 0 || perching_navigator_->jogReady() ||
+        (perching_navigator_->nominalHeld() && perching_navigator_->appliedPitchOffset() == 0)) cutting_force_bias_ = 0;
+    else if(proposal.valid && input_valid_ && output_accepted_ && contact_active_ &&
+        residual_pitch_torque_filtered_ < 0 && cutting_force_integral_time_ > 0 && dt > 0)
+    {
+      const double increment = (cutting_working_torque_ + residual_pitch_torque_filtered_) * dt / cutting_force_integral_time_;
+      const double blocked_rate = cutting_motion_->rate - accepted.angular_vel_offset_compliance.y();
+      // Compare with the already-filtered proposal, not the steady PI demand (J/D lag is intentional).
+      if((increment > 0 && !cutting_motion_->relief && blocked_rate <= 1e-6) || (increment < 0 && blocked_rate >= -1e-6))
+      {
+        const double bound = admittance_config_.rot_damping.y() * std::min(perching_navigator_->pitchRateLimit(), cutting_recovery_rate_);
+        cutting_force_bias_ = std::clamp(cutting_force_bias_ + increment, 0.0, bound);
+      }
+    }
+  }
+  admittance_core_.acceptRotationalState(accepted);
   if(!output_accepted_) reason_ = "reference held; accepted scalar state retained";
   std_msgs::Float64 offset;
   offset.data = admittance_output_.angle_offset_compliance.y();
@@ -369,11 +402,25 @@ void GimbalrotorPerchingAdmittanceController::updateAdmittance()
   auto config = admittance_config_;
   config.trans_enable.setZero();
   config.rot_enable = Eigen::Vector3d::UnitY();
-  // Positive feed encounters negative body-local pitch torque; free flight keeps its own reference.
-  // Cancellation/withdrawal remove forward permission below, without stepping this load reference.
-  if(cutting_max_torque_ > 0 && perching_admittance_enabled_ && input_valid_ && perching_navigator_->pitchFeedStep())
+  if(cutting_motion_)
+  {
+    if(!input_valid_) { admittance_output_.valid = false; return; }
+    const double bound = config.rot_damping.y() * std::min(perching_navigator_->pitchRateLimit(), cutting_recovery_rate_);
+    cutting_force_bias_ = std::clamp(cutting_force_bias_, 0.0, bound);
+    if(-residual_pitch_torque_filtered_ >= cutting_max_torque_) cutting_force_bias_ = 0;
+    // J*v_dot + D*v = T_work - load + bias; v is total applied body-local pitch rate.
+    config.rot_stiffness.y() = 0;
+    config.torque_ref.y() = -(cutting_working_torque_ + cutting_force_bias_);
+  }
+  else if(cutting_max_torque_ > 0 && perching_admittance_enabled_ && input_valid_ && perching_navigator_->pitchFeedStep())
     config.torque_ref.y() = -cutting_working_torque_;
   admittance_core_.setConfig(config);
+  // Seed every cycle from accepted state, including entry/exit between total-rate and offset-rate modes.
+  auto accepted = admittance_output_;
+  accepted.angle_offset_compliance.y() = perching_navigator_->appliedPitchOffset();
+  accepted.angular_vel_offset_compliance.y() = cutting_motion_ ? perching_navigator_->appliedPitchRate() : perching_navigator_->appliedPitchOffsetRate();
+  accepted.angular_acc_offset_compliance.setZero();
+  admittance_core_.acceptRotationalState(accepted);
   AdmittanceCoreInput input;
   input.dt = dt;
   // Disarming removes the input torque; the applied offset still recovers through the spring/damper.
@@ -386,8 +433,18 @@ void GimbalrotorPerchingAdmittanceController::updateAdmittance()
     input.R_world_compliance = sample.body.linear();
   }
   // The generalized task torque acts along compliance +Y, not world +Y.
-  input.external_wrench_world.tail<3>() = input.R_world_compliance.col(1) * prepared_perching_admittance_wrench_world_[4];
+  const double torque = cutting_motion_ ? residual_pitch_torque_filtered_ : prepared_perching_admittance_wrench_world_[4];
+  input.external_wrench_world.tail<3>() = input.R_world_compliance.col(1) * torque;
   admittance_output_ = admittance_core_.update(input);
+  if(cutting_motion_ && admittance_output_.valid)
+  {
+    cutting_motion_->rate = admittance_output_.angular_vel_offset_compliance.y();
+    cutting_motion_->relief = -residual_pitch_torque_filtered_ >= cutting_max_torque_ || cutting_motion_->rate < 0;
+    // Offset output remains an offset; the distinct total-rate proposal travels in CuttingMotion.
+    admittance_output_.angle_offset_compliance.y() = perching_navigator_->appliedPitchOffset();
+    admittance_output_.angular_vel_offset_compliance.y() = perching_navigator_->appliedPitchOffsetRate();
+    admittance_output_.angular_acc_offset_compliance.y() = 0;
+  }
 }
 
 void GimbalrotorPerchingAdmittanceController::applyAdmittanceOutputToNavigator(
@@ -402,18 +459,16 @@ void GimbalrotorPerchingAdmittanceController::applyAdmittanceOutputToNavigator(
     // Cancellation or withdrawal retires forward recovery, without disarming load relief.
     recovery_rate = 0;
     const double step = *feed;
-    if(step > 0)
+    if(step > 0 && input_valid_ && output.valid)
     {
-      // Use fresh filtered load before contact gating and the core's torque-error clip.
-      const double scale = input_valid_ && output.valid ? std::clamp((cutting_max_torque_ + residual_pitch_torque_filtered_) /
-          (cutting_max_torque_ - cutting_working_torque_), 0.0, 1.0) : 0;
-      forward_rate = perching_navigator_->pitchRateLimit() * scale;
-      recovery_rate = cutting_recovery_rate_ * scale;
+      forward_rate = std::min(perching_navigator_->pitchRateLimit(), cutting_recovery_rate_);
+      // Do not acknowledge a recovered step while relief is still requested.
+      recovery_rate = cutting_motion_ && cutting_motion_->relief ? 0 : forward_rate;
     }
-    else if(step < 0) forward_rate = 0;
+    else forward_rate = 0;
   }
   output_accepted_ = perching_navigator_->applyPerchingReference(output.angle_offset_compliance.y(),
-      output.angular_vel_offset_compliance.y(), output.angular_acc_offset_compliance.y(), forward_rate, recovery_rate);
+      output.angular_vel_offset_compliance.y(), output.angular_acc_offset_compliance.y(), forward_rate, recovery_rate, cutting_motion_);
 }
 void GimbalrotorPerchingAdmittanceController::publishContactAdmittanceDiagnostics()
 {
@@ -432,6 +487,7 @@ void GimbalrotorPerchingAdmittanceController::publishContactAdmittanceDiagnostic
   value("baseline_ready", equilibrium_wrench_ready_); value("tare_collecting", perching_active_ && !perching_admittance_enabled_ && !equilibrium_wrench_ready_);
   value("tare_generation", tare_generation_); value("tare_request_sequence", tare_request_sequence_); value("enable_request_sequence", enable_request_sequence_);
   value("reference_accepted", output_accepted_);
+  value("cutting_force_bias", cutting_force_bias_);
   value("task_torque_valid", input_valid_); value("admittance_status", reason_);
   value("task_load_source", perching_navigator_->articulated() ? "articulated_momentum: commanded world/CoG actuation estimate" :
       "world/CoG wrench: locked pivot hinge projection");

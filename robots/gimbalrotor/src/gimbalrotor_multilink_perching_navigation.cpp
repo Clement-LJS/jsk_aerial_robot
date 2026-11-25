@@ -556,7 +556,7 @@ bool GimbalrotorMultilinkPerchingNavigator::jogReady() const
 {
   const double step = pitchFeedStep().value_or(0);
   return nominalHeld() && trackingHeld() && (step <= 0 || !std::isfinite(recovery_rate_limit_) ||
-      std::abs(applied_pitch_offset_) <= std::min(jog_tolerance_, .2 * step));
+      (recovery_rate_limit_ > 0 && std::abs(applied_pitch_offset_) <= std::min(jog_tolerance_, .2 * step)));
 }
 
 void GimbalrotorMultilinkPerchingNavigator::stopMotion()
@@ -1022,8 +1022,13 @@ bool GimbalrotorMultilinkPerchingNavigator::candidateAllowed(const Vector& q, do
       (velocity - reference_velocity_).norm() <= cog_acceleration_limit_ * dt + 1e-5;
 }
 
+double GimbalrotorMultilinkPerchingNavigator::appliedPitchRate() const
+{
+  return applied_state_.body.linear().col(1).dot(applied_state_.cog.linear() * reference_omega_);
+}
+
 bool GimbalrotorMultilinkPerchingNavigator::applyPerchingReference(double pitch_offset, double rate, double acceleration,
-    double forward_rate_limit, double recovery_rate_limit)
+    double forward_rate_limit, double recovery_rate_limit, const std::optional<CuttingMotion>& cutting)
 {
   std::lock_guard<std::recursive_mutex> lock(perching_state_mutex_);
   if(navi_state_ != HOVER_STATE || force_landing_flag_ || !std::isfinite(pitch_offset) || !std::isfinite(rate) || !std::isfinite(acceleration)) return false;
@@ -1058,8 +1063,8 @@ bool GimbalrotorMultilinkPerchingNavigator::applyPerchingReference(double pitch_
   if(observation(measured_)) model_->estimate(measured_.body, measured_.q, pivot_error_, hinge_error_);
   const bool fresh = motionFeedbackValid();
   if(fresh) status_ = "tracking accepted reference";
-  // Advance the nominal planner once; all correction previews below are read-only.
-  if(applied_stamp_ > 0 && fresh && cycle_dt_ > 0) advanceNominal(cycle_dt_);
+  // Cutting allocates one total increment below instead of advancing nominal independently.
+  if(!cutting && applied_stamp_ > 0 && fresh && cycle_dt_ > 0) advanceNominal(cycle_dt_);
   if(applied_stamp_ > 0 && !proposal_valid_) restoreNominal();
   const Vector planned_nominal = proposal_valid_ && fresh ? proposed_ : nominal_;
   Vector nominal = planned_nominal;
@@ -1068,12 +1073,73 @@ bool GimbalrotorMultilinkPerchingNavigator::applyPerchingReference(double pitch_
   const bool correcting = pitch_offset != 0 || rate != 0 || acceleration != 0 ||
       applied_pitch_offset_ != 0 || applied_offset_rate_ != 0 || std::isfinite(forward_rate_limit_);
   const double acceleration_limit = std::min(acceleration_limit_, pitch_offset_acceleration_limit_);
+  Reference cutting_origin, cutting_endpoint;
+  Vector cutting_tangent;
+  double cutting_rate = 0, remaining = 0;
+  bool relief_constrained = false;
+  const double previous_pitch_rate = appliedPitchRate();
+  const bool feeding = cutting && pitchFeedStep().value_or(0) > 0;
+  const bool tracking = !cutting || trackingHeld();
+  const bool cutting_geometry = !cutting || (model_->evaluate(nominal_, cutting_origin) &&
+      model_->evaluate(destination_, cutting_endpoint) && model_->pitchTangent(applied_, moving_, cutting_tangent));
+  if(cutting && cutting_geometry && cycle_dt_ > 0)
+  {
+    remaining = perching_geometry::logSO3(cutting_origin.body.linear().transpose() * cutting_endpoint.body.linear()).y() - applied_pitch_offset_;
+    double requested_rate = cutting->rate;
+    if(cutting->relief)
+    {
+      // Aim behind measured progress, preserving nominal roll/yaw; slew from the accepted reference.
+      const double measured_progress = perching_geometry::logSO3(applied_state_.body.linear().transpose() * measured_.body.linear()).y();
+      requested_rate = std::min(0.0, measured_progress) / cycle_dt_ + std::min(requested_rate, -acceleration_limit * cycle_dt_);
+      relief_constrained = applied_pitch_offset_ + requested_rate * cycle_dt_ < -pitch_offset_limit_;
+    }
+    if(!tracking || !feeding) requested_rate = std::min(requested_rate, 0.0);
+    const double change = acceleration_limit * cycle_dt_;
+    double positive_limit = forward_rate_limit_, negative_limit = pitch_offset_rate_limit_;
+    if(feeding) positive_limit = std::min(positive_limit, std::sqrt(change * change + 2 * acceleration_limit * std::max(0.0, remaining)) - change);
+    negative_limit = std::min(negative_limit, std::sqrt(change * change +
+        2 * acceleration_limit * std::max(0.0, pitch_offset_limit_ + applied_pitch_offset_)) - change);
+    cutting_rate = std::clamp(std::clamp(requested_rate, -negative_limit, positive_limit), previous_pitch_rate - change, previous_pitch_rate + change);
+  }
   auto preview = [&](double& offset, double& offset_rate, double& offset_acceleration)
   {
     candidate = nominal;
     Reference origin;
     double positive_rate = recovery_rate_limit_, forward_rate = INFINITY;
-    if(correcting)
+    if(cutting)
+    {
+      if(!cutting_geometry) return false;
+      double increment = cutting_rate * cycle_dt_;
+      const double change = acceleration_limit * cycle_dt_;
+      const bool finish = feeding && tracking && !cutting->relief && cutting->rate > 0 && forward_rate_limit_ > 0 &&
+          remaining >= 0 && remaining <= std::min(.5 * change, forward_rate_limit_) * cycle_dt_ && std::abs(previous_pitch_rate) <= change;
+      if(finish) increment = remaining;
+      if((feeding && increment > std::max(0.0, remaining) + 1e-9) || applied_pitch_offset_ + increment < -pitch_offset_limit_ - 1e-9) return false;
+      const double progress = applied_pitch_offset_ + increment;
+      // Recover negative offset first; only the remainder advances nominal toward its retained endpoint.
+      const bool advance = progress >= 0;
+      // A tangent seed advances even steps smaller than the orientation solver's tolerance.
+      candidate = applied_ + cutting_tangent * increment;
+      if(finish) candidate = destination_;
+      else if(!model_->orient(candidate, cutting_origin.body.linear() *
+          perching_geometry::expSO3(Eigen::Vector3d::UnitY() * progress), moving_, candidate)) return false;
+      if(!model_->evaluate(candidate, state)) return false;
+      offset = advance || finish ? 0 : perching_geometry::logSO3(cutting_origin.body.linear().transpose() * state.body.linear()).y();
+      if(std::abs(offset) > pitch_offset_limit_ + 1e-9) return false;
+      offset_rate = (offset - applied_pitch_offset_) / cycle_dt_;
+      offset_acceleration = (offset_rate - applied_offset_rate_) / cycle_dt_;
+      proposed_ = advance || finish ? candidate : nominal_;
+      proposed_rate_ = (proposed_ - nominal_) / cycle_dt_;
+      proposed_progress_ = body_progress_; proposed_body_rate_ = 0;
+      proposal_valid_ = true;
+      forward_rate = std::max(forward_rate_limit_, previous_pitch_rate - change);
+      status_ = cutting->relief ? "measured-pitch relief" :
+          (offset < 0 ? "recovering compliant reference" : "feeding retained endpoint");
+      if(relief_constrained) status_ = "relief constrained by offset limit";
+      else if(!tracking && !cutting->relief) status_ = "cutting feed held for tracking";
+      else if(forward_rate_limit_ == 0 && !cutting->relief) status_ = "cutting forward motion held";
+    }
+    else if(correcting)
     {
       if(!model_->evaluate(nominal, origin)) return false;
       if(std::isfinite(forward_rate_limit_) && applied_stamp_ > 0)
@@ -1094,8 +1160,11 @@ bool GimbalrotorMultilinkPerchingNavigator::applyPerchingReference(double pitch_
     }
     // These checks bound the combined nominal + compliant joint/CoG motion.
     if(!candidateAllowed(candidate, cycle_dt_)) return false;
-    if(correcting && offset == 0) state = origin;
-    else if(!model_->evaluate(candidate, state)) return false;
+    if(!cutting)
+    {
+      if(correcting && offset == 0) state = origin;
+      else if(!model_->evaluate(candidate, state)) return false;
+    }
     if((correcting || std::isfinite(body_rate_limit_)) && applied_stamp_ > 0)
     {
       const Eigen::Vector3d omega_world = perching_geometry::logSO3(state.body.linear() * applied_state_.body.linear().transpose()) / cycle_dt_;
@@ -1104,26 +1173,32 @@ bool GimbalrotorMultilinkPerchingNavigator::applyPerchingReference(double pitch_
       const bool body_jog = std::isfinite(body_rate_limit_);
       const double speed = body_jog ? omega_world.norm() : std::abs(pitch_axis.dot(omega_world));
       const double change = body_jog ? (omega_world - previous_omega_world).norm() : std::abs(pitch_axis.dot(omega_world - previous_omega_world));
-      if(speed > rate_limit_ + 1e-6 || change > acceleration_limit_ * cycle_dt_ + 1e-6) return false;
+      const double speed_limit = cutting ? (pitch_axis.dot(omega_world) < 0 ?
+          std::max(pitch_offset_rate_limit_, -previous_pitch_rate - acceleration_limit * cycle_dt_) : forward_rate) : rate_limit_;
+      if(speed > speed_limit + 1e-6 || change > acceleration_limit_ * cycle_dt_ + 1e-6) return false;
       if(pitch_axis.dot(omega_world) > forward_rate + 1e-6) return false;
     }
     return true;
   };
   const bool eligible = fresh && (applied_stamp_ == 0 || cycle_dt_ > 0) &&
-      (applied_stamp_ > 0 || (pitch_offset == 0 && rate == 0 && acceleration == 0));
+      (applied_stamp_ > 0 || (!cutting && pitch_offset == 0 && rate == 0 && acceleration == 0));
   bool accepted = eligible && preview(pitch_offset, rate, acceleration);
   if(eligible && !accepted && correcting && applied_stamp_ > 0)
   {
     const double requested_acceleration = std::clamp(acceleration, -acceleration_limit, acceleration_limit);
+    const double requested_cutting_rate = cutting_rate;
     for(int attempt = 0; attempt < 7; ++attempt)
     {
+      if(cutting) cutting_rate = attempt == 6 ? previous_pitch_rate +
+          std::clamp(-previous_pitch_rate, -acceleration_limit * cycle_dt_, acceleration_limit * cycle_dt_) :
+          previous_pitch_rate + (requested_cutting_rate - previous_pitch_rate) * std::pow(.5, attempt + 1);
       double next_acceleration = attempt == 6 ? std::clamp(-applied_offset_rate_ / cycle_dt_, -acceleration_limit, acceleration_limit) :
           requested_acceleration * std::pow(.5, attempt);
       double next_rate = applied_offset_rate_ + next_acceleration * cycle_dt_;
       double next_offset = applied_pitch_offset_ + next_rate * cycle_dt_;
       nominal = planned_nominal;
       bool feasible = preview(next_offset, next_rate, next_acceleration);
-      if(!feasible && (nominal - nominal_).norm() > 1e-12)
+      if(!cutting && !feasible && (nominal - nominal_).norm() > 1e-12)
       {
         nominal = nominal_;
         feasible = preview(next_offset, next_rate, next_acceleration);
@@ -1132,7 +1207,7 @@ bool GimbalrotorMultilinkPerchingNavigator::applyPerchingReference(double pitch_
       if(!feasible) continue;
       pitch_offset = next_offset; rate = next_rate; acceleration = next_acceleration;
       accepted = true;
-      status_ = proposal_valid_ ? "bounded compliant step accepted" : "bounded compliant step; nominal progress held";
+      if(!cutting) status_ = proposal_valid_ ? "bounded compliant step accepted" : "bounded compliant step; nominal progress held";
       break;
     }
   }

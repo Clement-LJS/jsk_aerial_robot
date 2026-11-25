@@ -183,7 +183,12 @@ def main():
                 if motion.completed(feedback_timeout):
                     break
                 if time.monotonic() >= deadline:
-                    raise RuntimeError('Timed out waiting for jog acceptance/completion')
+                    with motion.lock:
+                        status = motion.status
+                    detail = '' if status is None else '; ' + '; '.join(
+                        key + '=' + status[1].get(key, 'unavailable') for key in
+                        ('hold_reason', 'admittance_status', 'task_torque_valid', 'effective_offset_rad'))
+                    raise RuntimeError('Timed out waiting for jog acceptance/completion' + detail)
                 interrupted.wait(.02)
             if rospy.is_shutdown() or interrupted.is_set():
                 return

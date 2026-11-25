@@ -141,7 +141,7 @@
       torque_limit_pitch: 5.0
       torque_lpf_alpha: 1.0 # Task torque is already filtered by the perching contact filter.
       angle_offset_limit_pitch: 0.0383972
-      angular_vel_offset_limit_pitch: 0.15
+      angular_vel_offset_limit_pitch: 0.00523598776 # Trial 0.3 deg/s cutting relief; forward feed retains its own ceiling.
       enable_pitch: 1.0
       torque_ref_pitch: 0.0
       perching:
@@ -153,6 +153,7 @@
         cutting_working_torque: 2.0
         cutting_max_torque: 3.0
         cutting_recovery_rate: 0.00174532925 # 0.1 deg/s, shared with nominal forward travel.
+        cutting_force_integral_time: 5.0 # Trial load-error integral time [s]; zero disables the integral.
         contact_on_duration: 0.1
         contact_off_duration: 0.2
         pitch_acceleration_limit: 0.1

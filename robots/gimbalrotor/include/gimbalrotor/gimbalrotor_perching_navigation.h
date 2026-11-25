@@ -88,19 +88,27 @@ public:
   double rigidRate() const { return rigid_applied_rate_; }
   double rigidAcceleration() const { return rigid_applied_acceleration_; }
   const perching_geometry::Lock& rigidLock() const { return hinge_arc_; }
-  double pitchRateLimit() const { return rate_limit_; }
+  virtual double pitchRateLimit() const { return rate_limit_; }
   virtual double pitchAccelerationLimit() const { return INFINITY; }
   void setAdmittanceDiagnostics(const std::map<std::string, std::string>& values) { admittance_diagnostics_ = values; }
   const std::string& prefix() const { return prefix_; }
   const std::string& worldFrame() const { return world_; }
   virtual bool nominalHeld() const;
   virtual bool trackingHeld() const;
+  virtual bool jogReady() const { return nominalHeld() && trackingHeld(); }
+  virtual double appliedPitchRate() const { return rigidRate(); }
   virtual std::optional<double> pitchFeedStep() const { return std::nullopt; }
+  struct CuttingMotion
+  {
+    double rate = 0;
+    bool relief = false;
+  };
   double appliedPitchOffset() const { return applied_pitch_offset_; }
   double appliedPitchOffsetRate() const { return applied_offset_rate_; }
   double referenceTimeStep() const { return cycle_dt_; }
   virtual bool applyPerchingReference(double pitch_offset, double rate, double acceleration,
-                                     double forward_rate_limit = INFINITY, double recovery_rate_limit = INFINITY);
+                                     double forward_rate_limit = INFINITY, double recovery_rate_limit = INFINITY,
+                                     const std::optional<CuttingMotion>& cutting = std::nullopt);
   virtual void publishDiagnostics();
 
 protected:

@@ -851,7 +851,7 @@ bool GimbalrotorPerchingNavigator::limitPitchOffset(double& offset, double& rate
 }
 
 bool GimbalrotorPerchingNavigator::applyPerchingReference(double pitch_offset, double rate, double acceleration,
-                                                       double, double)
+                                                       double, double, const std::optional<CuttingMotion>&)
 {
   std::lock_guard<std::recursive_mutex> lock(perching_state_mutex_);
   if(navi_state_ != HOVER_STATE || force_landing_flag_ || !std::isfinite(pitch_offset) || !std::isfinite(rate) || !std::isfinite(acceleration)) return false;

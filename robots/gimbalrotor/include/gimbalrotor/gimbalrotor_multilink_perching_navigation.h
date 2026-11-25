@@ -48,11 +48,15 @@ public:
   bool jointCommand(sensor_msgs::JointState& command) const;
   const std::vector<bool>& movingCoordinates() const { return moving_; }
   double pitchAccelerationLimit() const override { return acceleration_limit_; }
+  double pitchRateLimit() const override { return std::min(rate_limit_, body_rate_limit_); }
   bool nominalHeld() const override;
   bool trackingHeld() const override;
+  bool jogReady() const override;
+  double appliedPitchRate() const override;
   std::optional<double> pitchFeedStep() const override;
   bool applyPerchingReference(double pitch_offset, double rate, double acceleration,
-                             double forward_rate_limit = INFINITY, double recovery_rate_limit = INFINITY) override;
+                             double forward_rate_limit = INFINITY, double recovery_rate_limit = INFINITY,
+                             const std::optional<CuttingMotion>& cutting = std::nullopt) override;
   void holdAppliedReference();
   void publishDiagnostics() override;
 
@@ -74,7 +78,6 @@ private:
   void bodyCallback(const nav_msgs::OdometryConstPtr&);
   bool readSynchronizedSample(Sample&) const;
   void motionCallback(const gimbalrotor::RollYawMotionConstPtr&);
-  bool jogReady() const;
   bool coordinateCommand(int, double);
   bool bodyPitchCommand(double angle, double rate, std::uint64_t frame);
   void stopMotion();
