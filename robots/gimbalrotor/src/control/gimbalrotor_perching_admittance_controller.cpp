@@ -439,7 +439,9 @@ void GimbalrotorPerchingAdmittanceController::updateAdmittance()
   if(cutting_motion_ && admittance_output_.valid)
   {
     cutting_motion_->rate = admittance_output_.angular_vel_offset_compliance.y();
-    cutting_motion_->relief = -residual_pitch_torque_filtered_ >= cutting_max_torque_ || cutting_motion_->rate < 0;
+    // Velocity can remain negative while a nonnegative force drive brakes the retreat.
+    const double drive = torque - config.torque_ref.y();
+    cutting_motion_->relief = -residual_pitch_torque_filtered_ >= cutting_max_torque_ || drive < 0;
     // Offset output remains an offset; the distinct total-rate proposal travels in CuttingMotion.
     admittance_output_.angle_offset_compliance.y() = perching_navigator_->appliedPitchOffset();
     admittance_output_.angular_vel_offset_compliance.y() = perching_navigator_->appliedPitchOffsetRate();
