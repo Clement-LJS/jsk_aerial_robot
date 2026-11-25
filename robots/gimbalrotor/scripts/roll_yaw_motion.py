@@ -91,8 +91,15 @@ class MotionClient:
 
     def completed(self, feedback_timeout=1.):
         with self.lock:
-            if not self.status or time.monotonic() - self.status[0] > feedback_timeout:
-                raise RuntimeError('Navigator feedback lost.')
+            receipt_age = time.monotonic() - self.status[0] if self.status else float('inf')
+            if not self.status or receipt_age > feedback_timeout:
+                last = self.status[1] if self.status else {}
+                raise RuntimeError(
+                    'Navigator feedback lost: local receipt age %.3f s, limit %.3f s; '
+                    'request session=%s epoch=%s source=%s sequence=%s; '
+                    'last status session=%s epoch=%s source=%s sequence=%s.' %
+                    (receipt_age, feedback_timeout, self.session, self.epoch, self.source, self.sequence,
+                     last.get('session_id'), last.get('motion_epoch'), last.get('motion_source'), last.get('motion_sequence')))
             values = self.status[1]
             if int(values['session_id']) != self.session or int(values['motion_epoch']) != self.epoch:
                 raise RuntimeError('Motion cancelled or contact changed.')

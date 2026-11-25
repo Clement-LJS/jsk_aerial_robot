@@ -129,7 +129,7 @@ private:
   double forward_rate_limit_ = INFINITY, recovery_rate_limit_ = INFINITY;
   struct CuttingState
   {
-    enum Phase { FEED, RETREAT, HOLD } phase = FEED;
+    enum Phase { FEED, RETREAT, HOLD, ENTRY_RECOVERY } phase = FEED;
     Eigen::Matrix3d frame = Eigen::Matrix3d::Identity();
     double measured = 0, initial_lead = 0, lead = 0;
     double anchor = 0, measured_anchor = 0, goal = 0, withdrawal = 0, hold_elapsed = 0;

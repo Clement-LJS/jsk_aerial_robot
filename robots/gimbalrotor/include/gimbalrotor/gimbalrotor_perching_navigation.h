@@ -102,6 +102,7 @@ public:
   {
     double rate = 0;
     double retreat = 0;
+    double entry_feed_scale = 0;
     bool valid = false, contact = false, released = false;
     bool relief = false;
   };

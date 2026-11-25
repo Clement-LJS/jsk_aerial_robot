@@ -446,6 +446,7 @@ void GimbalrotorPerchingAdmittanceController::updateAdmittance()
     cutting_motion_->released = !contact_active_ && -residual_pitch_torque_filtered_ <= contact_off_threshold_;
     cutting_motion_->retreat = std::max(cutting_min_retreat_,
         std::max(0.0, -residual_pitch_torque_filtered_) / admittance_config_.rot_stiffness.y());
+    cutting_motion_->entry_feed_scale = std::clamp(1 + residual_pitch_torque_filtered_ / cutting_working_torque_, 0.0, 1.0);
     cutting_motion_->rate = admittance_output_.angular_vel_offset_compliance.y();
     // Velocity can remain negative while a nonnegative force drive brakes the retreat.
     const double drive = torque - config.torque_ref.y();
@@ -472,8 +473,6 @@ void GimbalrotorPerchingAdmittanceController::applyAdmittanceOutputToNavigator(
     if(step > 0 && input_valid_ && output.valid)
     {
       forward_rate = std::min(perching_navigator_->pitchRateLimit(), cutting_recovery_rate_);
-      // A saturated PI proposal must still slow as resisting cutting load increases.
-      forward_rate *= std::clamp(1 + residual_pitch_torque_filtered_ / cutting_working_torque_, 0.0, 1.0);
       // Do not acknowledge a recovered step while relief is still requested.
       recovery_rate = cutting_motion_ && cutting_motion_->relief ? 0 : forward_rate;
     }

@@ -1115,7 +1115,7 @@ bool GimbalrotorMultilinkPerchingNavigator::applyPerchingReference(double pitch_
       // Unloading during our own retreat/recovery must not trigger another first-contact backoff.
       else if(cutting->released && motion.phase == CuttingState::FEED && nominalHeld() &&
           std::abs(applied_pitch_offset_) <= jog_tolerance_) motion.contact = false;
-      if((contact_onset || cutting->relief) && motion.phase == CuttingState::FEED)
+      if(contact_onset && motion.phase == CuttingState::FEED)
       {
         motion.phase = CuttingState::RETREAT;
         motion.measured_anchor = motion.measured;
@@ -1125,7 +1125,7 @@ bool GimbalrotorMultilinkPerchingNavigator::applyPerchingReference(double pitch_
         motion.withdrawal = cutting->retreat;
         motion.hold_elapsed = 0;
       }
-      if(motion.phase != CuttingState::FEED)
+      if(motion.phase == CuttingState::RETREAT || motion.phase == CuttingState::HOLD)
       {
         if(motion.anchor - cutting->retreat < motion.goal - 1e-9 && (cutting->contact || cutting->relief))
         {
@@ -1159,9 +1159,21 @@ bool GimbalrotorMultilinkPerchingNavigator::applyPerchingReference(double pitch_
           requested_rate = 0;
           if(motion.measured <= motion.measured_anchor - .5 * motion.withdrawal) motion.hold_elapsed += cycle_dt_;
           else motion.hold_elapsed = 0;
-          if(motion.hold_elapsed >= cutting_hold_duration_) motion.phase = CuttingState::FEED;
+          if(motion.hold_elapsed >= cutting_hold_duration_) motion.phase = CuttingState::ENTRY_RECOVERY;
         }
       }
+      else if(cutting->relief)
+      {
+        // Ordinary relief follows excess-load velocity, without repeating the initial withdrawal.
+        const double relief_rate = std::min(0.0, cutting->rate);
+        const double measured_goal = std::min(applied_pitch, measured_pitch) + relief_rate * cycle_dt_;
+        requested_rate = std::clamp((measured_goal - applied_pitch) / cycle_dt_, relief_rate, 0.0);
+        relief_constrained = applied_pitch_offset_ + requested_rate * cycle_dt_ < -pitch_offset_limit_;
+      }
+      if(motion.phase == CuttingState::ENTRY_RECOVERY && !cutting->relief && applied_pitch_offset_ >= -1e-6)
+        motion.phase = CuttingState::FEED;
+      // Keep gentle entry through the first recovery; established cutting uses the force-core rate.
+      if(!motion.contact || motion.phase != CuttingState::FEED) forward_rate_limit_ *= cutting->entry_feed_scale;
     }
     else if(cutting->relief && fresh)
     {
@@ -1222,6 +1234,8 @@ bool GimbalrotorMultilinkPerchingNavigator::applyPerchingReference(double pitch_
       if(relief_constrained) status_ = "relief constrained by offset limit";
       else if(cutting_state_ && cutting_state_->phase == CuttingState::RETREAT) status_ = "executing measured-pitch retreat";
       else if(cutting_state_ && cutting_state_->phase == CuttingState::HOLD) status_ = "holding after measured withdrawal";
+      else if(cutting_state_ && cutting_state_->phase == CuttingState::ENTRY_RECOVERY && !cutting->relief)
+        status_ = "recovering initial contact offset";
       else if(!tracking && !cutting->relief) status_ = "cutting feed held for tracking";
       else if(forward_rate_limit_ == 0 && !cutting->relief) status_ = "cutting forward motion held";
       else if(cutting_state_ && cutting_state_->lead > .5 * pitchFeedStep().value_or(0) && remaining <= jog_tolerance_)
