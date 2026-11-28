@@ -828,8 +828,7 @@ bool GimbalrotorPerchingNavigator::trackingHeld() const
       std::abs(sample.rate[0]) <= rezero_rate_tolerance_;
 }
 
-bool GimbalrotorPerchingNavigator::limitPitchOffset(double& offset, double& rate, double& acceleration,
-                                                 double positive_rate_limit, double upper_offset) const
+bool GimbalrotorPerchingNavigator::limitPitchOffset(double& offset, double& rate, double& acceleration) const
 {
   if(cycle_dt_ <= 0) return false;
   const double limit = std::min(pitchAccelerationLimit(), pitch_offset_acceleration_limit_);
@@ -839,10 +838,7 @@ bool GimbalrotorPerchingNavigator::limitPitchOffset(double& offset, double& rate
   auto stoppingRate = [limit, change](double gap)
   { return std::sqrt(change * change + 2 * limit * std::max(0.0, gap)) - change; };
   const double lower = std::max({-speed, applied_offset_rate_ - change, -stoppingRate(pitch_offset_limit_ + applied_pitch_offset_)});
-  // A newly lowered speed cap requests bounded braking, not an instantaneous velocity change.
-  const double upper = std::min({speed, applied_offset_rate_ + change,
-      stoppingRate(std::min(pitch_offset_limit_, upper_offset) - applied_pitch_offset_),
-      std::max(positive_rate_limit, applied_offset_rate_ - change)});
+  const double upper = std::min({speed, applied_offset_rate_ + change, stoppingRate(pitch_offset_limit_ - applied_pitch_offset_)});
   if(lower > upper) return false;
   rate = std::clamp((offset - applied_pitch_offset_) / cycle_dt_, lower, upper);
   offset = applied_pitch_offset_ + rate * cycle_dt_;
@@ -850,8 +846,7 @@ bool GimbalrotorPerchingNavigator::limitPitchOffset(double& offset, double& rate
   return std::isfinite(offset) && std::abs(offset) <= pitch_offset_limit_ + 1e-9;
 }
 
-bool GimbalrotorPerchingNavigator::applyPerchingReference(double pitch_offset, double rate, double acceleration,
-                                                       double, double, const std::optional<CuttingMotion>&)
+bool GimbalrotorPerchingNavigator::applyPerchingReference(double pitch_offset, double rate, double acceleration)
 {
   std::lock_guard<std::recursive_mutex> lock(perching_state_mutex_);
   if(navi_state_ != HOVER_STATE || force_landing_flag_ || !std::isfinite(pitch_offset) || !std::isfinite(rate) || !std::isfinite(acceleration)) return false;

@@ -48,15 +48,9 @@ public:
   bool jointCommand(sensor_msgs::JointState& command) const;
   const std::vector<bool>& movingCoordinates() const { return moving_; }
   double pitchAccelerationLimit() const override { return acceleration_limit_; }
-  double pitchRateLimit() const override { return std::min(rate_limit_, body_rate_limit_); }
   bool nominalHeld() const override;
   bool trackingHeld() const override;
-  bool jogReady() const override;
-  double appliedPitchRate() const override;
-  std::optional<double> pitchFeedStep() const override;
-  bool applyPerchingReference(double pitch_offset, double rate, double acceleration,
-                             double forward_rate_limit = INFINITY, double recovery_rate_limit = INFINITY,
-                             const std::optional<CuttingMotion>& cutting = std::nullopt) override;
+  bool applyPerchingReference(double pitch_offset, double rate, double acceleration) override;
   void holdAppliedReference();
   void publishDiagnostics() override;
 
@@ -125,19 +119,6 @@ private:
   double rezero_tolerance_ = .0349066, rezero_timeout_ = 5, hold_tolerance_ = .02;
   double rezero_kp_ = 1, rezero_stable_duration_ = .3;
   double jog_limit_ = .01745329252;
-  double jog_tolerance_ = .00174533;
-  double forward_rate_limit_ = INFINITY, recovery_rate_limit_ = INFINITY;
-  struct CuttingState
-  {
-    enum Phase { FEED, RETREAT, HOLD, ENTRY_RECOVERY } phase = FEED;
-    Eigen::Matrix3d frame = Eigen::Matrix3d::Identity();
-    double measured = 0, initial_lead = 0, lead = 0;
-    double anchor = 0, measured_anchor = 0, goal = 0, withdrawal = 0, hold_elapsed = 0;
-    bool contact = false;
-  };
-  std::optional<CuttingState> cutting_state_;
-  double cutting_measurement_time_ = .5, cutting_hold_duration_ = .5;
-  gimbalrotor::RollYawMotionConstPtr feed_request_;
   gimbalrotor::RollYawMotionConstPtr last_motion_request_;
   std_msgs::String last_motion_ack_;
   std::uint64_t session_ = 0, body_frame_id_ = 0;

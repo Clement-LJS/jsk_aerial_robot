@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
-"""Nominal body-local pitch jogs, with reference completion and optional dwell.
+"""Measured body-local pitch jogs, each followed by completion and a dwell.
 
 Optional use_admittance performs unloaded tare/enable before the first jog.
-timeout_sec bounds startup only; accepted jogs have no elapsed-time deadline.
 Interruption cancels this task's motion; completed steps remain held.
 """
 
@@ -106,15 +105,15 @@ def main():
         raise ValueError('Pulse parameters removed: use ~step_deg and ~interval_sec for step and hold')
     step = math.radians(finite_number(rospy.get_param('~step_deg', None), '~step_deg'))
     limit = math.radians(finite_number(rospy.get_param('~body_pitch_limit_deg', 20.), '~body_pitch_limit_deg'))
-    hold = finite_number(rospy.get_param('~interval_sec', 0.), '~interval_sec')
+    hold = finite_number(rospy.get_param('~interval_sec', 8.), '~interval_sec')
     if rospy.has_param('~hold_duration_sec'):
         alias = finite_number(rospy.get_param('~hold_duration_sec'), '~hold_duration_sec')
         if rospy.has_param('~interval_sec') and alias != hold:
             raise ValueError('~hold_duration_sec and ~interval_sec conflict; specify one hold duration')
         hold = alias
     count = rospy.get_param('~num_steps', 8)
-    if step <= 0 or not 0 < limit < math.pi or hold < 0:
-        raise ValueError('Require positive step_deg, nonnegative interval_sec, and 0 < body_pitch_limit_deg < 180')
+    if step <= 0 or not 0 < limit < math.pi or hold <= 0:
+        raise ValueError('Require positive step_deg and interval_sec, and 0 < body_pitch_limit_deg < 180')
     if isinstance(count, bool) or not isinstance(count, int) or count < 1:
         raise ValueError('~num_steps must be a positive integer')
     try:
@@ -144,7 +143,7 @@ def main():
     normal_exit = False
     startup = AdmittanceStartup()
     startup_complete = not use_admittance
-    rospy.loginfo('Requesting %d nominal body-local pitch jogs of %+.6g deg, with %.3g s dwell after reference completion; no per-step time limit.',
+    rospy.loginfo('Requesting %d measured body-local pitch jogs of %+.6g deg, with %.3g s dwell after completion.',
                   count, math.degrees(step), hold)
     try:
         session = None
@@ -171,18 +170,24 @@ def main():
         for number in range(1, count + 1):
             if rospy.is_shutdown() or interrupted.is_set():
                 return
+            deadline = time.monotonic() + timeout
             while motion.request is not None and not motion.completed(feedback_timeout):
                 if rospy.is_shutdown() or interrupted.is_set():
                     return
+                if time.monotonic() >= deadline:
+                    raise RuntimeError('Timed out waiting for measured motion to settle')
                 interrupted.wait(.02)
             motion.send(session, RollYawMotion.JOG, step)
+            deadline = time.monotonic() + timeout
             while not rospy.is_shutdown() and not interrupted.is_set():
                 if motion.completed(feedback_timeout):
                     break
+                if time.monotonic() >= deadline:
+                    raise RuntimeError('Timed out waiting for jog acceptance/completion')
                 interrupted.wait(.02)
             if rospy.is_shutdown() or interrupted.is_set():
                 return
-            rospy.loginfo('Step %d/%d reference completed; dwell %.3g s.', number, count, hold)
+            rospy.loginfo('Step %d/%d completed; dwell %.3g s.', number, count, hold)
             deadline = time.monotonic() + hold
             while not rospy.is_shutdown() and not interrupted.is_set() and time.monotonic() < deadline:
                 motion.completed(feedback_timeout)  # Detect cancellation/replacement during the dwell too.
@@ -190,7 +195,7 @@ def main():
         if rospy.is_shutdown() or interrupted.is_set():
             return
         normal_exit = True
-        rospy.loginfo('Finished %d reference jogs; holding the last reference.', count)
+        rospy.loginfo('Finished %d measured jogs; holding the last reference.', count)
     finally:
         try:
             if not normal_exit and not rospy.is_shutdown():

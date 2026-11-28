@@ -135,29 +135,20 @@
 
     roll_yaw: &roll_yaw
       <<: *common
-      inertia_pitch: 15.36 # Preserve J/D = 0.08 s while reducing load-to-velocity gain.
-      rot_damping_pitch: 192.0 # Trial: 1 N m excess gives about 0.3 deg/s before navigation limits.
+      inertia_pitch: 6.4
+      rot_damping_pitch: 80.0
       rot_stiffness_pitch: 168.0
       torque_limit_pitch: 5.0
       torque_lpf_alpha: 1.0 # Task torque is already filtered by the perching contact filter.
       angle_offset_limit_pitch: 0.0383972
-      angular_vel_offset_limit_pitch: 0.00523598776 # Trial 0.3 deg/s cutting relief; forward feed retains its own ceiling.
+      angular_vel_offset_limit_pitch: 0.15
       enable_pitch: 1.0
       torque_ref_pitch: 0.0
       perching:
         <<: *common_perching
         equilibrium_wrench_required_samples: 80
-        contact_torque_filter_alpha: 0.15 # Reduce load-filter lag; retain filtering at recorded 25-55 ms update intervals.
         contact_on_threshold: 0.45
         contact_off_threshold: 0.25
-        # Trial load band: Nov 24 unloaded residual about 0.5 N m, loaded torque up to 3.3 N m.
-        cutting_working_torque: 2.0
-        cutting_max_torque: 3.0
-        cutting_recovery_rate: 0.00174532925 # 0.1 deg/s, shared with nominal forward travel.
-        cutting_force_integral_time: 5.0 # Trial load-error integral time [s]; zero disables the integral.
-        cutting_min_retreat: 0.00610865238 # Trial 0.35 deg; Nov 24 pitch variation p99 reached 0.30 deg.
-        cutting_measurement_time: 0.5 # Average task progress across the recorded approximately 2.15 Hz motion.
-        cutting_hold_duration: 0.5 # Brief hold after measured withdrawal, not an autoscript dwell.
         contact_on_duration: 0.1
         contact_off_duration: 0.2
         pitch_acceleration_limit: 0.1
