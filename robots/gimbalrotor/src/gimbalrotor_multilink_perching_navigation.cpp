@@ -517,6 +517,7 @@ void GimbalrotorMultilinkPerchingNavigator::resetMotion()
   body_destination_ = body_progress_ = body_rate_ = 0;
   body_rate_limit_ = INFINITY;
   forward_rate_limit_ = recovery_rate_limit_ = INFINITY;
+  relief_origin_.reset();
   feed_request_.reset();
   reference_velocity_.setZero(); reference_acceleration_.setZero();
   reference_omega_.setZero(); reference_angular_acceleration_.setZero();
@@ -555,13 +556,14 @@ std::optional<double> GimbalrotorMultilinkPerchingNavigator::pitchFeedStep() con
 bool GimbalrotorMultilinkPerchingNavigator::jogReady() const
 {
   const double step = pitchFeedStep().value_or(0);
-  return nominalHeld() && trackingHeld() && (step <= 0 || !std::isfinite(recovery_rate_limit_) ||
+  return !relief_origin_ && nominalHeld() && trackingHeld() && (step <= 0 || !std::isfinite(recovery_rate_limit_) ||
       std::abs(applied_pitch_offset_) <= std::min(jog_tolerance_, .2 * step));
 }
 
 void GimbalrotorMultilinkPerchingNavigator::stopMotion()
 {
   motion_.revoke();
+  relief_origin_.reset();
   // Brake from the accepted reference and retire pending servo destinations.
   destination_ = nominal_; body_destination_ = body_progress_;
   rezero_active_ = false;
@@ -944,7 +946,7 @@ void GimbalrotorMultilinkPerchingNavigator::advanceNominal(double dt)
     proposed_rate_ = (proposed_ - nominal_) / dt;
     destination_ = nominal_;
   }
-  else followCoordinates(destination_, dt);
+  else followCoordinates(relief_origin_ ? *relief_origin_ : destination_, dt);
   proposal_valid_ = model_->allowed(proposed_, max_tilt_, min_body_pitch_, max_body_pitch_);
   if(!proposal_valid_) status_ = "nominal proposal outside mechanism/body bounds";
 }
@@ -972,7 +974,7 @@ void GimbalrotorMultilinkPerchingNavigator::followCoordinates(const Vector& goal
     if(angular_scale > 1e-12)
     {
       speed = std::min(speed, body_rate_limit_ / angular_scale);
-      if(pitchFeedStep().value_or(0) > 0) speed = std::min(speed, forward_rate_limit_ / angular_scale);
+      if(pitchFeedStep().value_or(0) > 0 && !relief_origin_) speed = std::min(speed, forward_rate_limit_ / angular_scale);
       acceleration = std::min(acceleration, acceleration_limit_ / angular_scale);
     }
     // A single path speed keeps the joint contributions coordinated; retain braking margin.
@@ -1058,8 +1060,26 @@ bool GimbalrotorMultilinkPerchingNavigator::applyPerchingReference(double pitch_
   if(observation(measured_)) model_->estimate(measured_.body, measured_.q, pivot_error_, hinge_error_);
   const bool fresh = motionFeedbackValid();
   if(fresh) status_ = "tracking accepted reference";
+  const double feed_step = pitchFeedStep().value_or(0);
+  const bool cutting_feed = feed_step > 0 && std::isfinite(recovery_rate_limit) && !stopping_;
+  const double recovery_tolerance = std::min(jog_tolerance_, .2 * std::abs(feed_step));
+  // Use the existing completion tolerance; spring recovery need not reach exact zero.
+  if(!cutting_feed || (fresh && rate >= 0 && pitch_offset >= -recovery_tolerance &&
+      applied_pitch_offset_ >= -recovery_tolerance)) relief_origin_.reset();
+  const bool retreat = cutting_feed && pitch_offset < 0 && rate < 0;
+  if(fresh && applied_stamp_ > 0 && retreat && !relief_origin_)
+  {
+    const Eigen::Matrix3d nominal_body = applied_state_.body.linear() *
+        perching_geometry::expSO3(-Eigen::Vector3d::UnitY() * applied_pitch_offset_);
+    const double measured_pitch = perching_geometry::logSO3(nominal_body.transpose() * measured_.body.linear()).y();
+    const Eigen::Matrix3d target = nominal_body * perching_geometry::expSO3(Eigen::Vector3d::UnitY() * std::min(0.0, measured_pitch));
+    Vector origin;
+    // Capture pitch lag once; preserve the intended roll/yaw and the commanded endpoint.
+    if(model_->orient(nominal_, target, moving_, origin) && model_->allowed(origin, max_tilt_, min_body_pitch_, max_body_pitch_))
+      relief_origin_ = origin;
+  }
   // Advance the nominal planner once; all correction previews below are read-only.
-  if(applied_stamp_ > 0 && fresh && cycle_dt_ > 0) advanceNominal(cycle_dt_);
+  if(applied_stamp_ > 0 && fresh && cycle_dt_ > 0 && (!retreat || relief_origin_)) advanceNominal(cycle_dt_);
   if(applied_stamp_ > 0 && !proposal_valid_) restoreNominal();
   const Vector planned_nominal = proposal_valid_ && fresh ? proposed_ : nominal_;
   Vector nominal = planned_nominal;

@@ -124,6 +124,7 @@ private:
   double jog_limit_ = .01745329252;
   double jog_tolerance_ = .00174533;
   double forward_rate_limit_ = INFINITY, recovery_rate_limit_ = INFINITY;
+  std::optional<Vector> relief_origin_;
   gimbalrotor::RollYawMotionConstPtr feed_request_;
   gimbalrotor::RollYawMotionConstPtr last_motion_request_;
   std_msgs::String last_motion_ack_;
