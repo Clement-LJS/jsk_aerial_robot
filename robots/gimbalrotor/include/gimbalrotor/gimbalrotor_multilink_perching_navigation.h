@@ -50,7 +50,9 @@ public:
   double pitchAccelerationLimit() const override { return acceleration_limit_; }
   bool nominalHeld() const override;
   bool trackingHeld() const override;
-  bool applyPerchingReference(double pitch_offset, double rate, double acceleration) override;
+  std::optional<double> pitchFeedStep() const override;
+  bool applyPerchingReference(double pitch_offset, double rate, double acceleration,
+                             double forward_rate_limit = INFINITY, double recovery_rate_limit = INFINITY) override;
   void holdAppliedReference();
   void publishDiagnostics() override;
 
@@ -72,6 +74,7 @@ private:
   void bodyCallback(const nav_msgs::OdometryConstPtr&);
   bool readSynchronizedSample(Sample&) const;
   void motionCallback(const gimbalrotor::RollYawMotionConstPtr&);
+  bool jogReady() const;
   bool coordinateCommand(int, double);
   bool bodyPitchCommand(double angle, double rate, std::uint64_t frame);
   void stopMotion();
@@ -119,6 +122,9 @@ private:
   double rezero_tolerance_ = .0349066, rezero_timeout_ = 5, hold_tolerance_ = .02;
   double rezero_kp_ = 1, rezero_stable_duration_ = .3;
   double jog_limit_ = .01745329252;
+  double jog_tolerance_ = .00174533;
+  double forward_rate_limit_ = INFINITY, recovery_rate_limit_ = INFINITY;
+  gimbalrotor::RollYawMotionConstPtr feed_request_;
   gimbalrotor::RollYawMotionConstPtr last_motion_request_;
   std_msgs::String last_motion_ack_;
   std::uint64_t session_ = 0, body_frame_id_ = 0;

@@ -49,6 +49,7 @@ protected:
   double recovery_angle_epsilon_ = .00174533, recovery_rate_epsilon_ = .01;
   double residual_pitch_torque_raw_ = 0, residual_pitch_torque_filtered_ = 0, perching_pitch_torque_sign_ = 1;
   double pitch_acceleration_limit_ = .1, observer_max_interval_ = .15, future_tolerance_ = .02;
+  double cutting_working_torque_ = 0, cutting_max_torque_ = 0, cutting_recovery_rate_ = 0;
   ros::Time previous_contact_gate_time_;
   Eigen::Matrix<double, 6, 1> prepared_perching_admittance_wrench_world_ = Eigen::Matrix<double, 6, 1>::Zero();
   tf::TransformBroadcaster pivot_tf_;

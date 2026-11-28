@@ -149,6 +149,10 @@
         equilibrium_wrench_required_samples: 80
         contact_on_threshold: 0.45
         contact_off_threshold: 0.25
+        # Trial load band: Nov 24 unloaded residual about 0.5 N m, loaded torque up to 3.3 N m.
+        cutting_working_torque: 2.0
+        cutting_max_torque: 3.0
+        cutting_recovery_rate: 0.00174532925 # 0.1 deg/s, shared with nominal forward travel.
         contact_on_duration: 0.1
         contact_off_duration: 0.2
         pitch_acceleration_limit: 0.1

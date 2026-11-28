@@ -15,6 +15,7 @@
 #include <cmath>
 #include <map>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <vector>
 #include <Eigen/Core>
@@ -94,10 +95,12 @@ public:
   const std::string& worldFrame() const { return world_; }
   virtual bool nominalHeld() const;
   virtual bool trackingHeld() const;
+  virtual std::optional<double> pitchFeedStep() const { return std::nullopt; }
   double appliedPitchOffset() const { return applied_pitch_offset_; }
   double appliedPitchOffsetRate() const { return applied_offset_rate_; }
   double referenceTimeStep() const { return cycle_dt_; }
-  virtual bool applyPerchingReference(double pitch_offset, double rate, double acceleration);
+  virtual bool applyPerchingReference(double pitch_offset, double rate, double acceleration,
+                                     double forward_rate_limit = INFINITY, double recovery_rate_limit = INFINITY);
   virtual void publishDiagnostics();
 
 protected:
@@ -117,7 +120,8 @@ protected:
                              const tf::Vector3& contact_position);
   static double steadyTime();
   bool fresh(double stamp, double receipt) const;
-  bool limitPitchOffset(double& offset, double& rate, double& acceleration) const;
+  bool limitPitchOffset(double& offset, double& rate, double& acceleration,
+                        double positive_rate_limit = INFINITY, double upper_offset = INFINITY) const;
   using Reference = GimbalrotorPerchingModel::State;
   bool lockGeometry(const Pose& body, const Vector& q, Reference& initial);
   Pose worldCogPose(const Pose& body, const Eigen::Vector3d& cog_body) const;
